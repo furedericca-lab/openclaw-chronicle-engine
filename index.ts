@@ -16,7 +16,7 @@ import { spawn } from "node:child_process";
 // Import core components
 import { MemoryStore, validateStoragePath } from "./src/store.js";
 import { createEmbedder, getVectorDimensions } from "./src/embedder.js";
-import { createRetriever, DEFAULT_RETRIEVAL_CONFIG, type RetrievalResult } from "./src/retriever.js";
+import { createRetriever, DEFAULT_RETRIEVAL_CONFIG } from "./src/retriever.js";
 import { createScopeManager } from "./src/scopes.js";
 import { createMigrator } from "./src/migrate.js";
 import { registerAllMemoryTools } from "./src/tools.js";
@@ -27,7 +27,6 @@ import { runWithReflectionTransientRetryOnce } from "./src/reflection-retry.js";
 import { resolveReflectionSessionSearchDirs, stripResetSuffix } from "./src/session-recovery.js";
 import {
   storeReflectionToLanceDB,
-  loadAgentReflectionSlicesFromEntries,
   loadAgentDerivedFocusRowsForHandoffFromEntries,
   DEFAULT_REFLECTION_DERIVED_MAX_AGE_MS,
   DEFAULT_REFLECTION_DERIVED_FINAL_LIMIT,
@@ -42,15 +41,12 @@ import { createReflectionEventId } from "./src/reflection-event-store.js";
 import { buildReflectionMappedMetadata } from "./src/reflection-mapped-metadata.js";
 import { createMemoryCLI } from "./cli.js";
 import {
-  createDynamicRecallSessionState,
-  clearDynamicRecallSessionState,
-  normalizeRecallTextKey,
-  orchestrateDynamicRecall,
-  filterByMaxAge,
-  keepMostRecentPerNormalizedKey,
-} from "./src/recall-engine.js";
-import { rankDynamicReflectionRecallFromEntries } from "./src/reflection-recall.js";
-import { selectFinalAutoRecallResults } from "./src/auto-recall-final-selection.js";
+  createSessionExposureState,
+  DEFAULT_SESSION_EXPOSURE_MAX_TRACKED_SESSIONS,
+  type ReflectionErrorSignal,
+} from "./src/context/session-exposure-state.js";
+import { createAutoRecallPlanner } from "./src/context/auto-recall-orchestrator.js";
+import { createReflectionPromptPlanner } from "./src/context/reflection-prompt-planner.js";
 
 // ============================================================================
 // Configuration & Types
@@ -229,11 +225,6 @@ function parseReflectionRecallKinds(value: unknown, fallback: ReflectionRecallKi
   return parsed.length > 0 ? [...new Set(parsed)] : [...fallback];
 }
 
-function daysToMs(days: number | undefined): number | undefined {
-  if (!Number.isFinite(days) || Number(days) <= 0) return undefined;
-  return Number(days) * 24 * 60 * 60 * 1000;
-}
-
 const DEFAULT_SELF_IMPROVEMENT_REMINDER = `## Self-Improvement Reminder
 
 After completing tasks, evaluate if any learnings should be captured:
@@ -258,8 +249,6 @@ const DEFAULT_REFLECTION_TIMEOUT_MS = 20_000;
 const DEFAULT_REFLECTION_THINK_LEVEL: ReflectionThinkLevel = "medium";
 const DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES = 3;
 const DEFAULT_REFLECTION_DEDUPE_ERROR_SIGNALS = true;
-const DEFAULT_REFLECTION_SESSION_TTL_MS = 30 * 60 * 1000;
-const DEFAULT_REFLECTION_MAX_TRACKED_SESSIONS = 200;
 const DEFAULT_REFLECTION_ERROR_SCAN_MAX_CHARS = 8_000;
 const DEFAULT_AUTO_RECALL_TOP_K = 3;
 const DEFAULT_AUTO_RECALL_SELECTION_MODE: AutoRecallSelectionMode = "mmr";
@@ -330,22 +319,6 @@ function buildSelfImprovementResetNote(params?: { openLoopsBlock?: string; deriv
   base.push("- Then proceed with the new session.");
   return base.join("\n");
 }
-
-type ReflectionErrorSignal = {
-  at: number;
-  toolName: string;
-  summary: string;
-  source: "tool_error" | "tool_output";
-  signature: string;
-  signatureHash: string;
-};
-
-type ReflectionErrorState = {
-  entries: ReflectionErrorSignal[];
-  lastInjectedCount: number;
-  signatureSet: Set<string>;
-  updatedAt: number;
-};
 
 type EmbeddedPiRunner = (params: Record<string, unknown>) => Promise<unknown>;
 
@@ -722,60 +695,8 @@ function redactSecrets(text: string): string {
   return out;
 }
 
-function containsErrorSignal(text: string): boolean {
-  const normalized = text.toLowerCase();
-  return (
-    /\[error\]|error:|exception:|fatal:|traceback|syntaxerror|typeerror|referenceerror|npm err!/.test(normalized) ||
-    /command not found|no such file|permission denied|non-zero|exit code/.test(normalized) ||
-    /"status"\s*:\s*"error"|"status"\s*:\s*"failed"|\biserror\b/.test(normalized) ||
-    /错误\s*[：:]|异常\s*[：:]|报错\s*[：:]|失败\s*[：:]/.test(normalized)
-  );
-}
-
-function summarizeErrorText(text: string, maxLen = 220): string {
-  const oneLine = redactSecrets(text).replace(/\s+/g, " ").trim();
-  if (!oneLine) return "(empty tool error)";
-  return oneLine.length <= maxLen ? oneLine : `${oneLine.slice(0, maxLen - 3)}...`;
-}
-
 function sha256Hex(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
-}
-
-function normalizeErrorSignature(text: string): string {
-  return redactSecrets(String(text || ""))
-    .toLowerCase()
-    .replace(/[a-z]:\\[^ \n\r\t]+/gi, "<path>")
-    .replace(/\/[^ \n\r\t]+/g, "<path>")
-    .replace(/\b0x[0-9a-f]+\b/gi, "<hex>")
-    .replace(/\b\d+\b/g, "<n>")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 240);
-}
-
-function extractTextFromToolResult(result: unknown): string {
-  if (result == null) return "";
-  if (typeof result === "string") return result;
-  if (typeof result === "object") {
-    const obj = result as Record<string, unknown>;
-    const content = obj.content;
-    if (Array.isArray(content)) {
-      const textParts = content
-        .filter((c) => c && typeof c === "object")
-        .map((c) => (c as Record<string, unknown>).text)
-        .filter((t): t is string => typeof t === "string");
-      if (textParts.length > 0) return textParts.join("\n");
-    }
-    if (typeof obj.text === "string") return obj.text;
-    if (typeof obj.error === "string") return obj.error;
-    if (typeof obj.details === "string") return obj.details;
-  }
-  try {
-    return JSON.stringify(result);
-  } catch {
-    return "";
-  }
 }
 
 async function readSessionConversationForReflection(filePath: string, messageCount: number): Promise<string | null> {
@@ -1490,106 +1411,9 @@ const memoryLanceDBProPlugin = {
 
     const scopeManager = createScopeManager(config.scopes);
     const migrator = createMigrator(store);
-
-    const reflectionErrorStateBySession = new Map<string, ReflectionErrorState>();
-    const reflectionByAgentCache = new Map<string, { updatedAt: number; invariants: string[]; derived: string[] }>();
-
-    const pruneOldestByUpdatedAt = <T extends { updatedAt: number }>(map: Map<string, T>, maxSize: number) => {
-      if (map.size <= maxSize) return;
-      const sorted = [...map.entries()].sort((a, b) => a[1].updatedAt - b[1].updatedAt);
-      const removeCount = map.size - maxSize;
-      for (let i = 0; i < removeCount; i++) {
-        const key = sorted[i]?.[0];
-        if (key) map.delete(key);
-      }
-    };
-
-    const pruneReflectionSessionState = (now = Date.now()) => {
-      for (const [key, state] of reflectionErrorStateBySession.entries()) {
-        if (now - state.updatedAt > DEFAULT_REFLECTION_SESSION_TTL_MS) {
-          reflectionErrorStateBySession.delete(key);
-        }
-      }
-      pruneOldestByUpdatedAt(reflectionErrorStateBySession, DEFAULT_REFLECTION_MAX_TRACKED_SESSIONS);
-    };
-
-    const getReflectionErrorState = (sessionKey: string): ReflectionErrorState => {
-      const key = sessionKey.trim();
-      const current = reflectionErrorStateBySession.get(key);
-      if (current) {
-        current.updatedAt = Date.now();
-        return current;
-      }
-      const created: ReflectionErrorState = { entries: [], lastInjectedCount: 0, signatureSet: new Set<string>(), updatedAt: Date.now() };
-      reflectionErrorStateBySession.set(key, created);
-      return created;
-    };
-
-    const addReflectionErrorSignal = (sessionKey: string, signal: ReflectionErrorSignal, dedupeEnabled: boolean) => {
-      if (!sessionKey.trim()) return;
-      pruneReflectionSessionState();
-      const state = getReflectionErrorState(sessionKey);
-      if (dedupeEnabled && state.signatureSet.has(signal.signatureHash)) return;
-      state.entries.push(signal);
-      state.signatureSet.add(signal.signatureHash);
-      state.updatedAt = Date.now();
-      if (state.entries.length > 30) {
-        const removed = state.entries.length - 30;
-        state.entries.splice(0, removed);
-        state.lastInjectedCount = Math.max(0, state.lastInjectedCount - removed);
-        state.signatureSet = new Set(state.entries.map((e) => e.signatureHash));
-      }
-    };
-
-    const getPendingReflectionErrorSignalsForPrompt = (sessionKey: string, maxEntries: number): ReflectionErrorSignal[] => {
-      pruneReflectionSessionState();
-      const state = reflectionErrorStateBySession.get(sessionKey.trim());
-      if (!state) return [];
-      state.updatedAt = Date.now();
-      state.lastInjectedCount = Math.min(state.lastInjectedCount, state.entries.length);
-      const pending = state.entries.slice(state.lastInjectedCount);
-      if (pending.length === 0) return [];
-      const clipped = pending.slice(-maxEntries);
-      state.lastInjectedCount = state.entries.length;
-      return clipped;
-    };
-
-    const loadAgentReflectionSlices = async (agentId: string, scopeFilter: string[]) => {
-      const cacheKey = `${agentId}::${[...scopeFilter].sort().join(",")}`;
-      const cached = reflectionByAgentCache.get(cacheKey);
-      if (cached && Date.now() - cached.updatedAt < 15_000) return cached;
-
-      const entries = await store.list(scopeFilter, undefined, 120, 0);
-      const { invariants, derived } = loadAgentReflectionSlicesFromEntries({
-        entries,
-        agentId,
-        deriveMaxAgeMs: DEFAULT_REFLECTION_DERIVED_MAX_AGE_MS,
-      });
-      const next = { updatedAt: Date.now(), invariants, derived };
-      reflectionByAgentCache.set(cacheKey, next);
-      return next;
-    };
-
-    const autoRecallState = createDynamicRecallSessionState({
-      maxSessions: DEFAULT_REFLECTION_MAX_TRACKED_SESSIONS,
+    const sessionExposureState = createSessionExposureState({
+      maxTrackedSessions: DEFAULT_SESSION_EXPOSURE_MAX_TRACKED_SESSIONS,
     });
-    const reflectionDynamicRecallState = createDynamicRecallSessionState({
-      maxSessions: DEFAULT_REFLECTION_MAX_TRACKED_SESSIONS,
-    });
-
-    const clearDynamicRecallStateForSession = (ctx: { sessionId?: unknown; sessionKey?: unknown }) => {
-      const sessionIds = new Set<string>();
-      if (typeof ctx.sessionId === "string" && ctx.sessionId.trim()) {
-        sessionIds.add(ctx.sessionId.trim());
-      }
-      if (typeof ctx.sessionKey === "string" && ctx.sessionKey.trim()) {
-        sessionIds.add(ctx.sessionKey.trim());
-      }
-      for (const sessionId of sessionIds) {
-        clearDynamicRecallSessionState(autoRecallState, sessionId);
-        clearDynamicRecallSessionState(reflectionDynamicRecallState, sessionId);
-      }
-    };
 
     api.logger.info(
       `memory-lancedb-pro@${pluginVersion}: plugin registered (db: ${resolvedDbPath}, model: ${config.embedding.model || "text-embedding-3-small"})`,
@@ -1643,69 +1467,39 @@ const memoryLanceDBProPlugin = {
     // ========================================================================
 
     api.on("session_end", (_event, ctx) => {
-      clearDynamicRecallStateForSession(ctx || {});
+      sessionExposureState.clearDynamicRecallForContext(ctx || {});
     }, { priority: 20 });
 
-    const postProcessAutoRecallResults = (results: RetrievalResult[]): RetrievalResult[] => {
-      const allowlisted = config.autoRecallCategories && config.autoRecallCategories.length > 0
-        ? results.filter((row) => config.autoRecallCategories!.includes(row.entry.category))
-        : results;
-      const withoutReflection = config.autoRecallExcludeReflection === true
-        ? allowlisted.filter((row) => row.entry.category !== "reflection")
-        : allowlisted;
-      const maxAgeMs = daysToMs(config.autoRecallMaxAgeDays);
-      const withinAge = filterByMaxAge({
-        items: withoutReflection,
-        maxAgeMs,
-        getTimestamp: (row) => row.entry.timestamp,
-      });
-      const cappedRecent = keepMostRecentPerNormalizedKey({
-        items: withinAge,
+    const autoRecallPlanner = createAutoRecallPlanner(
+      {
+        enabled: config.autoRecall === true,
+        minPromptLength: config.autoRecallMinLength,
+        minRepeated: config.autoRecallMinRepeated,
+        topK: config.autoRecallTopK ?? DEFAULT_AUTO_RECALL_TOP_K,
+        selectionMode: config.autoRecallSelectionMode ?? DEFAULT_AUTO_RECALL_SELECTION_MODE,
+        categories: config.autoRecallCategories,
+        excludeReflection: config.autoRecallExcludeReflection === true,
+        maxAgeDays: config.autoRecallMaxAgeDays,
         maxEntriesPerKey: config.autoRecallMaxEntriesPerKey,
-        getTimestamp: (row) => row.entry.timestamp,
-        getNormalizedKey: (row) => normalizeRecallTextKey(row.entry.text),
-      });
-      const allowedIds = new Set(cappedRecent.map((row) => row.entry.id));
-      return withinAge.filter((row) => allowedIds.has(row.entry.id));
-    };
+      },
+      {
+        state: sessionExposureState.autoRecallState,
+        retrieve: (params) => retriever.retrieve(params),
+        getAccessibleScopes: (agentId) => scopeManager.getAccessibleScopes(agentId),
+        sanitizeForContext,
+        logger: api.logger,
+      }
+    );
 
     // Auto-Recall: inject relevant memories before agent starts.
     // Default is OFF to prevent the model from accidentally echoing injected context.
     if (config.autoRecall === true) {
       api.on("before_agent_start", async (event, ctx) => {
         try {
-          const agentId = ctx?.agentId || "main";
-          const sessionId = ctx?.sessionId || "default";
-          const accessibleScopes = scopeManager.getAccessibleScopes(agentId);
-          const topK = config.autoRecallTopK ?? DEFAULT_AUTO_RECALL_TOP_K;
-          const fetchLimit = Math.min(20, Math.max(topK * 4, topK, 8));
-          return await orchestrateDynamicRecall({
-            channelName: "auto-recall",
+          return await autoRecallPlanner.plan({
             prompt: event.prompt,
-            minPromptLength: config.autoRecallMinLength,
-            minRepeated: config.autoRecallMinRepeated,
-            topK,
-            sessionId,
-            state: autoRecallState,
-            outputTag: "relevant-memories",
-            headerLines: [],
-            wrapUntrustedData: true,
-            logger: api.logger,
-            loadCandidates: async () => {
-              const retrieved = await retriever.retrieve({
-                query: event.prompt,
-                limit: fetchLimit,
-                scopeFilter: accessibleScopes,
-                source: "auto-recall",
-              });
-              const postProcessed = postProcessAutoRecallResults(retrieved);
-              if (config.autoRecallSelectionMode === "setwise-v2") {
-                return selectFinalAutoRecallResults(postProcessed, { topK });
-              }
-              return postProcessed.slice(0, topK);
-            },
-            formatLine: (row) =>
-              `- [${row.entry.category}:${row.entry.scope}] ${sanitizeForContext(row.entry.text)} (${(row.score * 100).toFixed(0)}%${row.sources?.bm25 ? ", vector+BM25" : ""}${row.sources?.reranked ? "+reranked" : ""})`,
+            agentId: ctx?.agentId,
+            sessionId: ctx?.sessionId,
           });
         } catch (err) {
           api.logger.warn(`memory-lancedb-pro: auto-recall failed: ${String(err)}`);
@@ -2060,139 +1854,63 @@ const memoryLanceDBProPlugin = {
         return sourceAgentId;
       };
 
+      const reflectionPromptPlanner = createReflectionPromptPlanner(
+        {
+          injectMode: reflectionInjectMode,
+          dedupeErrorSignals: reflectionDedupeErrorSignals,
+          errorReminderMaxEntries: reflectionErrorReminderMaxEntries,
+          errorScanMaxChars: DEFAULT_REFLECTION_ERROR_SCAN_MAX_CHARS,
+          recall: {
+            mode: reflectionRecallMode,
+            topK: reflectionRecallTopK,
+            includeKinds: reflectionRecallIncludeKinds,
+            maxAgeDays: reflectionRecallMaxAgeDays,
+            maxEntriesPerKey: reflectionRecallMaxEntriesPerKey,
+            minRepeated: reflectionRecallMinRepeated,
+            minScore: reflectionRecallMinScore,
+            minPromptLength: reflectionRecallMinPromptLength,
+          },
+        },
+        {
+          sessionState: sessionExposureState,
+          storeList: (scopeFilter, category, limit, offset) => store.list(scopeFilter, category, limit, offset),
+          getAccessibleScopes: (agentId) => scopeManager.getAccessibleScopes(agentId),
+          sanitizeForContext,
+          logger: api.logger,
+        }
+      );
+
       api.on("after_tool_call", (event, ctx) => {
         const sessionKey = typeof ctx.sessionKey === "string" ? ctx.sessionKey : "";
         if (isInternalReflectionSessionKey(sessionKey)) return;
         if (!sessionKey) return;
-        pruneReflectionSessionState();
-
-        if (typeof event.error === "string" && event.error.trim().length > 0) {
-          const signature = normalizeErrorSignature(event.error);
-          addReflectionErrorSignal(sessionKey, {
-            at: Date.now(),
-            toolName: event.toolName || "unknown",
-            summary: summarizeErrorText(event.error),
-            source: "tool_error",
-            signature,
-            signatureHash: sha256Hex(signature).slice(0, 16),
-          }, reflectionDedupeErrorSignals);
-          return;
-        }
-
-        const resultTextRaw = extractTextFromToolResult(event.result);
-        const resultText = resultTextRaw.length > DEFAULT_REFLECTION_ERROR_SCAN_MAX_CHARS
-          ? resultTextRaw.slice(0, DEFAULT_REFLECTION_ERROR_SCAN_MAX_CHARS)
-          : resultTextRaw;
-        if (resultText && containsErrorSignal(resultText)) {
-          const signature = normalizeErrorSignature(resultText);
-          addReflectionErrorSignal(sessionKey, {
-            at: Date.now(),
-            toolName: event.toolName || "unknown",
-            summary: summarizeErrorText(resultText),
-            source: "tool_output",
-            signature,
-            signatureHash: sha256Hex(signature).slice(0, 16),
-          }, reflectionDedupeErrorSignals);
-        }
+        reflectionPromptPlanner.captureAfterToolCall(event, sessionKey);
       }, { priority: 15 });
-
-      const buildReflectionRecallPrependContext = async (
-        event: { prompt?: string } | undefined,
-        ctx: { sessionId?: string; sessionKey?: string; agentId?: string },
-      ): Promise<string | undefined> => {
-        const agentId = typeof ctx.agentId === "string" && ctx.agentId.trim() ? ctx.agentId.trim() : "main";
-        const scopes = scopeManager.getAccessibleScopes(agentId);
-        if (reflectionRecallMode === "fixed") {
-          const slices = await loadAgentReflectionSlices(agentId, scopes);
-          if (slices.invariants.length === 0) return undefined;
-          const body = slices.invariants.slice(0, 6).map((line, i) => `${i + 1}. ${line}`).join("\n");
-          return [
-            "<inherited-rules>",
-            "Stable rules inherited from memory-lancedb-pro reflections. Treat as long-term behavioral constraints unless user overrides.",
-            body,
-            "</inherited-rules>",
-          ].join("\n");
-        }
-
-        const sessionId = ctx?.sessionId || ctx?.sessionKey || "default";
-        const topK = Math.max(1, reflectionRecallTopK);
-        const listLimit = Math.min(800, Math.max(topK * 40, 240));
-        const result = await orchestrateDynamicRecall({
-          channelName: "reflection-recall",
-          prompt: event?.prompt,
-          minPromptLength: reflectionRecallMinPromptLength,
-          minRepeated: reflectionRecallMinRepeated,
-          topK,
-          sessionId,
-          state: reflectionDynamicRecallState,
-          outputTag: "inherited-rules",
-          headerLines: [
-            "Dynamic rules selected by Reflection-Recall. Treat as long-term behavioral constraints unless user overrides.",
-          ],
-          logger: api.logger,
-          loadCandidates: async () => {
-            const entries = await store.list(scopes, "reflection", listLimit, 0);
-            return rankDynamicReflectionRecallFromEntries(entries, {
-              agentId,
-              includeKinds: reflectionRecallIncludeKinds,
-              topK,
-              maxAgeMs: daysToMs(reflectionRecallMaxAgeDays),
-              maxEntriesPerKey: reflectionRecallMaxEntriesPerKey,
-              minScore: reflectionRecallMinScore,
-            });
-          },
-          formatLine: (row, index) =>
-            `${index + 1}. ${sanitizeForContext(row.text)} (${(row.score * 100).toFixed(0)}%)`,
-        });
-        return result?.prependContext;
-      };
 
       api.on("before_prompt_build", async (event, ctx) => {
         const sessionKey = typeof ctx.sessionKey === "string" ? ctx.sessionKey : "";
         if (isInternalReflectionSessionKey(sessionKey)) return;
-        pruneReflectionSessionState();
-
-        const contextBlocks: string[] = [];
-
-        if (reflectionInjectMode === "inheritance-only" || reflectionInjectMode === "inheritance+derived") {
-          try {
-            const inheritedRules = await buildReflectionRecallPrependContext(event, ctx);
-            if (inheritedRules) {
-              contextBlocks.push(inheritedRules);
-            }
-          } catch (err) {
-            api.logger.warn(`memory-reflection: reflection-recall injection failed: ${String(err)}`);
-          }
-        }
-
-        if (sessionKey) {
-          const pending = getPendingReflectionErrorSignalsForPrompt(sessionKey, reflectionErrorReminderMaxEntries);
-          if (pending.length > 0) {
-            contextBlocks.push([
-              "<error-detected>",
-              "A tool error was detected. Consider logging this to `.learnings/ERRORS.md` if it is non-trivial or likely to recur.",
-              "Recent error signals:",
-              ...pending.map((e, i) => `${i + 1}. [${e.toolName}] ${e.summary}`),
-              "</error-detected>",
-            ].join("\n"));
-          }
-        }
-
-        if (contextBlocks.length === 0) return;
-        return { prependContext: contextBlocks.join("\n\n") };
+        const prependContext = await reflectionPromptPlanner.buildBeforePromptPrependContext({
+          prompt: event?.prompt,
+          agentId: ctx?.agentId,
+          sessionId: ctx?.sessionId,
+          sessionKey: ctx?.sessionKey,
+        });
+        if (!prependContext) return;
+        return { prependContext };
       }, { priority: 15 });
 
       api.on("session_end", (_event, ctx) => {
         const sessionKey = typeof ctx.sessionKey === "string" ? ctx.sessionKey.trim() : "";
         if (!sessionKey) return;
-        reflectionErrorStateBySession.delete(sessionKey);
-        pruneReflectionSessionState();
+        reflectionPromptPlanner.clearSession(sessionKey);
+        reflectionPromptPlanner.pruneSessionState();
       }, { priority: 20 });
 
       const runMemoryReflection = async (event: any) => {
         const sessionKey = typeof event.sessionKey === "string" ? event.sessionKey : "";
         try {
-          pruneReflectionSessionState();
+          reflectionPromptPlanner.pruneSessionState();
           const action = String(event?.action || "unknown");
           const context = (event.context || {}) as Record<string, unknown>;
           const cfg = context.cfg;
@@ -2272,7 +1990,7 @@ const memoryLanceDBProPlugin = {
           const reflectionRunAgentId = resolveReflectionRunAgentId(cfg, sourceAgentId);
           const targetScope = scopeManager.getDefaultScope(sourceAgentId);
           const toolErrorSignals = sessionKey
-            ? (reflectionErrorStateBySession.get(sessionKey)?.entries ?? []).slice(-reflectionErrorReminderMaxEntries)
+            ? reflectionPromptPlanner.getRecentErrorSignals(sessionKey, reflectionErrorReminderMaxEntries)
             : [];
 
           api.logger.info(
@@ -2464,9 +2182,7 @@ const memoryLanceDBProPlugin = {
               embedPassage: (text) => embedder.embedPassage(text),
               store: (entry) => store.store(entry),
             });
-            for (const cacheKey of reflectionByAgentCache.keys()) {
-              if (cacheKey.startsWith(`${sourceAgentId}::`)) reflectionByAgentCache.delete(cacheKey);
-            }
+            reflectionPromptPlanner.invalidateAgentCache(sourceAgentId);
           }
 
           const dailyPath = join(workspaceDir, "memory", `${dateStr}.md`);
@@ -2478,9 +2194,9 @@ const memoryLanceDBProPlugin = {
           api.logger.warn(`memory-reflection: hook failed: ${String(err)}`);
         } finally {
           if (sessionKey) {
-            reflectionErrorStateBySession.delete(sessionKey);
+            reflectionPromptPlanner.clearSession(sessionKey);
           }
-          pruneReflectionSessionState();
+          reflectionPromptPlanner.pruneSessionState();
         }
       };
 

@@ -44,6 +44,10 @@ const {
   orchestrateDynamicRecall,
   normalizeRecallTextKey,
 } = jiti("../src/recall-engine.ts");
+const { renderTaggedPromptBlock, renderErrorDetectedBlock } = jiti("../src/context/prompt-block-renderer.ts");
+const { createSessionExposureState } = jiti("../src/context/session-exposure-state.ts");
+const { createAutoRecallPlanner } = jiti("../src/context/auto-recall-orchestrator.ts");
+const { createReflectionPromptPlanner } = jiti("../src/context/reflection-prompt-planner.ts");
 const { shouldSkipRetrieval } = jiti("../src/adaptive-retrieval.ts");
 const {
   REFLECTION_INVARIANT_DECAY_MIDPOINT_DAYS,
@@ -2445,6 +2449,187 @@ describe("memory reflection", () => {
       assert.match(output.prependContext, /Restart API service after config updates\./);
       assert.match(output.prependContext, /Run DNS and mount health checks after restart\./);
       assert.doesNotMatch(output.prependContext, /restart api service after config updates\./);
+    });
+  });
+
+  describe("context split orchestration modules", () => {
+    it("renders tagged and error-detected prompt blocks", () => {
+      const tagged = renderTaggedPromptBlock({
+        tag: "relevant-memories",
+        headerLines: [],
+        contentLines: ["- [fact:global] keep it concise"],
+        wrapUntrustedData: true,
+      });
+      assert.match(tagged, /<relevant-memories>/);
+      assert.match(tagged, /UNTRUSTED DATA/);
+      assert.match(tagged, /END UNTRUSTED DATA/);
+
+      const errorBlock = renderErrorDetectedBlock([
+        { toolName: "bash", summary: "permission denied" },
+      ]);
+      assert.match(errorBlock, /<error-detected>/);
+      assert.match(errorBlock, /\[bash\] permission denied/);
+    });
+
+    it("tracks pending reflection error signals with dedupe and one-shot prompt exposure", () => {
+      const state = createSessionExposureState();
+      const sessionKey = "agent:main:session:test";
+      const signal = {
+        at: 1,
+        toolName: "bash",
+        summary: "permission denied",
+        source: "tool_error",
+        signature: "permission denied",
+        signatureHash: "deadbeef",
+      };
+
+      state.addReflectionErrorSignal(sessionKey, signal, true);
+      state.addReflectionErrorSignal(sessionKey, signal, true);
+      const first = state.getPendingReflectionErrorSignalsForPrompt(sessionKey, 5);
+      const second = state.getPendingReflectionErrorSignalsForPrompt(sessionKey, 5);
+      assert.equal(first.length, 1);
+      assert.equal(second.length, 0);
+    });
+
+    it("plans generic auto-recall via dedicated planner module", async () => {
+      const state = createSessionExposureState();
+      const retrieveCalls = [];
+      const planner = createAutoRecallPlanner(
+        {
+          enabled: true,
+          minPromptLength: 1,
+          topK: 2,
+          selectionMode: "mmr",
+          categories: ["fact", "reflection"],
+          excludeReflection: true,
+          maxEntriesPerKey: 5,
+          maxAgeDays: 30,
+        },
+        {
+          state: state.autoRecallState,
+          retrieve: async (params) => {
+            retrieveCalls.push(params);
+            return [
+              {
+                entry: {
+                  id: "fact-1",
+                  text: "Always run post-checks after service changes.",
+                  category: "fact",
+                  scope: "global",
+                  timestamp: Date.now(),
+                  vector: [],
+                  importance: 0.8,
+                  metadata: "{}",
+                },
+                score: 0.91,
+                sources: { bm25: { score: 0.4, rank: 1 } },
+              },
+              {
+                entry: {
+                  id: "refl-1",
+                  text: "Reflection memory should be filtered for generic recall.",
+                  category: "reflection",
+                  scope: "global",
+                  timestamp: Date.now(),
+                  vector: [],
+                  importance: 0.8,
+                  metadata: "{}",
+                },
+                score: 0.89,
+                sources: {},
+              },
+            ];
+          },
+          getAccessibleScopes: (agentId) => [`agent:${agentId}`, "global"],
+          sanitizeForContext: (text) => text,
+        }
+      );
+
+      const output = await planner.plan({
+        prompt: "recall prior rollout guidance",
+        agentId: "main",
+        sessionId: "session-1",
+      });
+
+      assert.equal(retrieveCalls.length, 1);
+      assert.deepEqual(retrieveCalls[0].scopeFilter, ["agent:main", "global"]);
+      assert.ok(output);
+      assert.match(output.prependContext, /<relevant-memories>/);
+      assert.match(output.prependContext, /Always run post-checks/);
+      assert.doesNotMatch(output.prependContext, /Reflection memory should be filtered/);
+    });
+
+    it("plans reflection inherited-rules and error reminders via dedicated planner module", async () => {
+      const now = Date.now();
+      const sessionState = createSessionExposureState();
+      const planner = createReflectionPromptPlanner(
+        {
+          injectMode: "inheritance+derived",
+          dedupeErrorSignals: true,
+          errorReminderMaxEntries: 3,
+          errorScanMaxChars: 8000,
+          recall: {
+            mode: "fixed",
+            topK: 4,
+            includeKinds: ["invariant"],
+            maxAgeDays: 45,
+            maxEntriesPerKey: 10,
+            minRepeated: 2,
+            minScore: 0.18,
+            minPromptLength: 8,
+          },
+        },
+        {
+          sessionState,
+          storeList: async () => [
+            {
+              id: "invariant-1",
+              text: "Always verify scope and post-check results before concluding.",
+              vector: [],
+              category: "reflection",
+              scope: "global",
+              importance: 0.8,
+              timestamp: now,
+              metadata: JSON.stringify({
+                type: "memory-reflection-item",
+                itemKind: "invariant",
+                agentId: "main",
+                storedAt: now,
+                decayMidpointDays: 45,
+                decayK: 0.22,
+                baseWeight: 1.1,
+                quality: 1,
+              }),
+            },
+          ],
+          getAccessibleScopes: () => ["global"],
+          sanitizeForContext: (text) => text,
+        }
+      );
+
+      const sessionKey = "agent:main:session:planner-test";
+      planner.captureAfterToolCall({ toolName: "bash", error: "permission denied while writing file" }, sessionKey);
+
+      const first = await planner.buildBeforePromptPrependContext({
+        prompt: "continue with rollout",
+        agentId: "main",
+        sessionId: "planner-test",
+        sessionKey,
+      });
+      assert.ok(first);
+      assert.match(first, /<inherited-rules>/);
+      assert.match(first, /Always verify scope and post-check results before concluding\./);
+      assert.match(first, /<error-detected>/);
+
+      const second = await planner.buildBeforePromptPrependContext({
+        prompt: "continue with rollout",
+        agentId: "main",
+        sessionId: "planner-test",
+        sessionKey,
+      });
+      assert.ok(second);
+      assert.match(second, /<inherited-rules>/);
+      assert.doesNotMatch(second, /<error-detected>/);
     });
   });
 });

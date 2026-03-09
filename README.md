@@ -55,50 +55,45 @@ The built-in `memory-lancedb` plugin in OpenClaw provides basic vector search. *
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                         index.ts (Entry Point)                      │
-│     Plugin registration · config parsing · lifecycle orchestration  │
-└────────┬───────────────────────────────┬─────────────────────────────┘
-         │                               │
-         │ generic auto-recall           │ reflection / inherited-rules
-         │                               │
-┌────────▼────────┐              ┌───────▼───────────────────────────┐
-│   retriever.ts  │              │       reflection-recall.ts        │
-│ vector/BM25/RRF │              │ dynamic reflection recall ranking │
-│ rerank/filters  │              └───────────────┬───────────────────┘
-└────────┬────────┘                              │
-         │                               ┌──────▼────────────────────┐
-┌────────▼───────────────┐               │ reflection-aggregation.ts │
-│ postProcessAutoRecall  │               │ strictKey-group scoring   │
-│ (index.ts local step)  │               └──────┬────────────────────┘
-└────────┬───────────────┘                      │
-         │                               ┌──────▼───────────────────────┐
-         │ mmr | setwise-v2              │ reflection-recall-final-     │
-┌────────▼────────────────────┐           │ selection.ts                 │
-│ auto-recall-final-          │           └──────┬───────────────────────┘
-│ selection.ts                │                  │
-└────────┬────────────────────┘           ┌──────▼───────────────────────┐
-         └────────────────────────────────► final-topk-setwise-         │
-                                          │ selection.ts                │
-                                          │ shared final top-k selector │
-                                          └─────────────────────────────┘
-
-Shared infrastructure: `store.ts`, `embedder.ts`, `scopes.ts`, `tools.ts`,
-`noise-filter.ts`, `adaptive-retrieval.ts`, `recall-engine.ts`, `migrate.ts`, `cli.ts`
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                             index.ts (Entry Point)                          │
+│ plugin registration · config parsing · hook wiring                          │
+│ before_agent_start / before_prompt_build / after_tool_call / agent_end      │
+│ command:new / command:reset                                                  │
+└─────────────────────────────┬───────────────────────────────────────────────┘
+                              │ delegates
+                ┌─────────────┴────────────────┐
+                │                              │
+┌───────────────▼────────────────────┐  ┌──────▼──────────────────────────────┐
+│ src/context/* (prompt orchestration)│  │ Backend modules (storage/retrieval) │
+│ auto-recall-orchestrator.ts         │  │ store.ts / embedder.ts / retriever.ts│
+│ reflection-prompt-planner.ts        │  │ scopes.ts / reflection-store.ts      │
+│ session-exposure-state.ts           │  │ reflection-recall*.ts / tools.ts     │
+│ prompt-block-renderer.ts            │  │ auto-recall-final-selection.ts       │
+└───────────────┬─────────────────────┘  └─────────────────────────────────────┘
+                │
+                ▼
+     `<relevant-memories>` / `<inherited-rules>` / `<error-detected>` blocks
 ```
+
+This split is internal to the current `memory` plugin and does not mean a standalone ContextEngine plugin is already shipped.
 
 ### File Reference
 
 | File | Purpose |
 |------|---------|
-| `index.ts` | Plugin entry point. Registers with OpenClaw Plugin API, parses config, mounts lifecycle hooks (`before_agent_start` / `before_prompt_build` / `agent_end`), routes generic auto-recall through `mmr | setwise-v2`, and coordinates reflection injection flows |
+| `index.ts` | Plugin entry point. Registers with OpenClaw Plugin API, parses config, mounts active lifecycle hooks (`before_agent_start` / `before_prompt_build` / `after_tool_call` / `agent_end` / `command:new` / `command:reset`), and delegates orchestration to `src/context/*` while keeping backend wiring here |
 | `openclaw.plugin.json` | Plugin metadata + full JSON Schema config declaration (with `uiHints`) |
 | `package.json` | NPM package info. Depends on `@lancedb/lancedb`, `openai`, `@sinclair/typebox` |
 | `cli.ts` | CLI commands: `memory list/search/stats/delete/delete-bulk/export/import/reembed/migrate` |
+| `src/context/auto-recall-orchestrator.ts` | Generic auto-recall orchestration seam. Uses scope-filtered retrieval results, applies post-processing/selection, and returns `before_agent_start` prepend-context plans |
+| `src/context/reflection-prompt-planner.ts` | Reflection prompt orchestration seam. Owns `after_tool_call` error-signal capture and `before_prompt_build` composition of `<inherited-rules>` and `<error-detected>` blocks |
+| `src/context/session-exposure-state.ts` | Session-local exposure state owner for dynamic recall suppression and reflection error-signal dedupe/TTL cleanup |
+| `src/context/prompt-block-renderer.ts` | Prompt-block renderer for tagged context blocks and untrusted-data wrappers |
 | `src/store.ts` | LanceDB storage layer. Table creation / FTS indexing / Vector search / BM25 search / CRUD / bulk delete / stats |
 | `src/embedder.ts` | Embedding abstraction. Compatible with any OpenAI-API provider (OpenAI, Gemini, Jina, Ollama, etc.). Supports task-aware embedding (`taskQuery`/`taskPassage`) |
 | `src/retriever.ts` | Hybrid retrieval engine. Vector + BM25 → RRF fusion → rerank → recency / importance / length / decay weighting → noise filter → coarse MMR diversity. |
-| `src/recall-engine.ts` | Shared recall helpers: prompt gating, session repeated-injection suppression, tagged-block assembly, max-age filtering, and recent-per-key capping |
+| `src/recall-engine.ts` | Shared recall helpers consumed by context orchestrators: prompt gating, session repeated-injection suppression, tagged-block assembly, max-age filtering, and recent-per-key capping |
 | `src/auto-recall-final-selection.ts` | Generic auto-recall adapter. Maps `RetrievalResult` rows into final-selection candidates and applies generic `mmr | setwise-v2` behavior at the final cutoff seam |
 | `src/final-topk-setwise-selection.ts` | Shared final top-k selector. Owns shortlist presort, deterministic set-wise selection, lexical-overlap suppression, and optional embedding-based semantic redundancy suppression |
 | `src/reflection-recall.ts` | Dynamic Reflection-Recall ranking for `<inherited-rules>`. Filters/caps reflection items, computes scores, preserves `kind + strictKey` partitioning, and maps selected groups back to recall rows |

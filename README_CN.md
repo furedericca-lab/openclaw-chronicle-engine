@@ -55,50 +55,45 @@ OpenClaw 内置的 `memory-lancedb` 插件仅提供基本的向量搜索。**mem
 ## 架构概览
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                           index.ts（入口）                          │
-│              插件注册 · 配置解析 · 生命周期与注入流程编排           │
-└────────┬───────────────────────────────┬─────────────────────────────┘
-         │                               │
-         │ generic auto-recall           │ reflection / inherited-rules
-         │                               │
-┌────────▼────────┐              ┌───────▼───────────────────────────┐
-│   retriever.ts  │              │       reflection-recall.ts        │
-│ 向量/BM25/RRF   │              │ 动态 Reflection-Recall 排序       │
-│ rerank/filters  │              └───────────────┬───────────────────┘
-└────────┬────────┘                              │
-         │                               ┌──────▼────────────────────┐
-┌────────▼───────────────┐               │ reflection-aggregation.ts │
-│ postProcessAutoRecall  │               │ strictKey 分组与打分      │
-│ （index.ts 本地步骤）  │               └──────┬────────────────────┘
-└────────┬───────────────┘                      │
-         │                               ┌──────▼───────────────────────┐
-         │ mmr | setwise-v2              │ reflection-recall-final-     │
-┌────────▼────────────────────┐           │ selection.ts                 │
-│ auto-recall-final-          │           └──────┬───────────────────────┘
-│ selection.ts                │                  │
-└────────┬────────────────────┘           ┌──────▼───────────────────────┐
-         └────────────────────────────────► final-topk-setwise-         │
-                                          │ selection.ts                │
-                                          │ 共享最终 top-k 选择器       │
-                                          └─────────────────────────────┘
-
-共享基础设施：`store.ts`、`embedder.ts`、`scopes.ts`、`tools.ts`、
-`noise-filter.ts`、`adaptive-retrieval.ts`、`recall-engine.ts`、`migrate.ts`、`cli.ts`
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                               index.ts（入口）                              │
+│ 插件注册 · 配置解析 · Hook 挂载                                              │
+│ before_agent_start / before_prompt_build / after_tool_call / agent_end      │
+│ command:new / command:reset                                                  │
+└─────────────────────────────┬───────────────────────────────────────────────┘
+                              │ 委派
+                ┌─────────────┴────────────────┐
+                │                              │
+┌───────────────▼────────────────────┐  ┌──────▼──────────────────────────────┐
+│ src/context/*（prompt 编排层）      │  │ Backend 模块（存储/检索）           │
+│ auto-recall-orchestrator.ts         │  │ store.ts / embedder.ts / retriever.ts│
+│ reflection-prompt-planner.ts        │  │ scopes.ts / reflection-store.ts      │
+│ session-exposure-state.ts           │  │ reflection-recall*.ts / tools.ts     │
+│ prompt-block-renderer.ts            │  │ auto-recall-final-selection.ts       │
+└───────────────┬─────────────────────┘  └─────────────────────────────────────┘
+                │
+                ▼
+      `<relevant-memories>` / `<inherited-rules>` / `<error-detected>` 注入块
 ```
+
+以上拆分仅是当前 `memory` 插件内部边界调整，不代表已发布独立 ContextEngine 插件。
 
 ### 文件说明
 
 | 文件 | 用途 |
 |------|------|
-| `index.ts` | 插件入口。注册到 OpenClaw Plugin API，解析配置，挂载生命周期钩子（`before_agent_start` / `before_prompt_build` / `agent_end`），负责 generic auto-recall 的 `mmr | setwise-v2` 分流，并编排 reflection 注入流程 |
+| `index.ts` | 插件入口。注册 OpenClaw Plugin API、解析配置、挂载活跃生命周期钩子（`before_agent_start` / `before_prompt_build` / `after_tool_call` / `agent_end` / `command:new` / `command:reset`），并把 prompt 编排委派给 `src/context/*`，保留 backend 依赖装配 |
 | `openclaw.plugin.json` | 插件元数据 + 完整 JSON Schema 配置声明（含 `uiHints`） |
 | `package.json` | NPM 包信息，依赖 `@lancedb/lancedb`、`openai`、`@sinclair/typebox` |
 | `cli.ts` | CLI 命令实现：`memory list/search/stats/delete/delete-bulk/export/import/reembed/migrate` |
+| `src/context/auto-recall-orchestrator.ts` | generic auto-recall 编排层。消费 scope 过滤后的检索结果，做后处理与选择，并返回 `before_agent_start` 的 prepend-context 计划 |
+| `src/context/reflection-prompt-planner.ts` | reflection prompt 编排层。负责 `after_tool_call` 错误信号采集，以及 `before_prompt_build` 的 `<inherited-rules>` 与 `<error-detected>` 组合 |
+| `src/context/session-exposure-state.ts` | session 级曝光状态管理：动态 recall 抑制、reflection 错误信号去重与 TTL 清理 |
+| `src/context/prompt-block-renderer.ts` | tagged prompt block 渲染器，负责拼接上下文注入块，并对 untrusted-data 做包装 |
 | `src/store.ts` | LanceDB 存储层。表创建 / FTS 索引 / Vector Search / BM25 Search / CRUD / 批量删除 / 统计 |
 | `src/embedder.ts` | Embedding 抽象层。兼容 OpenAI API 的任意 Provider（OpenAI、Gemini、Jina、Ollama 等），支持 task-aware embedding（`taskQuery`/`taskPassage`） |
 | `src/retriever.ts` | 混合检索引擎。Vector + BM25 → RRF 融合 → rerank → 时效 / 重要性 / 长度 / 衰减加权 → 噪声过滤 → 粗粒度 MMR 去重。 |
-| `src/recall-engine.ts` | 共享 recall 辅助层：prompt 触发判断、session 重复注入抑制、tag block 组装、max-age 过滤、按 key 保留最近 N 条 |
+| `src/recall-engine.ts` | 被 context 编排层复用的 recall 辅助能力：prompt 触发判断、session 重复注入抑制、tag block 组装、max-age 过滤、按 key 保留最近 N 条 |
 | `src/auto-recall-final-selection.ts` | generic auto-recall 适配层。把 `RetrievalResult` 映射为最终选择候选，并在最终截断点应用 generic 的 `mmr | setwise-v2` 行为 |
 | `src/final-topk-setwise-selection.ts` | 共享最终 top-k 选择器。负责 shortlist presort、确定性的 set-wise 选择、词法重叠抑制，以及可选的 embedding 语义冗余抑制 |
 | `src/reflection-recall.ts` | `<inherited-rules>` 的动态 Reflection-Recall 排序链路。负责 reflection item 过滤/截断、分数计算、保持 `kind + strictKey` 分区，并将选中的 group 映射回 recall rows |
