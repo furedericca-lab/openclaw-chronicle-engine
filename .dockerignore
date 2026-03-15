@@ -1,0 +1,7 @@
+.git
+.github/ISSUE_TEMPLATE
+node_modules
+coverage
+dist
+data
+*.log

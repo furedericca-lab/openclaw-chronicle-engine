@@ -1,7 +1,7 @@
 {
   "id": "memory-lancedb-pro",
   "name": "Memory (LanceDB Pro)",
-  "description": "Enhanced LanceDB-backed long-term memory with hybrid retrieval, multi-scope isolation, long-context chunking, and management CLI",
+  "description": "Enhanced long-term memory plugin with hybrid retrieval, multi-scope isolation, long-context chunking, and local/remote authority modes",
   "version": "1.1.0-beta.6",
   "kind": "memory",
   "configSchema": {
@@ -11,6 +11,7 @@
       "embedding": {
         "type": "object",
         "additionalProperties": false,
+        "description": "Required when remoteBackend.enabled is false (local LanceDB mode). Optional when remote backend mode is enabled.",
         "properties": {
           "provider": {
             "type": "string",
@@ -65,6 +66,43 @@
       },
       "dbPath": {
         "type": "string"
+      },
+      "remoteBackend": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Remote memory backend transport configuration. When enabled, shell memory authority routes through HTTP endpoints.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "baseURL": {
+            "type": "string",
+            "description": "Remote backend base URL (for example http://127.0.0.1:8080)"
+          },
+          "authToken": {
+            "type": "string",
+            "description": "Runtime bearer token used for data-plane backend calls"
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 120000,
+            "default": 10000
+          },
+          "maxRetries": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 5,
+            "default": 1
+          },
+          "retryBackoffMs": {
+            "type": "integer",
+            "minimum": 50,
+            "maximum": 5000,
+            "default": 250
+          }
+        }
       },
       "enableManagementTools": {
         "type": "boolean",
@@ -500,16 +538,14 @@
         }
       }
     },
-    "required": [
-      "embedding"
-    ]
+    "required": []
   },
   "uiHints": {
     "embedding.apiKey": {
       "label": "API Key(s)",
       "sensitive": true,
       "placeholder": "sk-proj-... or [\"key1\", \"key2\"] for rotation",
-      "help": "Single API key or array of keys for round-robin rotation with automatic failover on rate limits (or use ${OPENAI_API_KEY}; use a dummy value for keyless local endpoints)"
+      "help": "Local mode requires embedding config. Provide a single API key or array of keys for round-robin rotation with automatic failover on rate limits (or use ${OPENAI_API_KEY}; use a dummy value for keyless local endpoints). Remote backend mode does not use this block."
     },
     "embedding.model": {
       "label": "Embedding Model",
@@ -554,6 +590,39 @@
       "label": "Database Path",
       "placeholder": "~/.openclaw/memory/lancedb-pro",
       "help": "Directory path for the LanceDB database files",
+      "advanced": true
+    },
+    "remoteBackend.enabled": {
+      "label": "Enable Remote Backend",
+      "help": "Route runtime memory authority through the remote HTTP backend. When enabled with valid remoteBackend.baseURL/authToken, local embedding config is optional.",
+      "advanced": true
+    },
+    "remoteBackend.baseURL": {
+      "label": "Remote Backend Base URL",
+      "placeholder": "http://127.0.0.1:8080",
+      "help": "Base URL for the remote memory backend service.",
+      "advanced": true
+    },
+    "remoteBackend.authToken": {
+      "label": "Remote Backend Token",
+      "sensitive": true,
+      "placeholder": "runtime-token",
+      "help": "Bearer token for authenticated runtime data-plane calls.",
+      "advanced": true
+    },
+    "remoteBackend.timeoutMs": {
+      "label": "Remote Timeout (ms)",
+      "help": "HTTP timeout per backend request.",
+      "advanced": true
+    },
+    "remoteBackend.maxRetries": {
+      "label": "Remote Max Retries",
+      "help": "Retry count for retryable backend failures.",
+      "advanced": true
+    },
+    "remoteBackend.retryBackoffMs": {
+      "label": "Remote Retry Backoff (ms)",
+      "help": "Base retry backoff between backend attempts.",
       "advanced": true
     },
     "autoCapture": {

@@ -33,13 +33,13 @@ Current runtime entrypoint:
 
 2. **Current orchestration expects local backend dependency contracts that will need HTTP-backed replacements.**
    Evidence:
-   - `createAutoRecallPlanner(...).plan(...)` expects a `retrieve(...)` function and local `getAccessibleScopes(...)`.
-   - `createReflectionPromptPlanner(...)` expects `storeList(...)` plus local scope access decisions.
+   - `createAutoRecallPlanner(...).plan(...)` currently expects local retrieval/scoping helpers rather than a pure actor+query contract.
+   - `createReflectionPromptPlanner(...)` currently expects local reflection access decisions rather than a pure actor+query+mode contract.
 
 3. **Local scope resolution is incompatible with the selected authority model.**
    Evidence:
    - agreed redesign explicitly moves ACL and scope derivation into the backend;
-   - current docs for `context-engine-split` still describe local `getAccessibleScopes(...)`.
+   - current docs and code still describe local scope participation that must be removed from runtime contracts.
 
 4. **Reflection execution is currently coupled to OpenClaw/plugin-local flows.**
    Evidence:
@@ -50,6 +50,16 @@ Current runtime entrypoint:
    Evidence:
    - agreed redesign says the shell must not push provider or gateway config to the backend;
    - current codebase assumes embedder/rerank configuration is parsed inside the plugin.
+
+6. **Current tool surface has explicit write/update semantics that the remote contract must preserve.**
+   Evidence:
+   - `src/tools.ts` exposes `memory_store` with explicit `text`, `importance`, and `category` inputs;
+   - `src/tools.ts` also exposes `memory_update`, which means MVP parity is cleaner if the remote contract freezes a dedicated update path instead of removing the tool capability.
+
+7. **Current local CLI surface is broader than the required remote MVP surface.**
+   Evidence:
+   - `cli.ts` includes `delete-bulk`, `export`, `import`, `reembed`, migration utilities, and FTS-focused paths;
+   - those commands should not implicitly expand the remote MVP unless explicitly adopted into the frozen runtime contract.
 
 ## Architecture / implementation options and trade-offs
 
@@ -99,15 +109,27 @@ Selected design:
 - remote Rust service becomes the memory authority;
 - local shell keeps a REST adapter layer and local orchestration;
 - ACL and scope derivation leave the shell completely;
-- backend returns already-authoritative recall rows, not candidate hints requiring local policy decisions.
+- backend returns already-authoritative recall rows, not intermediate retrieval results requiring local policy decisions;
+- admin capabilities remain a separate control plane and are not part of the ordinary shell/context/tool contract;
+- the initial frozen admin surface is limited to read-only health and job inspection endpoints, with optional read-only global stats;
+- `/v1` runtime contracts follow additive-only backward compatibility; breaking changes require a new major version.
+
+Frozen contract decisions added by this research pass:
+
+- `POST /v1/memories/store` supports two distinct request shapes via `mode`: `tool-store` and `auto-capture`;
+- `tool-store` preserves explicit `category` and `importance`, but never accepts scope from the shell;
+- `POST /v1/memories/update` is retained as a dedicated endpoint for MVP parity with the current tool surface;
+- `POST /v1/memories/stats` replaces a GET/query-shaped data-plane stats route to stay consistent with the actor-envelope rule;
+- reflection job status remains caller-scoped on the data plane and operator-global only on admin routes;
+- stable recall DTOs do not expose raw vector/BM25/rerank scoring breakdowns.
 
 Recommended local target shape:
 
 - `src/backend-client/*` or similarly named local adapter modules:
   - HTTP client and auth headers
   - retry/backoff
-  - DTO translation between REST payloads and local orchestration/tool needs
-- `src/context/*` updated to consume backend-returned rows directly and stop calling local scope authority helpers
+  - DTO translation between REST payloads and local orchestration/tool needs on the data plane only
+- `src/context/*` updated to consume backend-returned authoritative rows directly and stop calling local scope authority helpers
 - `index.ts` updated to wire backend client dependencies instead of local storage/retrieval primitives
 
 ## Test and validation strategy
@@ -125,17 +147,25 @@ Implementation-time validation expected from this research:
 - shell-side unit tests for adapter error translation;
 - local orchestration tests proving:
   - recall failures remain fail-open;
-  - tool write/delete failures surface to callers;
+  - tool write/update/delete failures surface to callers;
   - `/new` and `/reset` do not block on reflection completion;
   - local session-local state remains in `src/context/*`, not the adapter.
 
-## Risks, assumptions, unresolved questions
+Contract points that should receive explicit verification:
+
+- `tool-store` vs `auto-capture` body validation;
+- category enum validation and defaulting behavior;
+- stats actor-envelope handling on a POST route;
+- reflection job visibility for same-principal user token vs admin token;
+- list ordering and `nextOffset=null` behavior on the final page.
+
+## Risks, assumptions, remaining open questions
 
 Risks:
 
 - accidental mixed authority if local shell still computes effective scopes while backend also enforces ACL;
 - overexposing backend scoring internals in DTOs and creating unnecessary compatibility burden;
-- under-scoping admin endpoints and later forcing incompatible management API changes.
+- leaking control-plane/admin semantics into ordinary runtime contracts.
 
 Assumptions:
 
@@ -143,8 +173,6 @@ Assumptions:
 - SQLite is sufficient for single-instance reflection job tracking in MVP;
 - static TOML config is acceptable for initial deployment stability.
 
-Unresolved questions:
+Remaining open questions:
 
-- Should admin management endpoints ship in phase 2 or phase 4?
-- Should backend stats responses include model/provider health in MVP, or remain memory-count focused?
-- Should reflection job status expose lightweight timestamps for ops visibility in MVP?
+- Whether shell-side list/stats tooling needs richer pagination/filter DTOs after the frozen MVP, beyond the current minimum.

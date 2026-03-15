@@ -8,8 +8,8 @@ description: Scope boundaries and milestones for context-engine-split.
 
 - Refactor internal code so prompt/context orchestration is no longer owned directly by `index.ts`.
 - Introduce explicit structured seams for:
-  - generic auto-recall candidate exposure,
-  - reflection recall candidate exposure,
+  - generic auto-recall row orchestration,
+  - reflection recall row orchestration,
   - error reminder exposure,
   - session-local recall suppression state,
   - prompt block rendering.
@@ -58,4 +58,4 @@ Acceptance gate:
 
 - `memory-lancedb-pro` still ships as a `memory` plugin and passes tests.
 - Prompt orchestration logic is modular enough that a thin future ContextEngine adapter can be written without reopening retrieval/storage internals.
-- Active-path verification evidence is recorded under `docs/context-engine-split/task-plans/4phases-checklist.md`.
+- Active-path verification evidence is recorded under `docs/archive/context-engine-split/task-plans/4phases-checklist.md`.

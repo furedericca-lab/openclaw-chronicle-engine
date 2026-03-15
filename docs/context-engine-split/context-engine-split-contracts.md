@@ -15,10 +15,12 @@ Internal contracts to introduce in this branch:
 
 ### Generic recall candidate provider
 Request shape:
-- prompt: string
-- agentId: string
-- sessionId: string
-- scopeFilter: string[]
+- query: string
+- actor:
+  - userId: string
+  - agentId: string
+  - sessionId: string
+  - sessionKey: string
 - limits/config snapshot:
   - topK
   - fetchLimit
@@ -29,19 +31,26 @@ Request shape:
   - selectionMode
 
 Response shape:
-- `candidates[]` with:
+- `rows[]` with:
   - entry id/text/category/scope
   - score
   - source flags (`bm25`, `reranked`, etc.)
   - normalized recall key if needed for dedupe
-- `selected[]` (optional if provider owns preselection) or raw candidates for orchestrator-side final selection
+
+Contract rule:
+- provider returns backend-authoritative rows only;
+- orchestration may decide whether to inject or suppress a block;
+- orchestration must not request scopes or perform read-authority filtering locally.
 
 ### Reflection recall provider
 Request shape:
-- prompt: string
-- agentId: string
-- sessionId/sessionKey: string
-- includeKinds: (`invariant` | `derived`)[]
+- query: string
+- actor:
+  - userId: string
+  - agentId: string
+  - sessionId: string
+  - sessionKey: string
+- mode: `invariant-only` | `invariant+derived`
 - limits/config snapshot:
   - topK
   - minPromptLength
@@ -53,7 +62,11 @@ Request shape:
 
 Response shape:
 - `rows[]` with representative text, score, kind, strictKey, metadata for rendering
-- optional block-plan metadata for inheritance-only vs inheritance+derived modes
+- optional block-plan metadata keyed by requested high-level mode
+
+Contract rule:
+- `mode` defaults to `invariant+derived`;
+- adapter/context do not expose or depend on backend-internal kind selection rules beyond the stable mode contract.
 
 ### Error-signal provider
 Request shape:
@@ -80,9 +93,13 @@ Output:
 ## Shared Types / Schema definitions and ownership
 
 Ownership rules:
-- Backend modules own persistence and retrieval row shapes.
+- Backend modules own persistence and retrieval row shapes and all ACL/scope visibility decisions.
 - Orchestration modules own prompt-block plan/render types.
 - `index.ts` owns only wiring/config-to-dependency translation.
+
+Authority rule:
+- local orchestration and adapter modules may pass actor identity and query inputs only;
+- local modules must not compute readable scopes, requested scopes, or policy overrides.
 
 Compatibility rule:
 - No config key rename in this branch.
@@ -115,6 +132,7 @@ Compatibility policy:
 
 ## Security-sensitive fields and redaction/masking requirements
 
-- Scope-filtered candidate selection must happen before rendering any prompt block.
+- Only backend-authoritative rows may be rendered into prompt blocks.
+- Orchestration must not widen visibility by adding local scope or ACL logic.
 - Error signals must remain summarized; no raw sensitive payload dumping into docs/tests.
 - Reflection-derived blocks must preserve current untrusted-data framing semantics when surfaced to the model.

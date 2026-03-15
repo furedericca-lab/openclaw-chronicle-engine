@@ -1,0 +1,34 @@
+# Example deployment config for memory-lancedb-pro-backend.
+# This file documents the intended deployment shape for the Rust backend split.
+# Align exact keys with the backend implementation once the Rust service lands.
+
+[server]
+bind = "0.0.0.0:8080"
+
+[storage]
+lancedb_path = "/var/lib/memory-lancedb-pro-backend/lancedb"
+sqlite_path = "/var/lib/memory-lancedb-pro-backend/sqlite/jobs.db"
+
+[auth.runtime]
+token = "replace-with-runtime-bearer-token"
+
+[auth.admin]
+token = "replace-with-admin-bearer-token"
+
+[logging]
+level = "info"
+
+[providers.embedding]
+base_url = "https://api.openai.com/v1"
+model = "text-embedding-3-small"
+api = "openai"
+api_key = "replace-with-embedding-api-key"
+
+[providers.rerank]
+enabled = false
+
+[providers.reflection]
+base_url = "https://api.openai.com/v1"
+model = "gpt-4.1-mini"
+api = "openai-responses"
+api_key = "replace-with-reflection-api-key"

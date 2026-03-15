@@ -352,7 +352,7 @@ export function registerMemoryRecallTool(
           ),
           scope: Type.Optional(
             Type.String({
-              description: "Specific memory scope to search in (optional)",
+              description: "Specific memory scope to search in (local mode only)",
             }),
           ),
           category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
@@ -497,7 +497,7 @@ export function registerMemoryStoreTool(
           category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
           scope: Type.Optional(
             Type.String({
-              description: "Memory scope (optional, defaults to agent scope)",
+              description: "Memory scope (local mode only, defaults to agent scope)",
             }),
           ),
         }),
@@ -651,7 +651,7 @@ export function registerMemoryForgetTool(
           ),
           scope: Type.Optional(
             Type.String({
-              description: "Scope to search/delete from (optional)",
+              description: "Scope to search/delete from (local mode only)",
             }),
           ),
         }),
@@ -979,7 +979,7 @@ export function registerMemoryStatsTool(
         parameters: Type.Object({
           scope: Type.Optional(
             Type.String({
-              description: "Specific scope to get stats for (optional)",
+              description: "Specific scope to get stats for (local mode only)",
             }),
           ),
         }),
@@ -1078,7 +1078,7 @@ export function registerMemoryListTool(
             }),
           ),
           scope: Type.Optional(
-            Type.String({ description: "Filter by specific scope (optional)" }),
+            Type.String({ description: "Filter by specific scope (local mode only)" }),
           ),
           category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
           offset: Type.Optional(

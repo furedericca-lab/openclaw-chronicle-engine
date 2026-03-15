@@ -52,13 +52,13 @@ Non-goals:
 
 ### Backend-facing interfaces (implemented in this branch)
 - Generic recall provider input:
-  - prompt, agentId, sessionId, scope-filter, auto-recall limits
-  - implementation seam: `src/context/auto-recall-orchestrator.ts` dependency contract (`retrieve`, `getAccessibleScopes`)
+  - query, actor identity, auto-recall limits
+  - implementation seam: `src/context/auto-recall-orchestrator.ts` dependency contract (`recallGeneric`)
 - Generic recall provider output:
-  - selected rows + rendered `prependContext` plan for `<relevant-memories>`
+  - backend-authoritative rows + rendered `prependContext` plan for `<relevant-memories>`
 - Reflection/error provider input:
-  - prompt/session context + reflection recall limits + sessionKey
-  - implementation seam: `src/context/reflection-prompt-planner.ts` dependency contract (`storeList`, `getAccessibleScopes`, `sessionState`)
+  - query, actor identity, reflection recall mode/limits, sessionKey
+  - implementation seam: `src/context/reflection-prompt-planner.ts` dependency contract (`recallReflection`, `sessionState`)
 - Reflection/error provider output:
   - rendered `prependContext` for `<inherited-rules>` and `<error-detected>`
   - session error-signal mutations via `src/context/session-exposure-state.ts`
@@ -88,7 +88,7 @@ Runtime modes:
 Prompt-time data flow after refactor:
 1. Hook handler receives event.
 2. Handler asks orchestration layer whether recall/injection should run.
-3. Orchestration layer fetches candidates from backend provider modules.
+3. Orchestration layer fetches backend-authoritative rows from adapter/provider modules.
 4. Renderer produces block text.
 5. Hook returns prepend payload.
 
@@ -107,6 +107,8 @@ Prompt-time data flow after refactor:
   - reflection-recall injection failures log `memory-reflection: reflection-recall injection failed: ...`; prompt build continues
 - `command:new` / `command:reset`:
   - reflection hook keeps durable registration + duplicate-trigger guard
+  - trigger is normalized to shared contract values (`new` / `reset`) before local-vs-remote branching
+  - post-hook session clear now applies to both reflection error signals and dynamic recall state
   - failures log `memory-reflection: hook failed: ...`; command flow continues
 - `agent_end`:
   - remains backend-owned auto-capture/store path in `index.ts` and backend modules
@@ -129,7 +131,7 @@ A later standalone ContextEngine adapter should stay thin and consume existing s
 
 ## Security model and hardening notes
 
-- Scope filtering remains backend-owned; orchestration must not bypass `scopeManager` decisions.
+- Scope filtering and read authority remain backend-owned; orchestration must not reconstruct or bypass them locally.
 - Rendered context blocks must keep existing untrusted-data wrapping semantics where applicable.
 - No credential handling changes are in scope.
 - Any future config edit outside this branch still requires backup of `openclaw.json` before runtime changes.

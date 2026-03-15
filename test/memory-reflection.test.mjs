@@ -2631,5 +2631,62 @@ describe("memory reflection", () => {
       assert.match(second, /<inherited-rules>/);
       assert.doesNotMatch(second, /<error-detected>/);
     });
+
+    it("uses one shared session-clear contract for reflection errors and dynamic recall state", () => {
+      const clearedReflectionErrors = [];
+      const clearedDynamicContext = [];
+      const planner = createReflectionPromptPlanner(
+        {
+          injectMode: "inheritance-only",
+          dedupeErrorSignals: true,
+          errorReminderMaxEntries: 3,
+          errorScanMaxChars: 8000,
+          recall: {
+            mode: "fixed",
+            topK: 3,
+            includeKinds: ["invariant"],
+            maxAgeDays: 45,
+            maxEntriesPerKey: 10,
+            minRepeated: 1,
+            minScore: 0.18,
+            minPromptLength: 8,
+          },
+        },
+        {
+          sessionState: {
+            autoRecallState: {},
+            reflectionRecallState: {},
+            clearDynamicRecallForContext: (ctx) => {
+              clearedDynamicContext.push(ctx);
+            },
+            addReflectionErrorSignal() { },
+            getPendingReflectionErrorSignalsForPrompt() {
+              return [];
+            },
+            getRecentReflectionErrorSignals() {
+              return [];
+            },
+            clearReflectionErrorSignalsForSession(sessionKey) {
+              clearedReflectionErrors.push(sessionKey);
+            },
+            pruneReflectionSessionState() { },
+          },
+          sanitizeForContext: (text) => text,
+        }
+      );
+
+      planner.clearSession({
+        sessionKey: "agent:main:session:planner-reset",
+        sessionId: "planner-reset-runtime",
+      });
+
+      assert.deepEqual(clearedReflectionErrors, ["agent:main:session:planner-reset"]);
+      assert.deepEqual(clearedDynamicContext, [
+        {
+          sessionKey: "agent:main:session:planner-reset",
+          sessionId: "planner-reset-runtime",
+        },
+      ]);
+    });
   });
 });

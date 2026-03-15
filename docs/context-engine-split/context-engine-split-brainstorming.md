@@ -13,8 +13,8 @@ Desired outcome: keep `memory-lancedb-pro` as a strong memory backend while extr
 ## Scope
 
 In scope:
-- Separate backend candidate production from prompt/context assembly responsibilities.
-- Introduce internal provider seams for generic auto-recall, reflection recall, and error-signal prompt hints.
+- Separate backend row retrieval/authority from prompt/context assembly responsibilities.
+- Introduce internal seams for generic auto-recall, reflection recall, and error-signal prompt hints.
 - Reduce `index.ts` ownership of prompt orchestration by moving logic into dedicated modules that are ContextEngine-ready.
 - Preserve current public plugin kind (`memory`) and current config schema during this refactor.
 - Add docs and tests that make later extraction to a standalone ContextEngine auditable.
@@ -47,7 +47,7 @@ Out of scope:
 - Migration impact: low.
 - Reliability: strong if tests cover behavior parity.
 - Rollback: low-risk because external contracts stay stable.
-- Good first step because it decouples backend candidate production from prompt rendering/exposure.
+- Good first step because it decouples backend-owned retrieval from prompt rendering/exposure.
 
 ### Option C — Directly convert this plugin from `memory` to `contextEngine`
 - Complexity: high.
@@ -68,6 +68,7 @@ Out of scope:
 Choose **Option B** in this branch.
 
 This branch should aggressively extract prompt orchestration out of `index.ts` and into dedicated internal modules while preserving the existing `memory` plugin contract. The new module boundaries should make a later thin ContextEngine adapter straightforward, but this branch must not pretend that adapter already exists.
+For v1, `agent_end` remains in the backend branch as ingestion logic; any further abstraction is deferred and not part of the current frozen contract.
 
 ## Risks
 
@@ -78,6 +79,5 @@ This branch should aggressively extract prompt orchestration out of `index.ts` a
 
 ## Open Questions
 
-- Which exact orchestration surfaces should become provider-returning data vs renderer-owned text blocks in this branch?
-- Should `agent_end` auto-capture remain in the backend branch as ingestion logic, or also be partially abstracted now?
+- Which exact orchestration surfaces should consume backend-authoritative rows directly vs renderer-owned text blocks in this branch?
 - Do we want a future `context-engine-memory-orchestrator` inside this repo or as a sibling repo/plugin?

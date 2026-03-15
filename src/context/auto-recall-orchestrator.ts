@@ -1,4 +1,5 @@
 import type { RetrievalResult } from "../retriever.js";
+import type { BackendRecallGenericRow } from "../backend-client/types.js";
 import { selectFinalAutoRecallResults } from "../auto-recall-final-selection.js";
 import {
   filterByMaxAge,
@@ -26,13 +27,21 @@ export interface AutoRecallPlannerConfig {
 
 export interface AutoRecallPlannerDependencies {
   state: DynamicRecallSessionState;
-  retrieve: (params: {
+  recallGeneric?: (params: {
+    query: string;
+    limit: number;
+    agentId: string;
+    sessionId: string;
+    sessionKey?: string;
+    userId?: string;
+  }) => Promise<BackendRecallGenericRow[]>;
+  retrieve?: (params: {
     query: string;
     limit: number;
     scopeFilter: string[];
     source: "auto-recall";
   }) => Promise<RetrievalResult[]>;
-  getAccessibleScopes: (agentId: string) => string[];
+  getAccessibleScopes?: (agentId: string) => string[];
   sanitizeForContext: (text: string) => string;
   logger?: {
     info?: (message: string) => void;
@@ -44,6 +53,8 @@ export interface AutoRecallPlanParams {
   prompt: string | undefined;
   agentId?: string;
   sessionId?: string;
+  sessionKey?: string;
+  userId?: string;
 }
 
 export function createAutoRecallPlanner(
@@ -57,7 +68,7 @@ export function createAutoRecallPlanner(
     const sessionId = typeof params.sessionId === "string" && params.sessionId.trim() ? params.sessionId.trim() : "default";
     const topK = Math.max(1, normalizePositiveInt(config.topK, 3));
     const fetchLimit = Math.min(20, Math.max(topK * 4, topK, 8));
-    const accessibleScopes = deps.getAccessibleScopes(agentId);
+    const accessibleScopes = deps.getAccessibleScopes ? deps.getAccessibleScopes(agentId) : [];
 
     return await orchestrateDynamicRecall({
       channelName: "auto-recall",
@@ -72,12 +83,23 @@ export function createAutoRecallPlanner(
       wrapUntrustedData: true,
       logger: deps.logger,
       loadCandidates: async () => {
-        const retrieved = await deps.retrieve({
-          query: String(params.prompt || ""),
-          limit: fetchLimit,
-          scopeFilter: accessibleScopes,
-          source: "auto-recall",
-        });
+        const retrieved = deps.recallGeneric
+          ? mapBackendRowsToRetrievalResults(await deps.recallGeneric({
+            query: String(params.prompt || ""),
+            limit: fetchLimit,
+            agentId,
+            sessionId,
+            sessionKey: params.sessionKey,
+            userId: params.userId,
+          }))
+          : deps.retrieve
+            ? await deps.retrieve({
+              query: String(params.prompt || ""),
+              limit: fetchLimit,
+              scopeFilter: accessibleScopes,
+              source: "auto-recall",
+            })
+            : [];
         const postProcessed = postProcessAutoRecallResults(retrieved, config);
         if (config.selectionMode === "setwise-v2") {
           return selectFinalAutoRecallResults(postProcessed, { topK });
@@ -128,4 +150,20 @@ function normalizePositiveInt(value: unknown, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return Math.max(1, Math.floor(fallback));
   return Math.max(1, Math.floor(parsed));
+}
+
+function mapBackendRowsToRetrievalResults(rows: BackendRecallGenericRow[]): RetrievalResult[] {
+  return rows.map((row) => ({
+    entry: {
+      id: row.id,
+      text: row.text,
+      vector: [],
+      category: row.category,
+      scope: row.scope,
+      importance: 1,
+      timestamp: Number(row.metadata?.updatedAt ?? row.metadata?.createdAt ?? Date.now()),
+    },
+    score: Number.isFinite(row.score) ? Number(row.score) : 0,
+    sources: {},
+  }));
 }

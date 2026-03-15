@@ -84,7 +84,7 @@ Decision:
   - gateway config
   - retrieval ranking and final selection
   - reflection execution and persistence
-- Local shell does not send requested scopes or provider config.
+- Local shell sends actor identity plus operation payloads only; it does not send requested scopes, scope overrides, or provider config.
 - Local shell does not implement fallback backend behavior.
 - `/new` and `/reset` trigger async reflection jobs locally but do not wait for job completion.
 
@@ -98,11 +98,13 @@ Recommended split:
 - SQLite-backed reflection job queue/status table.
 - ACL and scope enforcement before any query/write path.
 - OpenAI-compatible upstream clients configured from backend TOML.
+- Separate control-plane admin surface for operator-only health/job inspection.
 
 2. Local shell
 - replace local `store/embedder/retriever/scopes/reflection-store/tools` dependencies with an HTTP client adapter;
 - preserve `src/context/*` and session-local state;
 - preserve fail-open recall behavior and explicit tool error surfacing.
+- avoid depending on control-plane/admin endpoints at runtime.
 
 3. Local orchestration
 - `src/context/*` continues to decide:
@@ -112,6 +114,5 @@ Recommended split:
 
 ## Open design questions to resolve in implementation docs
 
-- Whether admin-only endpoints should be implemented in MVP phase 1 or reserved and delivered in a later phase.
 - Whether shell-side list/stats tooling needs richer pagination/filter DTOs in phase 1 than the current minimum.
-- Whether reflection job result payload should expose timestamps and lightweight diagnostics in addition to aggregate counts.
+- Whether `GET /v1/admin/stats` should ship in the first implementation or remain an optional read-only extension while keeping the same frozen control-plane boundary.
