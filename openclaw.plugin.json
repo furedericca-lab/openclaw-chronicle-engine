@@ -1,7 +1,7 @@
 {
-  "id": "memory-lancedb-pro",
-  "name": "Memory (LanceDB Pro)",
-  "description": "Enhanced long-term memory plugin with remote backend authority and local context orchestration.",
+  "id": "openclaw-chronicle-engine",
+  "name": "Chronicle Engine",
+  "description": "Historical-memory engine for OpenClaw with remote backend authority and local context orchestration.",
   "version": "1.1.0-beta.6",
   "kind": "memory",
   "configSchema": {

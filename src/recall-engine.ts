@@ -107,7 +107,7 @@ export async function orchestrateDynamicRecall<T extends DynamicRecallCandidate>
 
   if (injected.length === 0) {
     params.logger?.debug?.(
-      `memory-lancedb-pro: ${params.channelName} skipped due to repeated-injection guard (session=${sessionId}, turn=${currentTurn})`
+      `openclaw-chronicle-engine: ${params.channelName} skipped due to repeated-injection guard (session=${sessionId}, turn=${currentTurn})`
     );
     return undefined;
   }
@@ -124,7 +124,7 @@ export async function orchestrateDynamicRecall<T extends DynamicRecallCandidate>
   if (memoryLines.length === 0) return undefined;
 
   params.logger?.info?.(
-    `memory-lancedb-pro: ${params.channelName} injecting ${memoryLines.length} row(s) for session=${sessionId}`
+    `openclaw-chronicle-engine: ${params.channelName} injecting ${memoryLines.length} row(s) for session=${sessionId}`
   );
 
   return {

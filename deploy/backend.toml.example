@@ -1,6 +1,6 @@
 # Example deployment config for memory-lancedb-pro-backend.
-# This file documents the intended deployment shape for the Rust backend split.
-# Align exact keys with the backend implementation once the Rust service lands.
+# This file documents the current deployment shape for the Rust backend service.
+# Keep keys aligned with backend/src/config.rs.
 
 [server]
 bind = "0.0.0.0:8080"

@@ -1,6 +1,6 @@
 # memory-lancedb-pro-backend Deployment
 
-This folder contains the Docker deployment scaffold for the future Rust backend service `memory-lancedb-pro-backend`.
+This folder contains the Docker deployment scaffold for the current Rust backend service `memory-lancedb-pro-backend`.
 
 ## Intended runtime shape
 
@@ -16,7 +16,7 @@ This folder contains the Docker deployment scaffold for the future Rust backend 
 - `docker-compose.yml`: single-instance deployment using a published GHCR image.
 - `backend.toml.example`: example static config file for container deployments.
 
-## Expected Rust source layout
+## Rust source layout
 
 The Docker build and CI workflow assume the Rust backend source will live at:
 
@@ -88,7 +88,7 @@ The workflow at `.github/workflows/docker-backend.yml` assumes:
 - the repository `GITHUB_TOKEN` has `packages: write` permission;
 - the image name is `ghcr.io/<owner>/memory-lancedb-pro-backend`.
 
-The workflow intentionally skips the image build job until `backend/Cargo.toml` exists, so this scaffold can land before the Rust backend implementation.
+The workflow assumes the checked-in backend crate remains present and buildable.
 
 ## Branch and release behavior
 

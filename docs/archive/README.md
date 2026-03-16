@@ -1,22 +1,23 @@
-# Docs Archive
+# Archive Notes
 
-This folder preserves historical planning, phase, task, and superseded architecture materials.
+This directory holds historical documentation that is no longer canonical for the current repository state.
 
-Archived scopes:
+Use this folder for:
 
-- `context-engine-split/`
-- `remote-memory-backend/`
-- `2026-03-15-architecture-reset/context-engine-split/`
-- `2026-03-15-architecture-reset/remote-memory-backend/`
-- `final-closeout-audit/`
-- `final-closeout-implementation/`
-- `readme-refresh/`
+- completed migration plans
+- phased implementation checklists
+- brainstorming and research notes tied to finished refactors
+- closeout audits and release notes
+- superseded architecture and operator guidance
 
-Canonical active architecture docs now live under:
+Use the archive when you need history, audit context, or rationale for past refactors.
+Do not use it as the source of truth for current runtime behavior.
 
-- `docs/remote-authority-reset/`
+Current docs live in:
 
-Notes:
+- `../README.md`
+- `../runtime-architecture.md`
 
-- The dated `2026-03-15-architecture-reset/` archive contains the last active copies of the previous two architecture doc sets before the repo adopted the single-track remote-authority narrative.
-- Older archive folders remain unchanged as execution/history evidence.
+Archive contents are indexed in:
+
+- `../archive-index.md`

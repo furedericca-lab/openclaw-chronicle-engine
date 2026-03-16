@@ -66,7 +66,7 @@ export function registerSelfImprovementLogTool(api: OpenClawPluginApi, context: 
             category,
             area,
             priority,
-            source: "memory-lancedb-pro/self_improvement_log",
+            source: "openclaw-chronicle-engine/self_improvement_log",
           });
           const fileName = type === "learning" ? "LEARNINGS.md" : "ERRORS.md";
 

@@ -1,5 +1,5 @@
 /**
- * Memory LanceDB Pro Plugin
+ * Chronicle Engine Plugin
  * Remote-backend-authoritative memory plugin with local context orchestration.
  */
 
@@ -217,7 +217,7 @@ const DEFAULT_REFLECTION_RECALL_MIN_REPEATED = 2;
 const DEFAULT_REFLECTION_RECALL_MIN_SCORE = 0.18;
 const DEFAULT_REFLECTION_RECALL_MIN_PROMPT_LENGTH = 8;
 const REFLECTION_FALLBACK_MARKER = "(fallback) Reflection generation failed; storing minimal pointer only.";
-const DIAG_BUILD_TAG = "memory-lancedb-pro-diag-20260308-0058";
+const DIAG_BUILD_TAG = "openclaw-chronicle-engine-diag-20260308-0058";
 
 function buildSelfImprovementResetNote(params?: { openLoopsBlock?: string; derivedFocusBlock?: string }): string {
   const openLoopsBlock = typeof params?.openLoopsBlock === "string" ? params.openLoopsBlock : "";
@@ -1269,9 +1269,9 @@ const pluginVersion = getPluginVersion();
 // Plugin Definition
 // ============================================================================
 
-const memoryLanceDBProPlugin = {
-  id: "memory-lancedb-pro",
-  name: "Memory (LanceDB Pro)",
+const chronicleEnginePlugin = {
+  id: "openclaw-chronicle-engine",
+  name: "Chronicle Engine",
   description:
     "Enhanced long-term memory with remote-backend authority, hybrid recall orchestration, and management tools",
   kind: "memory" as const,
@@ -1294,12 +1294,12 @@ const memoryLanceDBProPlugin = {
     });
 
     api.logger.info(
-      `memory-lancedb-pro@${pluginVersion}: plugin registered ` +
+      `openclaw-chronicle-engine@${pluginVersion}: plugin registered ` +
       `(mode: remote-backend, authority: backend-owned)`,
     );
-    api.logger.info(`memory-lancedb-pro: diagnostic build tag loaded (${DIAG_BUILD_TAG})`);
+    api.logger.info(`openclaw-chronicle-engine: diagnostic build tag loaded (${DIAG_BUILD_TAG})`);
     api.logger.info(
-      `memory-lancedb-pro: remote backend enabled (${config.remoteBackend?.baseURL || "(missing baseURL)"})`
+      `openclaw-chronicle-engine: remote backend enabled (${config.remoteBackend?.baseURL || "(missing baseURL)"})`
     );
 
     // ========================================================================
@@ -1353,7 +1353,7 @@ const memoryLanceDBProPlugin = {
           );
           if (!resolved.hasPrincipalIdentity) {
             api.logger.warn(
-              `memory-lancedb-pro: auto-recall skipped remote recall (missing runtime principal: ${resolved.missingPrincipalFields.join(", ")})`
+              `openclaw-chronicle-engine: auto-recall skipped remote recall (missing runtime principal: ${resolved.missingPrincipalFields.join(", ")})`
             );
             return [];
           }
@@ -1381,7 +1381,7 @@ const memoryLanceDBProPlugin = {
             userId: typeof ctx?.userId === "string" ? ctx.userId : undefined,
           });
         } catch (err) {
-          api.logger.warn(`memory-lancedb-pro: auto-recall failed: ${String(err)}`);
+          api.logger.warn(`openclaw-chronicle-engine: auto-recall failed: ${String(err)}`);
         }
       });
     }
@@ -1425,7 +1425,7 @@ const memoryLanceDBProPlugin = {
           );
           if (!resolvedBackendCtx.hasPrincipalIdentity) {
             api.logger.warn(
-              `memory-lancedb-pro: auto-capture blocked (missing runtime principal: ${resolvedBackendCtx.missingPrincipalFields.join(", ")})`
+              `openclaw-chronicle-engine: auto-capture blocked (missing runtime principal: ${resolvedBackendCtx.missingPrincipalFields.join(", ")})`
             );
             return;
           }
@@ -1433,10 +1433,10 @@ const memoryLanceDBProPlugin = {
             items: captureItems.slice(0, 64),
           });
           api.logger.info(
-            `memory-lancedb-pro: auto-capture forwarded to remote backend (${captureItems.length} item(s), mutations=${result.length})`
+            `openclaw-chronicle-engine: auto-capture forwarded to remote backend (${captureItems.length} item(s), mutations=${result.length})`
           );
         } catch (err) {
-          api.logger.warn(`memory-lancedb-pro: capture failed: ${String(err)}`);
+          api.logger.warn(`openclaw-chronicle-engine: capture failed: ${String(err)}`);
         }
       });
     }
@@ -1485,7 +1485,7 @@ const memoryLanceDBProPlugin = {
           registeredViaEventBus = true;
         } catch (err) {
           api.logger.warn(
-            `memory-lancedb-pro: failed to register ${eventName} via api.on, continue fallback: ${String(err)}`,
+            `openclaw-chronicle-engine: failed to register ${eventName} via api.on, continue fallback: ${String(err)}`,
           );
         }
       }
@@ -1497,14 +1497,14 @@ const memoryLanceDBProPlugin = {
           registeredViaInternalHook = true;
         } catch (err) {
           api.logger.warn(
-            `memory-lancedb-pro: failed to register ${eventName} via api.registerHook: ${String(err)}`,
+            `openclaw-chronicle-engine: failed to register ${eventName} via api.registerHook: ${String(err)}`,
           );
         }
       }
 
       if (!registeredViaEventBus && !registeredViaInternalHook) {
         api.logger.warn(
-          `memory-lancedb-pro: command hook registration failed for ${eventName}; no compatible API method available`,
+          `openclaw-chronicle-engine: command hook registration failed for ${eventName}; no compatible API method available`,
         );
       }
     };
@@ -1549,7 +1549,7 @@ const memoryLanceDBProPlugin = {
           api.logger.warn(`self-improvement: bootstrap inject failed: ${String(err)}`);
         }
       }, {
-        name: "memory-lancedb-pro.self-improvement.agent-bootstrap",
+        name: "openclaw-chronicle-engine.self-improvement.agent-bootstrap",
         description: "Inject self-improvement reminder on agent bootstrap",
       });
 
@@ -1589,11 +1589,11 @@ const memoryLanceDBProPlugin = {
         };
 
         const selfImprovementNewHookOptions = {
-          name: "memory-lancedb-pro.self-improvement.command-new",
+          name: "openclaw-chronicle-engine.self-improvement.command-new",
           description: "Append self-improvement note before /new",
         } as const;
         const selfImprovementResetHookOptions = {
-          name: "memory-lancedb-pro.self-improvement.command-reset",
+          name: "openclaw-chronicle-engine.self-improvement.command-reset",
           description: "Append self-improvement note before /reset",
         } as const;
         registerDurableCommandHook("command:new", appendSelfImprovementNote, selfImprovementNewHookOptions, "self-improvement");
@@ -1869,11 +1869,11 @@ const memoryLanceDBProPlugin = {
       };
 
       const memoryReflectionNewHookOptions = {
-        name: "memory-lancedb-pro.memory-reflection.command-new",
+        name: "openclaw-chronicle-engine.memory-reflection.command-new",
         description: "Run reflection pipeline before /new",
       } as const;
       const memoryReflectionResetHookOptions = {
-        name: "memory-lancedb-pro.memory-reflection.command-reset",
+        name: "openclaw-chronicle-engine.memory-reflection.command-reset",
         description: "Run reflection pipeline before /reset",
       } as const;
       registerDurableCommandHook("command:new", runMemoryReflection, memoryReflectionNewHookOptions, "memory-reflection");
@@ -1922,12 +1922,12 @@ const memoryLanceDBProPlugin = {
     // ========================================================================
 
     api.registerService({
-      id: "memory-lancedb-pro",
+      id: "openclaw-chronicle-engine",
       start: async () => {
-        api.logger.info("memory-lancedb-pro: remote backend mode active");
+        api.logger.info("openclaw-chronicle-engine: remote backend mode active");
       },
       stop: async () => {
-        api.logger.info("memory-lancedb-pro: stopped (remote backend mode)");
+        api.logger.info("openclaw-chronicle-engine: stopped (remote backend mode)");
       },
     });
   },
@@ -1935,7 +1935,7 @@ const memoryLanceDBProPlugin = {
 
 export function parsePluginConfig(value: unknown): PluginConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("memory-lancedb-pro config required");
+    throw new Error("openclaw-chronicle-engine config required");
   }
   const cfg = value as Record<string, unknown>;
 
@@ -2108,4 +2108,4 @@ export function parsePluginConfig(value: unknown): PluginConfig {
   };
 }
 
-export default memoryLanceDBProPlugin;
+export default chronicleEnginePlugin;

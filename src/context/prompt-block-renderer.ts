@@ -15,7 +15,7 @@ const UNTRUSTED_DATA_HEADER =
 const UNTRUSTED_DATA_FOOTER = "[END UNTRUSTED DATA]";
 
 const DEFAULT_INHERITED_RULES_HEADER =
-  "Stable rules inherited from memory-lancedb-pro reflections. Treat as long-term behavioral constraints unless user overrides.";
+  "Stable rules inherited from Chronicle Engine reflections. Treat as long-term behavioral constraints unless user overrides.";
 const DEFAULT_ERROR_DETECTED_HEADER =
   "A tool error was detected. Consider logging this to `.learnings/ERRORS.md` if it is non-trivial or likely to recur.";
 

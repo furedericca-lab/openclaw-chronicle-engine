@@ -1,4 +1,4 @@
-# memory-lancedb-pro · OpenClaw Plugin
+# Chronicle Engine · OpenClaw Plugin
 
 Enhanced long-term memory plugin for [OpenClaw](https://github.com/openclaw/openclaw), with remote backend authority as the only supported runtime authority:
 
@@ -9,7 +9,7 @@ Enhanced long-term memory plugin for [OpenClaw](https://github.com/openclaw/open
 
 ## Overview
 
-`memory-lancedb-pro` follows one canonical architecture:
+`Chronicle Engine` follows one canonical architecture:
 
 - **Remote authority (canonical)**: backend HTTP endpoints own storage/retrieval/ranking/scope/reflection authority.
 - **Local adapter/context-engine**: this plugin keeps hook/tool registration and prompt-time orchestration only.
@@ -35,7 +35,7 @@ OpenClaw runtime
           - src/backend-tools.ts
           - HTTP data-plane endpoints
             (/v1/recall/*, /v1/memories/*, /v1/reflection/jobs)
-          - optional Rust backend under backend/ (MVP reference)
+          - Rust backend under backend/ (current authority implementation)
 ```
 
 This split is internal to the current memory plugin. It does **not** mean a standalone ContextEngine plugin is shipped.
@@ -45,8 +45,8 @@ This split is internal to the current memory plugin. It does **not** mean a stan
 1. Clone into your OpenClaw workspace plugin path (recommended):
 
 ```bash
-git clone https://github.com/win4r/memory-lancedb-pro.git ~/.openclaw/workspace/plugins/memory-lancedb-pro
-cd ~/.openclaw/workspace/plugins/memory-lancedb-pro
+git clone https://github.com/furedericca-lab/openclaw-chronicle-engine.git ~/.openclaw/workspace/plugins/openclaw-chronicle-engine
+cd ~/.openclaw/workspace/plugins/openclaw-chronicle-engine
 npm install
 ```
 
@@ -56,16 +56,16 @@ npm install
 {
   "plugins": {
     "load": {
-      "paths": ["plugins/memory-lancedb-pro"]
+      "paths": ["plugins/openclaw-chronicle-engine"]
     },
     "entries": {
-      "memory-lancedb-pro": {
+      "openclaw-chronicle-engine": {
         "enabled": true,
         "config": {}
       }
     },
     "slots": {
-      "memory": "memory-lancedb-pro"
+      "memory": "openclaw-chronicle-engine"
     }
   }
 }
@@ -75,13 +75,13 @@ npm install
 
 ```bash
 openclaw gateway restart
-openclaw plugins info memory-lancedb-pro
+openclaw plugins info openclaw-chronicle-engine
 openclaw config get plugins.slots.memory
 ```
 
 ## Canonical Runtime Configuration (Remote Authority Only)
 
-Use this block as `plugins.entries.memory-lancedb-pro.config` for supported runtime behavior.
+Use this block as `plugins.entries.openclaw-chronicle-engine.config` for supported runtime behavior.
 
 ### Remote backend authority (canonical)
 
@@ -151,9 +151,9 @@ Optional management tools (`enableManagementTools: true`):
 Local `memory-pro` CLI and migration commands have been removed.
 Use remote-backed tools (`memory_*`) for runtime operations.
 
-## Optional Rust Backend
+## Rust Backend
 
-`backend/` contains the Rust remote backend implementation used by the canonical remote-authority contract.
+`backend/` contains the current Rust remote backend implementation used by the canonical remote-authority contract.
 
 Example start command:
 
@@ -163,7 +163,7 @@ cargo run --manifest-path backend/Cargo.toml -- --config /path/to/backend.toml
 
 Contract reference:
 
-- `docs/remote-authority-reset/remote-authority-reset-contracts.md`
+- `docs/runtime-architecture.md`
 
 ## Troubleshooting
 
@@ -175,11 +175,9 @@ Contract reference:
 ## References
 
 - Config schema: `openclaw.plugin.json`
-- Local chunking notes: `docs/long-context-chunking.md`
-- Canonical architecture docs index: `docs/remote-authority-reset/README.md`
-- Canonical architecture contracts: `docs/remote-authority-reset/remote-authority-reset-contracts.md`
-- Remote-only cleanup plan: `docs/remote-authority-reset/remote-only-local-authority-removal-plan.md`
-- Historical execution artifacts archive: `docs/archive/`
+- Current docs index: `docs/README.md`
+- Runtime architecture: `docs/runtime-architecture.md`
+- Historical execution artifacts and superseded plans: `docs/archive/`
 
 ## License
 

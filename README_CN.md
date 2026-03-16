@@ -1,4 +1,4 @@
-# memory-lancedb-pro · OpenClaw 插件
+# Chronicle Engine · OpenClaw 插件
 
 面向 [OpenClaw](https://github.com/openclaw/openclaw) 的增强长期记忆插件，以远程后端权威作为唯一受支持的运行时权威：
 
@@ -9,7 +9,7 @@
 
 ## 概览
 
-`memory-lancedb-pro` 采用单一规范架构：
+`Chronicle Engine` 采用单一规范架构：
 
 - **远程权威（规范）**：后端 HTTP 端点拥有存储 / 检索 / 排序 / scope / reflection 权威。
 - **本地适配层与上下文引擎**：插件仅保留 hook/tool 集成与 prompt-time 编排。
@@ -35,7 +35,7 @@ OpenClaw runtime
           - src/backend-tools.ts
           - HTTP 数据面端点
             (/v1/recall/*, /v1/memories/*, /v1/reflection/jobs)
-          - 可选 Rust 后端 backend/（MVP 参考实现）
+          - Rust 后端 backend/（当前权威实现）
 ```
 
 以上拆分是当前 memory 插件内部架构，不代表已经发布独立的 ContextEngine 插件。
@@ -45,8 +45,8 @@ OpenClaw runtime
 1. 推荐克隆到 OpenClaw workspace 插件目录：
 
 ```bash
-git clone https://github.com/win4r/memory-lancedb-pro.git ~/.openclaw/workspace/plugins/memory-lancedb-pro
-cd ~/.openclaw/workspace/plugins/memory-lancedb-pro
+git clone https://github.com/furedericca-lab/openclaw-chronicle-engine.git ~/.openclaw/workspace/plugins/openclaw-chronicle-engine
+cd ~/.openclaw/workspace/plugins/openclaw-chronicle-engine
 npm install
 ```
 
@@ -56,16 +56,16 @@ npm install
 {
   "plugins": {
     "load": {
-      "paths": ["plugins/memory-lancedb-pro"]
+      "paths": ["plugins/openclaw-chronicle-engine"]
     },
     "entries": {
-      "memory-lancedb-pro": {
+      "openclaw-chronicle-engine": {
         "enabled": true,
         "config": {}
       }
     },
     "slots": {
-      "memory": "memory-lancedb-pro"
+      "memory": "openclaw-chronicle-engine"
     }
   }
 }
@@ -75,13 +75,13 @@ npm install
 
 ```bash
 openclaw gateway restart
-openclaw plugins info memory-lancedb-pro
+openclaw plugins info openclaw-chronicle-engine
 openclaw config get plugins.slots.memory
 ```
 
 ## 规范运行配置（仅远程权威）
 
-受支持运行请使用下面配置块作为 `plugins.entries.memory-lancedb-pro.config`。
+受支持运行请使用下面配置块作为 `plugins.entries.openclaw-chronicle-engine.config`。
 
 ### 远程后端权威（规范）
 
@@ -151,9 +151,9 @@ openclaw config get plugins.slots.memory
 本地 `memory-pro` CLI 与迁移命令已删除。
 运行期请使用远程后端工具（`memory_*`）。
 
-## 可选 Rust 后端
+## Rust 后端
 
-`backend/` 提供规范远程权威契约对应的 Rust 后端实现。
+`backend/` 提供当前规范远程权威契约对应的 Rust 后端实现。
 
 示例启动命令：
 
@@ -163,7 +163,7 @@ cargo run --manifest-path backend/Cargo.toml -- --config /path/to/backend.toml
 
 契约文档：
 
-- `docs/remote-authority-reset/remote-authority-reset-contracts.md`
+- `docs/runtime-architecture.md`
 
 ## 常见问题 / 排错
 
@@ -175,11 +175,9 @@ cargo run --manifest-path backend/Cargo.toml -- --config /path/to/backend.toml
 ## 参考
 
 - 配置 Schema：`openclaw.plugin.json`
-- 本地长文本分块说明：`docs/long-context-chunking.md`
-- 规范架构文档索引：`docs/remote-authority-reset/README.md`
-- 规范架构契约：`docs/remote-authority-reset/remote-authority-reset-contracts.md`
-- 远程唯一权威清理计划：`docs/remote-authority-reset/remote-only-local-authority-removal-plan.md`
-- 历史执行归档：`docs/archive/`
+- 当前文档索引：`docs/README.md`
+- 运行时架构：`docs/runtime-architecture.md`
+- 历史执行与过时文档：`docs/archive/`
 
 ## License
 

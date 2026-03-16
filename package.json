@@ -1,7 +1,7 @@
 {
-  "name": "memory-lancedb-pro",
+  "name": "openclaw-chronicle-engine",
   "version": "1.1.0-beta.6",
-  "description": "OpenClaw enhanced long-term memory plugin with remote backend authority, local context orchestration, and management tools",
+  "description": "Chronicle Engine for OpenClaw: remote-authority memory, retrieval, and local context orchestration",
   "type": "module",
   "main": "index.ts",
   "keywords": [
@@ -20,7 +20,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/win4r/memory-lancedb-pro.git"
+    "url": "git+https://github.com/furedericca-lab/openclaw-chronicle-engine.git"
   },
   "author": "win4r",
   "license": "MIT",

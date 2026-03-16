@@ -85,7 +85,7 @@ function registerMemoryRecallTool(
           const resolved = resolveToolCallContext(toolCtx, context.runtimeDefaults);
           if (!resolved.hasPrincipalIdentity) {
             const warning = formatMissingPrincipalWarning(resolved.missingPrincipalFields);
-            api.logger.warn?.(`memory-lancedb-pro: memory_recall skipped (${warning})`);
+            api.logger.warn?.(`openclaw-chronicle-engine: memory_recall skipped (${warning})`);
             return {
               content: [{ type: "text", text: `No relevant memories found. Remote recall skipped: ${warning}.` }],
               details: {
