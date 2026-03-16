@@ -173,6 +173,44 @@ fn setup_app_with(mutator: impl FnOnce(&mut AppConfig)) -> Router {
     build_app(cfg).expect("app should build")
 }
 
+fn setup_app_with_at(tmp: &Path, mutator: impl FnOnce(&mut AppConfig)) -> Router {
+    std::fs::create_dir_all(tmp).expect("temp test path should be created");
+    let mut cfg = make_config(tmp);
+    mutator(&mut cfg);
+    build_app(cfg).expect("app should build")
+}
+
+async fn set_row_temporal_access_metadata(
+    tmp: &Path,
+    row_id: &str,
+    created_at: i64,
+    updated_at: i64,
+    access_count: i64,
+    last_accessed_at: i64,
+) {
+    let db_path = tmp.join("lancedb");
+    let conn = connect(db_path.to_string_lossy().as_ref())
+        .execute()
+        .await
+        .expect("lancedb should connect for temporal metadata update");
+    let table = conn
+        .open_table("memories_v1")
+        .execute()
+        .await
+        .expect("memories_v1 should open for temporal metadata update");
+    let escaped_id = row_id.replace('\'', "''");
+    table
+        .update()
+        .only_if(format!("id = '{escaped_id}'"))
+        .column("created_at", created_at.to_string())
+        .column("updated_at", updated_at.to_string())
+        .column("access_count", access_count.to_string())
+        .column("last_accessed_at", last_accessed_at.to_string())
+        .execute()
+        .await
+        .expect("temporal metadata update should succeed");
+}
+
 async fn seed_legacy_table_without_vector(tmp: &Path, rows: &[(&str, &str, &str, &str)]) {
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -453,6 +491,114 @@ async fn spawn_auth_embedding_mock_server(
 }
 
 #[derive(Clone)]
+struct ContextLimitEmbeddingMockRequest {
+    input_count: usize,
+    max_input_chars: usize,
+}
+
+#[derive(Clone)]
+struct ContextLimitEmbeddingMockState {
+    requests: Arc<Mutex<Vec<ContextLimitEmbeddingMockRequest>>>,
+    dimensions: usize,
+    max_chars: usize,
+    fail_always: bool,
+}
+
+async fn context_limit_embedding_mock_handler(
+    State(state): State<ContextLimitEmbeddingMockState>,
+    Json(payload): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    let mut inputs = Vec::new();
+    match payload.get("input") {
+        Some(Value::String(text)) => inputs.push(text.clone()),
+        Some(Value::Array(rows)) => {
+            for item in rows {
+                if let Some(text) = item.as_str() {
+                    inputs.push(text.to_string());
+                }
+            }
+        }
+        _ => {}
+    }
+    let max_input_chars = inputs
+        .iter()
+        .map(|text| text.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    state
+        .requests
+        .lock()
+        .expect("context limit embedding requests lock should be available")
+        .push(ContextLimitEmbeddingMockRequest {
+            input_count: inputs.len(),
+            max_input_chars,
+        });
+
+    if state.fail_always || max_input_chars > state.max_chars {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": {
+                    "message": "maximum context length exceeded"
+                }
+            })),
+        );
+    }
+
+    let data = inputs
+        .iter()
+        .enumerate()
+        .map(|(idx, text)| {
+            json!({
+                "index": idx,
+                "embedding": mock_embedding_vector(text, state.dimensions),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "object": "list",
+            "data": data,
+        })),
+    )
+}
+
+async fn spawn_context_limit_embedding_mock_server(
+    dimensions: usize,
+    max_chars: usize,
+    fail_always: bool,
+) -> (String, Arc<Mutex<Vec<ContextLimitEmbeddingMockRequest>>>) {
+    let requests = Arc::new(Mutex::new(Vec::<ContextLimitEmbeddingMockRequest>::new()));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("context limit embedding server should bind");
+    let base_url = format!(
+        "http://{}",
+        listener
+            .local_addr()
+            .expect("context limit embedding server should have local addr")
+    );
+    let state = ContextLimitEmbeddingMockState {
+        requests: requests.clone(),
+        dimensions,
+        max_chars,
+        fail_always,
+    };
+    let app = Router::new()
+        .route("/embeddings", post(context_limit_embedding_mock_handler))
+        .with_state(state);
+    let _server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("context limit embedding server should run");
+    });
+    (base_url, requests)
+}
+
+#[derive(Clone)]
 struct RerankMockRequest {
     authorization: Option<String>,
     body: Value,
@@ -518,6 +664,93 @@ async fn spawn_rerank_mock_server() -> (String, Arc<Mutex<Vec<RerankMockRequest>
         axum::serve(listener, app)
             .await
             .expect("mock rerank server should run");
+    });
+    (base_url, requests)
+}
+
+#[derive(Clone)]
+struct AuthRerankMockState {
+    requests: Arc<Mutex<Vec<RerankMockRequest>>>,
+    accepted_key: Option<String>,
+    non_retryable_bad_request: bool,
+}
+
+async fn auth_rerank_mock_handler(
+    State(state): State<AuthRerankMockState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    let authorization = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string());
+    state
+        .requests
+        .lock()
+        .expect("auth rerank requests lock should be available")
+        .push(RerankMockRequest {
+            authorization: authorization.clone(),
+            body: payload.clone(),
+        });
+
+    if state.non_retryable_bad_request {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "non-retryable rerank payload error" })),
+        );
+    }
+
+    if let Some(expected) = &state.accepted_key {
+        if authorization.as_deref() != Some(&format!("Bearer {expected}")) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "invalid rerank key" })),
+            );
+        }
+    }
+
+    let doc_count = payload
+        .get("documents")
+        .and_then(|docs| docs.as_array())
+        .map(|docs| docs.len())
+        .unwrap_or(0);
+    let mut results = Vec::new();
+    for (rank, idx) in (0..doc_count).rev().enumerate() {
+        let score = (1.0_f64 - rank as f64 * 0.1).max(0.0);
+        results.push(json!({
+            "index": idx,
+            "relevance_score": score,
+        }));
+    }
+    (StatusCode::OK, Json(json!({ "results": results })))
+}
+
+async fn spawn_auth_rerank_mock_server(
+    accepted_key: Option<&str>,
+    non_retryable_bad_request: bool,
+) -> (String, Arc<Mutex<Vec<RerankMockRequest>>>) {
+    let requests = Arc::new(Mutex::new(Vec::<RerankMockRequest>::new()));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("auth rerank server should bind");
+    let base_url = format!(
+        "http://{}",
+        listener
+            .local_addr()
+            .expect("auth rerank server should have local addr")
+    );
+    let state = AuthRerankMockState {
+        requests: requests.clone(),
+        accepted_key: accepted_key.map(|value| value.to_string()),
+        non_retryable_bad_request,
+    };
+    let app = Router::new()
+        .route("/rerank", post(auth_rerank_mock_handler))
+        .with_state(state);
+    let _server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("auth rerank server should run");
     });
     (base_url, requests)
 }
@@ -702,6 +935,111 @@ async fn openai_compatible_embedding_provider_failure_returns_upstream_error() {
 }
 
 #[tokio::test]
+async fn openai_compatible_embedding_context_limit_recovers_with_chunking() {
+    let max_chars = 1200usize;
+    let (embedding_base_url, requests) =
+        spawn_context_limit_embedding_mock_server(64, max_chars, false).await;
+    let app = setup_app_with(|cfg| {
+        cfg.providers.embedding.provider = "openai-compatible".to_string();
+        cfg.providers.embedding.model = "all-MiniLM-L6-v2".to_string();
+        cfg.providers.embedding.base_url = Some(embedding_base_url.clone());
+        cfg.providers.embedding.dimensions = 64;
+        cfg.retrieval.min_score = 0.0;
+        cfg.retrieval.hard_min_score = 0.0;
+    });
+
+    let long_text = "Long embedding input segment for context recovery validation. ".repeat(40);
+    let store = json!({
+        "actor": actor("u1", "main", "sess-embed-chunk-1", "session-key-embed-chunk"),
+        "mode": "tool-store",
+        "memory": {
+            "text": long_text
+        }
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(store),
+        Some("idem-openai-embed-chunk-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "store should recover via chunking: {body}"
+    );
+
+    let captured = requests
+        .lock()
+        .expect("context limit embedding requests should be readable")
+        .clone();
+    assert!(
+        captured.len() >= 2,
+        "context-limit request should trigger at least one recovery attempt"
+    );
+    assert!(
+        captured.iter().any(|req| req.max_input_chars > max_chars),
+        "initial request should include an over-limit input"
+    );
+    assert!(
+        captured
+            .iter()
+            .any(|req| req.input_count > 1 && req.max_input_chars <= max_chars),
+        "chunk recovery should submit bounded chunk batch inputs"
+    );
+}
+
+#[tokio::test]
+async fn openai_compatible_embedding_context_limit_recovery_failure_returns_upstream_error() {
+    let (embedding_base_url, requests) =
+        spawn_context_limit_embedding_mock_server(64, 80, true).await;
+    let app = setup_app_with(|cfg| {
+        cfg.providers.embedding.provider = "openai-compatible".to_string();
+        cfg.providers.embedding.model = "all-MiniLM-L6-v2".to_string();
+        cfg.providers.embedding.base_url = Some(embedding_base_url.clone());
+        cfg.providers.embedding.dimensions = 64;
+    });
+
+    let long_text =
+        "Context overflow should remain failing when provider rejects every chunk. ".repeat(30);
+    let store = json!({
+        "actor": actor("u1", "main", "sess-embed-chunk-fail-1", "session-key-embed-chunk-fail"),
+        "mode": "tool-store",
+        "memory": {
+            "text": long_text
+        }
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(store),
+        Some("idem-openai-embed-chunk-fail-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "store should fail when chunk recovery cannot succeed"
+    );
+    assert_eq!(body["error"]["code"], "UPSTREAM_EMBEDDING_ERROR");
+
+    let captured = requests
+        .lock()
+        .expect("context limit embedding requests should be readable")
+        .clone();
+    assert!(
+        captured.len() >= 2,
+        "failing context-limit path should attempt chunk recovery before failing"
+    );
+}
+
+#[tokio::test]
 async fn cross_encoder_rerank_provider_can_reorder_candidates() {
     let (rerank_base_url, rerank_requests) = spawn_rerank_mock_server().await;
     let app = setup_app_with(|cfg| {
@@ -809,6 +1147,217 @@ async fn cross_encoder_rerank_provider_can_reorder_candidates() {
     assert!(
         doc_count >= 2,
         "rerank provider should receive candidate documents"
+    );
+}
+
+#[tokio::test]
+async fn rerank_provider_rotates_keys_and_fails_over_on_auth_error() {
+    let (rerank_base_url, rerank_requests) =
+        spawn_auth_rerank_mock_server(Some("good-rerank-key"), false).await;
+    let app = setup_app_with(|cfg| {
+        cfg.providers.rerank.enabled = true;
+        cfg.providers.rerank.mode = "cross-encoder".to_string();
+        cfg.providers.rerank.provider = "jina".to_string();
+        cfg.providers.rerank.base_url = Some(format!("{rerank_base_url}/rerank"));
+        cfg.providers.rerank.api_key = Some("bad-rerank-key,good-rerank-key".to_string());
+        cfg.providers.rerank.blend = 1.0;
+        cfg.retrieval.min_score = 0.0;
+        cfg.retrieval.hard_min_score = 0.0;
+    });
+
+    let primary_store = json!({
+        "actor": actor("u1", "main", "sess-rerank-rotate-1", "session-key-rerank-rotate"),
+        "mode": "tool-store",
+        "memory": {
+            "text": "Production deploy guardrail checklist for staged release rollout."
+        }
+    });
+    let (status, primary_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(primary_store),
+        Some("idem-rerank-rotate-store-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "primary store failed: {primary_body}"
+    );
+    let primary_id = primary_body["results"][0]["id"]
+        .as_str()
+        .expect("primary memory id should exist")
+        .to_string();
+
+    let secondary_store = json!({
+        "actor": actor("u1", "main", "sess-rerank-rotate-2", "session-key-rerank-rotate"),
+        "mode": "tool-store",
+        "memory": {
+            "text": "Rollout tea and snack notes for operations social planning."
+        }
+    });
+    let (status, secondary_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(secondary_store),
+        Some("idem-rerank-rotate-store-2"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "secondary store failed: {secondary_body}"
+    );
+    let secondary_id = secondary_body["results"][0]["id"]
+        .as_str()
+        .expect("secondary memory id should exist")
+        .to_string();
+
+    let recall = json!({
+        "actor": actor("u1", "main", "sess-rerank-rotate-3", "session-key-rerank-rotate"),
+        "query": "staged deploy rollout guardrail checklist",
+        "limit": 2
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/recall/generic",
+        Some(recall),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recall failed: {body}");
+    let rows = body["rows"].as_array().expect("rows should be array");
+    assert!(rows.len() >= 2, "rerank recall should return both memories");
+    assert_eq!(
+        rows[0]["id"].as_str().expect("top row id should exist"),
+        secondary_id,
+        "successful failover rerank should still apply provider ordering"
+    );
+    assert_ne!(primary_id, secondary_id);
+
+    let captured = rerank_requests
+        .lock()
+        .expect("auth rerank requests should be readable")
+        .clone();
+    assert_eq!(
+        captured.len(),
+        2,
+        "rerank provider should retry once with backup key after auth failure"
+    );
+    assert_eq!(
+        captured[0].authorization.as_deref(),
+        Some("Bearer bad-rerank-key"),
+        "first rerank attempt should use first configured key"
+    );
+    assert_eq!(
+        captured[1].authorization.as_deref(),
+        Some("Bearer good-rerank-key"),
+        "second rerank attempt should rotate to backup key"
+    );
+}
+
+#[tokio::test]
+async fn rerank_provider_does_not_rotate_on_non_retryable_error() {
+    let (rerank_base_url, rerank_requests) = spawn_auth_rerank_mock_server(None, true).await;
+    let app = setup_app_with(|cfg| {
+        cfg.providers.rerank.enabled = true;
+        cfg.providers.rerank.mode = "cross-encoder".to_string();
+        cfg.providers.rerank.provider = "jina".to_string();
+        cfg.providers.rerank.base_url = Some(format!("{rerank_base_url}/rerank"));
+        cfg.providers.rerank.api_key = Some("first-key,second-key".to_string());
+        cfg.providers.rerank.blend = 1.0;
+        cfg.retrieval.min_score = 0.0;
+        cfg.retrieval.hard_min_score = 0.0;
+    });
+
+    let store_a = json!({
+        "actor": actor("u1", "main", "sess-rerank-nonretry-1", "session-key-rerank-nonretry"),
+        "mode": "tool-store",
+        "memory": {
+            "text": "Deployment rollout hardening checklist for production incidents."
+        }
+    });
+    let (status, store_a_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(store_a),
+        Some("idem-rerank-nonretry-store-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "store A failed: {store_a_body}");
+
+    let store_b = json!({
+        "actor": actor("u1", "main", "sess-rerank-nonretry-2", "session-key-rerank-nonretry"),
+        "mode": "tool-store",
+        "memory": {
+            "text": "Social lunch planning note for the release team."
+        }
+    });
+    let (status, store_b_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(store_b),
+        Some("idem-rerank-nonretry-store-2"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "store B failed: {store_b_body}");
+
+    let recall = json!({
+        "actor": actor("u1", "main", "sess-rerank-nonretry-3", "session-key-rerank-nonretry"),
+        "query": "production rollout checklist",
+        "limit": 2
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/recall/generic",
+        Some(recall),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "recall should fall back to lightweight: {body}"
+    );
+    assert!(
+        body["rows"]
+            .as_array()
+            .map(|rows| !rows.is_empty())
+            .unwrap_or(false),
+        "recall should still return rows after rerank fallback"
+    );
+
+    let captured = rerank_requests
+        .lock()
+        .expect("auth rerank requests should be readable")
+        .clone();
+    assert_eq!(
+        captured.len(),
+        1,
+        "non-retryable rerank failure should not rotate through backup keys"
+    );
+    assert_eq!(
+        captured[0].authorization.as_deref(),
+        Some("Bearer first-key"),
+        "only the first key should be attempted on non-retryable failure"
     );
 }
 
@@ -1181,6 +1730,537 @@ async fn query_expansion_and_noise_filtering_improve_generic_recall() {
                 .contains("don't recall any relevant memories found")
         }),
         "noise-filtered recall should remove denial-like memory rows"
+    );
+}
+
+#[tokio::test]
+async fn access_reinforcement_extends_time_decay_for_old_memories() {
+    let tmp = std::env::temp_dir().join(format!(
+        "memory-lancedb-pro-backend-access-reinforcement-{}",
+        Uuid::new_v4()
+    ));
+    let app = setup_app_with_at(&tmp, |cfg| {
+        cfg.providers.rerank.enabled = false;
+        cfg.providers.rerank.mode = "none".to_string();
+        cfg.retrieval.query_expansion = false;
+        cfg.retrieval.min_score = 0.0;
+        cfg.retrieval.hard_min_score = 0.0;
+        cfg.retrieval.recency_weight = 0.0;
+        cfg.retrieval.time_decay_half_life_days = 30.0;
+        cfg.retrieval.reinforcement_factor = 0.8;
+        cfg.retrieval.max_half_life_multiplier = 3.0;
+    });
+
+    let text = "Orion deploy rollback checklist for gateway release guardrails.";
+    let first_store = json!({
+        "actor": actor("u1", "main", "sess-access-decay-1", "session-key-access-decay"),
+        "mode": "tool-store",
+        "memory": { "text": text }
+    });
+    let (status, first_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(first_store),
+        Some("idem-access-decay-store-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "first store failed: {first_body}");
+    let reinforced_id = first_body["results"][0]["id"]
+        .as_str()
+        .expect("reinforced row id should exist")
+        .to_string();
+
+    let second_store = json!({
+        "actor": actor("u1", "main", "sess-access-decay-2", "session-key-access-decay"),
+        "mode": "tool-store",
+        "memory": { "text": text }
+    });
+    let (status, second_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(second_store),
+        Some("idem-access-decay-store-2"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "second store failed: {second_body}");
+    let stale_id = second_body["results"][0]["id"]
+        .as_str()
+        .expect("stale row id should exist")
+        .to_string();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock should be valid")
+        .as_millis() as i64;
+    let stale_ts = now - 45 * 86_400_000;
+    set_row_temporal_access_metadata(&tmp, &reinforced_id, stale_ts, stale_ts, 4_000, now).await;
+    set_row_temporal_access_metadata(&tmp, &stale_id, stale_ts, stale_ts, 0, 0).await;
+
+    let recall = json!({
+        "actor": actor("u1", "main", "sess-access-decay-3", "session-key-access-decay"),
+        "query": text,
+        "limit": 2
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/recall/generic",
+        Some(recall),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recall failed: {body}");
+
+    let rows = body["rows"].as_array().expect("rows should be array");
+    assert_eq!(rows.len(), 2, "recall should return both duplicate rows");
+    let reinforced_score = rows
+        .iter()
+        .find(|row| row["id"].as_str() == Some(reinforced_id.as_str()))
+        .and_then(|row| row["score"].as_f64())
+        .expect("reinforced row score should exist");
+    let stale_score = rows
+        .iter()
+        .find(|row| row["id"].as_str() == Some(stale_id.as_str()))
+        .and_then(|row| row["score"].as_f64())
+        .expect("stale row score should exist");
+    assert!(
+        reinforced_score > stale_score,
+        "recently-accessed stale memory should decay slower and score higher"
+    );
+}
+
+#[tokio::test]
+async fn access_reinforcement_respects_max_half_life_multiplier_bound() {
+    let tmp = std::env::temp_dir().join(format!(
+        "memory-lancedb-pro-backend-access-bound-{}",
+        Uuid::new_v4()
+    ));
+    let app = setup_app_with_at(&tmp, |cfg| {
+        cfg.providers.rerank.enabled = false;
+        cfg.providers.rerank.mode = "none".to_string();
+        cfg.retrieval.query_expansion = false;
+        cfg.retrieval.min_score = 0.0;
+        cfg.retrieval.hard_min_score = 0.0;
+        cfg.retrieval.recency_weight = 0.0;
+        cfg.retrieval.time_decay_half_life_days = 30.0;
+        cfg.retrieval.reinforcement_factor = 1.0;
+        cfg.retrieval.max_half_life_multiplier = 1.0;
+    });
+
+    let text = "Orion deploy rollback checklist for bounded reinforcement validation.";
+    let first_store = json!({
+        "actor": actor("u1", "main", "sess-access-bound-1", "session-key-access-bound"),
+        "mode": "tool-store",
+        "memory": { "text": text }
+    });
+    let (status, first_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(first_store),
+        Some("idem-access-bound-store-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "first store failed: {first_body}");
+    let reinforced_id = first_body["results"][0]["id"]
+        .as_str()
+        .expect("reinforced row id should exist")
+        .to_string();
+
+    let second_store = json!({
+        "actor": actor("u1", "main", "sess-access-bound-2", "session-key-access-bound"),
+        "mode": "tool-store",
+        "memory": { "text": text }
+    });
+    let (status, second_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(second_store),
+        Some("idem-access-bound-store-2"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "second store failed: {second_body}");
+    let stale_id = second_body["results"][0]["id"]
+        .as_str()
+        .expect("stale row id should exist")
+        .to_string();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock should be valid")
+        .as_millis() as i64;
+    let stale_ts = now - 45 * 86_400_000;
+    set_row_temporal_access_metadata(&tmp, &reinforced_id, stale_ts, stale_ts, 9_999, now).await;
+    set_row_temporal_access_metadata(&tmp, &stale_id, stale_ts, stale_ts, 0, 0).await;
+
+    let recall = json!({
+        "actor": actor("u1", "main", "sess-access-bound-3", "session-key-access-bound"),
+        "query": text,
+        "limit": 2
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/recall/generic",
+        Some(recall),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recall failed: {body}");
+
+    let rows = body["rows"].as_array().expect("rows should be array");
+    assert_eq!(rows.len(), 2, "recall should return both duplicate rows");
+    let reinforced_score = rows
+        .iter()
+        .find(|row| row["id"].as_str() == Some(reinforced_id.as_str()))
+        .and_then(|row| row["score"].as_f64())
+        .expect("reinforced row score should exist");
+    let stale_score = rows
+        .iter()
+        .find(|row| row["id"].as_str() == Some(stale_id.as_str()))
+        .and_then(|row| row["score"].as_f64())
+        .expect("stale row score should exist");
+    assert!(
+        (reinforced_score - stale_score).abs() <= 1e-6,
+        "maxHalfLifeMultiplier=1 should prevent any reinforcement uplift"
+    );
+}
+
+#[tokio::test]
+async fn mmr_diversity_reduces_duplicate_topk_deterministically() {
+    let (embedding_base_url, _) = spawn_embedding_mock_server(64).await;
+    let app = setup_app_with(|cfg| {
+        cfg.providers.embedding.provider = "openai-compatible".to_string();
+        cfg.providers.embedding.model = "mock-embedding-64".to_string();
+        cfg.providers.embedding.base_url = Some(embedding_base_url.clone());
+        cfg.providers.embedding.dimensions = 64;
+        cfg.providers.rerank.enabled = false;
+        cfg.providers.rerank.mode = "none".to_string();
+        cfg.retrieval.query_expansion = false;
+        cfg.retrieval.min_score = 0.0;
+        cfg.retrieval.hard_min_score = 0.0;
+        cfg.retrieval.reinforcement_factor = 0.0;
+        cfg.retrieval.mmr_diversity = true;
+        cfg.retrieval.mmr_similarity_threshold = 0.85;
+    });
+
+    let duplicate_a = json!({
+        "actor": actor("u1", "main", "sess-mmr-1", "session-key-mmr"),
+        "mode": "tool-store",
+        "memory": {
+            "text": "Orion deploy rollback checklist for gateway release guardrails."
+        }
+    });
+    let (status, duplicate_a_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(duplicate_a),
+        Some("idem-mmr-store-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "duplicate A store failed: {duplicate_a_body}"
+    );
+    let duplicate_a_id = duplicate_a_body["results"][0]["id"]
+        .as_str()
+        .expect("duplicate A id should exist")
+        .to_string();
+
+    let duplicate_b = json!({
+        "actor": actor("u1", "main", "sess-mmr-2", "session-key-mmr"),
+        "mode": "tool-store",
+        "memory": {
+            "text": "Orion deploy rollback checklist duplicate note for gateway release guardrails."
+        }
+    });
+    let (status, duplicate_b_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(duplicate_b),
+        Some("idem-mmr-store-2"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "duplicate B store failed: {duplicate_b_body}"
+    );
+    let duplicate_b_id = duplicate_b_body["results"][0]["id"]
+        .as_str()
+        .expect("duplicate B id should exist")
+        .to_string();
+
+    let diverse = json!({
+        "actor": actor("u1", "main", "sess-mmr-3", "session-key-mmr"),
+        "mode": "tool-store",
+        "memory": {
+            "text": "Deploy rollback checklist handbook for gateway release guardrails."
+        }
+    });
+    let (status, diverse_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(diverse),
+        Some("idem-mmr-store-3"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "diverse store failed: {diverse_body}"
+    );
+    let diverse_id = diverse_body["results"][0]["id"]
+        .as_str()
+        .expect("diverse id should exist")
+        .to_string();
+
+    let recall = json!({
+        "actor": actor("u1", "main", "sess-mmr-4", "session-key-mmr"),
+        "query": "orion deploy rollback checklist",
+        "limit": 2
+    });
+    let (status, first_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/recall/generic",
+        Some(recall.clone()),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "first recall failed: {first_body}");
+    let first_rows = first_body["rows"].as_array().expect("rows should be array");
+    assert_eq!(
+        first_rows.len(),
+        2,
+        "limit=2 should return exactly two rows"
+    );
+    let first_ids = first_rows
+        .iter()
+        .map(|row| row["id"].as_str().unwrap_or_default().to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        first_ids.contains(&diverse_id),
+        "MMR should keep one diverse result in top-k"
+    );
+    let duplicate_count = first_ids
+        .iter()
+        .filter(|id| *id == &duplicate_a_id || *id == &duplicate_b_id)
+        .count();
+    assert_eq!(
+        duplicate_count, 1,
+        "MMR top-k should include only one of the near-duplicate pair"
+    );
+
+    let (status, second_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/recall/generic",
+        Some(recall),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "second recall failed: {second_body}"
+    );
+    let second_ids = second_body["rows"]
+        .as_array()
+        .expect("rows should be array")
+        .iter()
+        .map(|row| row["id"].as_str().unwrap_or_default().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        first_ids, second_ids,
+        "MMR output ordering should remain deterministic across repeated recalls"
+    );
+}
+
+#[tokio::test]
+async fn embedding_tuning_knobs_are_sent_for_compatible_provider_assumptions() {
+    let (embedding_base_url, requests) = spawn_embedding_mock_server(64).await;
+    let app = setup_app_with(|cfg| {
+        cfg.providers.embedding.provider = "openai-compatible".to_string();
+        cfg.providers.embedding.model = "jina-embeddings-v5-text-small".to_string();
+        cfg.providers.embedding.api = "jina".to_string();
+        cfg.providers.embedding.base_url = Some(embedding_base_url.clone());
+        cfg.providers.embedding.dimensions = 64;
+        cfg.providers.embedding.task_query = Some("retrieval.query".to_string());
+        cfg.providers.embedding.task_passage = Some("retrieval.passage".to_string());
+        cfg.providers.embedding.normalized = Some(true);
+        cfg.retrieval.min_score = 0.0;
+        cfg.retrieval.hard_min_score = 0.0;
+    });
+
+    let passage_text = "Embedding passage knob payload verification for provider-compatible mode.";
+    let store = json!({
+        "actor": actor("u1", "main", "sess-embed-knob-1", "session-key-embed-knob"),
+        "mode": "tool-store",
+        "memory": { "text": passage_text }
+    });
+    let (status, store_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(store),
+        Some("idem-embed-knob-store-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "store failed: {store_body}");
+
+    let query_text = "provider-compatible query knob verification";
+    let recall = json!({
+        "actor": actor("u1", "main", "sess-embed-knob-2", "session-key-embed-knob"),
+        "query": query_text,
+        "limit": 1
+    });
+    let (status, recall_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/recall/generic",
+        Some(recall),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recall failed: {recall_body}");
+
+    let captured = requests
+        .lock()
+        .expect("embedding requests lock should be readable")
+        .clone();
+    assert!(
+        captured.len() >= 2,
+        "store + recall should both call embedding provider"
+    );
+
+    let passage_payload = captured
+        .iter()
+        .find(|payload| payload.get("input").and_then(|v| v.as_str()) == Some(passage_text))
+        .expect("passage embedding payload should exist");
+    assert_eq!(
+        passage_payload.get("task").and_then(|value| value.as_str()),
+        Some("retrieval.passage")
+    );
+    assert_eq!(
+        passage_payload
+            .get("normalized")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+
+    let query_payload = captured
+        .iter()
+        .find(|payload| payload.get("input").and_then(|v| v.as_str()) == Some(query_text))
+        .expect("query embedding payload should exist");
+    assert_eq!(
+        query_payload.get("task").and_then(|value| value.as_str()),
+        Some("retrieval.query")
+    );
+    assert_eq!(
+        query_payload
+            .get("normalized")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+}
+
+#[tokio::test]
+async fn embedding_tuning_knobs_are_omitted_when_provider_contract_is_not_compatible() {
+    let (embedding_base_url, requests) = spawn_embedding_mock_server(64).await;
+    let app = setup_app_with(|cfg| {
+        cfg.providers.embedding.provider = "openai-compatible".to_string();
+        cfg.providers.embedding.model = "text-embedding-3-small".to_string();
+        cfg.providers.embedding.api = "openai".to_string();
+        cfg.providers.embedding.base_url = Some(embedding_base_url.clone());
+        cfg.providers.embedding.dimensions = 64;
+        cfg.providers.embedding.task_query = Some("retrieval.query".to_string());
+        cfg.providers.embedding.task_passage = Some("retrieval.passage".to_string());
+        cfg.providers.embedding.normalized = Some(true);
+        cfg.retrieval.min_score = 0.0;
+        cfg.retrieval.hard_min_score = 0.0;
+    });
+
+    let store = json!({
+        "actor": actor("u1", "main", "sess-embed-knob-safe-1", "session-key-embed-knob-safe"),
+        "mode": "tool-store",
+        "memory": { "text": "Safe knob omission store probe." }
+    });
+    let (status, store_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(store),
+        Some("idem-embed-knob-safe-store-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "store failed: {store_body}");
+
+    let recall = json!({
+        "actor": actor("u1", "main", "sess-embed-knob-safe-2", "session-key-embed-knob-safe"),
+        "query": "safe knob omission query",
+        "limit": 1
+    });
+    let (status, recall_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/recall/generic",
+        Some(recall),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recall failed: {recall_body}");
+
+    let captured = requests
+        .lock()
+        .expect("embedding requests lock should be readable")
+        .clone();
+    assert!(
+        !captured.is_empty(),
+        "embedding provider should be called in safe omission test"
+    );
+    assert!(
+        captured.iter().all(|payload| {
+            payload.get("task").is_none() && payload.get("normalized").is_none()
+        }),
+        "non-compatible provider assumptions should omit task/normalized fields"
     );
 }
 
@@ -1689,6 +2769,56 @@ async fn generic_recall_dto_does_not_expose_scoring_breakdown_internals() {
     assert!(row.get("vectorScore").is_none());
     assert!(row.get("bm25Score").is_none());
     assert!(row.get("rerankScore").is_none());
+}
+
+#[tokio::test]
+async fn retrieval_diagnostics_enabled_does_not_leak_internal_fields_to_v1_rows() {
+    let app = setup_app_with(|cfg| {
+        cfg.retrieval.diagnostics = true;
+        cfg.retrieval.min_score = 0.0;
+        cfg.retrieval.hard_min_score = 0.0;
+    });
+
+    let store = json!({
+        "actor": actor("u1", "main", "sess-diagnostics-1", "session-key-diagnostics"),
+        "mode": "tool-store",
+        "memory": {
+            "text": "Release runbook for deployment rollback and postmortem tracking."
+        }
+    });
+    let (status, store_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(store),
+        Some("idem-diagnostics-store-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "store failed: {store_body}");
+
+    let recall = json!({
+        "actor": actor("u1", "main", "sess-diagnostics-2", "session-key-diagnostics"),
+        "query": "deployment rollback runbook",
+        "limit": 3
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/recall/generic",
+        Some(recall),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "recall failed: {body}");
+    let row = &body["rows"][0];
+    assert!(row.get("diagnostics").is_none());
+    assert!(row.get("trace").is_none());
+    assert!(row.get("stageCounts").is_none());
 }
 
 #[tokio::test]

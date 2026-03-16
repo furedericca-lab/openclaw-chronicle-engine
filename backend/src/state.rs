@@ -25,7 +25,7 @@ use lancedb::{
 };
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     fs,
@@ -42,6 +42,11 @@ const MEMORY_TABLE_NAME: &str = "memories_v1";
 const DEFAULT_EMBEDDINGS_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_RERANK_ENDPOINT: &str = "https://api.jina.ai/v1/rerank";
 const DEFAULT_RERANK_MODEL: &str = "jina-reranker-v3";
+const MAX_CHUNK_RECOVERY_DEPTH: usize = 2;
+const MAX_EMBEDDING_RECOVERY_CHUNKS: usize = 256;
+const ACCESS_DECAY_HALF_LIFE_DAYS: f64 = 30.0;
+const MAX_ACCESS_COUNT: i64 = 10_000;
+const ACCESS_UPDATE_MAX_ROWS: usize = 64;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -86,6 +91,8 @@ struct MemoryRow {
     scope: String,
     created_at: i64,
     updated_at: i64,
+    access_count: i64,
+    last_accessed_at: i64,
     reflection_kind: Option<ReflectionKind>,
     strict_key: Option<String>,
     vector: Option<Vec<f32>>,
@@ -109,6 +116,10 @@ struct GenericRecallSettings {
     recency_weight: f64,
     length_norm_anchor: usize,
     time_decay_half_life_days: f64,
+    reinforcement_factor: f64,
+    max_half_life_multiplier: f64,
+    mmr_diversity: bool,
+    mmr_similarity_threshold: f64,
     query_expansion: bool,
     filter_noise: bool,
     diagnostics: bool,
@@ -128,6 +139,12 @@ enum RerankMode {
     CrossEncoder,
 }
 
+#[derive(Clone, Copy)]
+enum EmbeddingPurpose {
+    Query,
+    Passage,
+}
+
 #[derive(Clone)]
 enum EmbeddingProviderClient {
     Hashing(HashingEmbedder),
@@ -139,6 +156,10 @@ struct OpenAiCompatibleEmbedder {
     client: reqwest::Client,
     endpoint: String,
     model: String,
+    task_query: Option<String>,
+    task_passage: Option<String>,
+    normalized: Option<bool>,
+    allow_extended_tuning_fields: bool,
     api_keys: Vec<String>,
     next_api_key: Arc<AtomicUsize>,
     dimensions: usize,
@@ -151,7 +172,8 @@ struct RerankProviderClient {
     provider: String,
     endpoint: String,
     model: String,
-    api_key: Option<String>,
+    api_keys: Vec<String>,
+    next_api_key: Arc<AtomicUsize>,
 }
 
 #[derive(Clone, Debug)]
@@ -172,6 +194,7 @@ struct EmbeddingCacheEntry {
 struct TableCapabilities {
     has_vector_column: bool,
     vector_dimensions: Option<usize>,
+    has_access_metadata_columns: bool,
 }
 
 #[derive(Clone)]
@@ -218,6 +241,10 @@ impl GenericRecallEngine {
             recency_weight: config.retrieval.recency_weight,
             length_norm_anchor: config.retrieval.length_norm_anchor,
             time_decay_half_life_days: config.retrieval.time_decay_half_life_days,
+            reinforcement_factor: config.retrieval.reinforcement_factor,
+            max_half_life_multiplier: config.retrieval.max_half_life_multiplier,
+            mmr_diversity: config.retrieval.mmr_diversity,
+            mmr_similarity_threshold: config.retrieval.mmr_similarity_threshold,
             query_expansion: config.retrieval.query_expansion,
             filter_noise: config.retrieval.filter_noise,
             diagnostics: config.retrieval.diagnostics,
@@ -393,6 +420,7 @@ impl GenericRecallEngine {
             candidate.score = score;
             rerank_candidates.push(candidate);
         }
+        let selected_for_rerank = rerank_candidates.len();
 
         if rerank_candidates.is_empty() {
             return Ok(Vec::new());
@@ -406,6 +434,7 @@ impl GenericRecallEngine {
                 &mut rerank_candidates,
                 self.settings.rerank_blend,
                 self.settings.rerank_mode,
+                self.settings.diagnostics,
             )
             .await?;
 
@@ -428,8 +457,15 @@ impl GenericRecallEngine {
             let length_factor = 1.0 / (1.0 + 0.5 * length_ratio.log2());
             score = clamp_score(score * length_factor);
 
-            let decay_factor =
-                0.5 + 0.5 * (-age_days / self.settings.time_decay_half_life_days).exp();
+            let effective_half_life_days = compute_effective_half_life_days(
+                self.settings.time_decay_half_life_days,
+                candidate.row.access_count,
+                candidate.row.last_accessed_at,
+                self.settings.reinforcement_factor,
+                self.settings.max_half_life_multiplier,
+                now,
+            );
+            let decay_factor = 0.5 + 0.5 * (-age_days / effective_half_life_days).exp();
             score = clamp_score(score * decay_factor);
 
             if score < self.settings.hard_min_score {
@@ -454,21 +490,30 @@ impl GenericRecallEngine {
                 .then_with(|| b.row.updated_at.cmp(&a.row.updated_at))
                 .then_with(|| a.row.id.cmp(&b.row.id))
         });
-        ranked_rows.truncate(limit);
-        if self.settings.diagnostics {
-            eprintln!(
-                "retrieval diagnostic: query_len={} lexical_query_len={} seeds={} selected={} noise_filtered={} output={}",
-                query.chars().count(),
-                lexical_query.chars().count(),
-                candidates.len(),
-                candidates
-                    .iter()
-                    .filter(|candidate| candidate.score >= self.settings.min_score)
-                    .count(),
-                noise_filtered,
-                ranked_rows.len(),
-            );
+        let mut diversity_deferred = 0_usize;
+        if self.settings.mmr_diversity {
+            let (diversified, deferred) =
+                apply_mmr_diversity(ranked_rows, self.settings.mmr_similarity_threshold);
+            ranked_rows = diversified;
+            diversity_deferred = deferred;
         }
+        ranked_rows.truncate(limit);
+        emit_internal_diagnostic(
+            self.settings.diagnostics,
+            json!({
+                "event": "retrieval.rank.summary",
+                "stage": "finalize",
+                "queryLen": query.chars().count(),
+                "lexicalQueryLen": lexical_query.chars().count(),
+                "seedCount": candidates.len(),
+                "selectedCount": selected_for_rerank,
+                "noiseFilteredCount": noise_filtered,
+                "mmrEnabled": self.settings.mmr_diversity,
+                "mmrSimilarityThreshold": self.settings.mmr_similarity_threshold,
+                "mmrDeferredCount": diversity_deferred,
+                "resultCount": ranked_rows.len(),
+            }),
+        );
         Ok(ranked_rows)
     }
 }
@@ -496,15 +541,15 @@ impl EmbeddingProviderClient {
     async fn embed_query(&self, text: &str) -> AppResult<Vec<f32>> {
         match self {
             Self::Hashing(embedder) => embedder.embed(text),
-            Self::OpenAiCompatible(embedder) => embedder
-                .embed_many(&[text.to_string()])
-                .await
-                .map(|mut vectors| vectors.pop().unwrap_or_default()),
+            Self::OpenAiCompatible(embedder) => embedder.embed_query(text).await,
         }
     }
 
     async fn embed_passage(&self, text: &str) -> AppResult<Vec<f32>> {
-        self.embed_query(text).await
+        match self {
+            Self::Hashing(embedder) => embedder.embed(text),
+            Self::OpenAiCompatible(embedder) => embedder.embed_passage(text).await,
+        }
     }
 
     async fn embed_passages_batch(&self, texts: &[String]) -> AppResult<Vec<Vec<f32>>> {
@@ -516,7 +561,7 @@ impl EmbeddingProviderClient {
                 }
                 Ok(out)
             }
-            Self::OpenAiCompatible(embedder) => embedder.embed_many(texts).await,
+            Self::OpenAiCompatible(embedder) => embedder.embed_passages_batch(texts).await,
         }
     }
 }
@@ -540,10 +585,22 @@ impl OpenAiCompatibleEmbedder {
             config.providers.embedding.cache_max_entries,
             config.providers.embedding.cache_ttl_ms,
         );
+        let task_query = trim_optional_string(config.providers.embedding.task_query.as_deref());
+        let task_passage = trim_optional_string(config.providers.embedding.task_passage.as_deref());
+        let normalized = config.providers.embedding.normalized;
+        let allow_extended_tuning_fields = supports_embedding_tuning_fields(
+            &endpoint,
+            &config.providers.embedding.model,
+            &config.providers.embedding.api,
+        );
         Ok(Self {
             client,
             endpoint,
             model: config.providers.embedding.model.clone(),
+            task_query,
+            task_passage,
+            normalized,
+            allow_extended_tuning_fields,
             api_keys,
             next_api_key: Arc::new(AtomicUsize::new(0)),
             dimensions: config.providers.embedding.dimensions,
@@ -551,7 +608,30 @@ impl OpenAiCompatibleEmbedder {
         })
     }
 
-    async fn embed_many(&self, texts: &[String]) -> AppResult<Vec<Vec<f32>>> {
+    async fn embed_query(&self, text: &str) -> AppResult<Vec<f32>> {
+        let mut vectors = self
+            .embed_many_with_purpose(&[text.to_string()], EmbeddingPurpose::Query)
+            .await?;
+        Ok(vectors.pop().unwrap_or_default())
+    }
+
+    async fn embed_passage(&self, text: &str) -> AppResult<Vec<f32>> {
+        let mut vectors = self
+            .embed_many_with_purpose(&[text.to_string()], EmbeddingPurpose::Passage)
+            .await?;
+        Ok(vectors.pop().unwrap_or_default())
+    }
+
+    async fn embed_passages_batch(&self, texts: &[String]) -> AppResult<Vec<Vec<f32>>> {
+        self.embed_many_with_purpose(texts, EmbeddingPurpose::Passage)
+            .await
+    }
+
+    async fn embed_many_with_purpose(
+        &self,
+        texts: &[String],
+        purpose: EmbeddingPurpose,
+    ) -> AppResult<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
@@ -564,7 +644,7 @@ impl OpenAiCompatibleEmbedder {
         {
             let mut cache = self.cache.lock();
             for (idx, text) in texts.iter().enumerate() {
-                let key = self.cache_key(text);
+                let key = self.cache_key(text, purpose);
                 if let Some(vector) = cache.get(&key, now) {
                     resolved[idx] = vector;
                     continue;
@@ -584,9 +664,17 @@ impl OpenAiCompatibleEmbedder {
         if !missing_keys.is_empty() {
             let request_texts: Vec<String> =
                 missing_keys.iter().map(|(_, text)| text.clone()).collect();
-            let vectors = self
-                .request_embeddings_with_failover(&request_texts)
-                .await?;
+            let vectors = match self
+                .request_embeddings_with_failover(&request_texts, purpose)
+                .await
+            {
+                Ok(vectors) => vectors,
+                Err(message) if is_embedding_context_limit_error(&message) => {
+                    self.request_embeddings_with_chunk_recovery(&request_texts, &message, purpose)
+                        .await?
+                }
+                Err(message) => return Err(AppError::upstream_embedding(message)),
+            };
             if vectors.len() != request_texts.len() {
                 return Err(AppError::upstream_embedding(format!(
                     "embedding provider returned {} vectors for {} inputs",
@@ -606,9 +694,34 @@ impl OpenAiCompatibleEmbedder {
         Ok(resolved)
     }
 
-    fn cache_key(&self, text: &str) -> String {
+    fn embedding_task_for(&self, purpose: EmbeddingPurpose) -> Option<&str> {
+        match purpose {
+            EmbeddingPurpose::Query => self.task_query.as_deref(),
+            EmbeddingPurpose::Passage => self.task_passage.as_deref(),
+        }
+    }
+
+    fn cache_key(&self, text: &str, purpose: EmbeddingPurpose) -> String {
         let digest = stable_hash64(0xA5A5_5A5A_1337_4242, text.as_bytes());
-        format!("{}:{}:{digest:016x}", self.model, self.dimensions)
+        let effective_task = if self.allow_extended_tuning_fields {
+            self.embedding_task_for(purpose)
+        } else {
+            None
+        };
+        let task_marker = effective_task.unwrap_or("-");
+        let normalized_marker = if self.allow_extended_tuning_fields {
+            match self.normalized {
+                Some(true) => "n1",
+                Some(false) => "n0",
+                None => "n-",
+            }
+        } else {
+            "n-"
+        };
+        format!(
+            "{}:{}:{}:{}:{digest:016x}",
+            self.model, self.dimensions, task_marker, normalized_marker
+        )
     }
 
     fn api_key_attempt_order(&self) -> Vec<Option<String>> {
@@ -622,12 +735,16 @@ impl OpenAiCompatibleEmbedder {
             .collect()
     }
 
-    async fn request_embeddings_with_failover(&self, texts: &[String]) -> AppResult<Vec<Vec<f32>>> {
+    async fn request_embeddings_with_failover(
+        &self,
+        texts: &[String],
+        purpose: EmbeddingPurpose,
+    ) -> Result<Vec<Vec<f32>>, String> {
         let mut last_error: Option<String> = None;
         let attempts = self.api_key_attempt_order();
         for (attempt_idx, api_key) in attempts.iter().enumerate() {
             match self
-                .request_embeddings_once(texts, api_key.as_deref())
+                .request_embeddings_once(texts, api_key.as_deref(), purpose)
                 .await
             {
                 Ok(vectors) => return Ok(vectors),
@@ -636,19 +753,101 @@ impl OpenAiCompatibleEmbedder {
                     if retryable && attempt_idx + 1 < attempts.len() {
                         continue;
                     }
-                    return Err(AppError::upstream_embedding(message));
+                    return Err(message);
                 }
             }
         }
-        Err(AppError::upstream_embedding(last_error.unwrap_or_else(
-            || "embedding provider request failed across all configured credentials".to_string(),
-        )))
+        Err(last_error.unwrap_or_else(|| {
+            "embedding provider request failed across all configured credentials".to_string()
+        }))
+    }
+
+    async fn request_embeddings_with_chunk_recovery(
+        &self,
+        texts: &[String],
+        root_error: &str,
+        purpose: EmbeddingPurpose,
+    ) -> AppResult<Vec<Vec<f32>>> {
+        let mut recovered = Vec::with_capacity(texts.len());
+        for text in texts {
+            recovered.push(
+                self.embed_text_with_chunk_recovery(text, root_error, purpose)
+                    .await?,
+            );
+        }
+        Ok(recovered)
+    }
+
+    async fn embed_text_with_chunk_recovery(
+        &self,
+        text: &str,
+        root_error: &str,
+        purpose: EmbeddingPurpose,
+    ) -> AppResult<Vec<f32>> {
+        let chunks = smart_chunk_text(text, &self.model);
+        if chunks.len() <= 1 {
+            return Err(AppError::upstream_embedding(root_error.to_string()));
+        }
+        if chunks.len() > MAX_EMBEDDING_RECOVERY_CHUNKS {
+            return Err(AppError::upstream_embedding(format!(
+                "embedding context recovery generated too many chunks: {}",
+                chunks.len()
+            )));
+        }
+
+        let vectors = self
+            .embed_chunks_with_recursive_rechunk(chunks, 0, purpose)
+            .await
+            .map_err(AppError::upstream_embedding)?;
+        average_embeddings(&vectors, self.dimensions).map_err(AppError::upstream_embedding)
+    }
+
+    async fn embed_chunks_with_recursive_rechunk(
+        &self,
+        chunks: Vec<String>,
+        depth: usize,
+        purpose: EmbeddingPurpose,
+    ) -> Result<Vec<Vec<f32>>, String> {
+        match self
+            .request_embeddings_with_failover(&chunks, purpose)
+            .await
+        {
+            Ok(vectors) => Ok(vectors),
+            Err(message)
+                if depth < MAX_CHUNK_RECOVERY_DEPTH
+                    && is_embedding_context_limit_error(&message) =>
+            {
+                let mut expanded = Vec::new();
+                let mut split_applied = false;
+                for chunk in chunks {
+                    let nested = smart_chunk_text(&chunk, &self.model);
+                    if nested.len() > 1 {
+                        split_applied = true;
+                        expanded.extend(nested);
+                    } else {
+                        expanded.push(chunk);
+                    }
+                }
+                if !split_applied {
+                    return Err(message);
+                }
+                if expanded.len() > MAX_EMBEDDING_RECOVERY_CHUNKS {
+                    return Err(format!(
+                        "embedding context recovery exceeded max chunk count ({MAX_EMBEDDING_RECOVERY_CHUNKS})"
+                    ));
+                }
+                Box::pin(self.embed_chunks_with_recursive_rechunk(expanded, depth + 1, purpose))
+                    .await
+            }
+            Err(message) => Err(message),
+        }
     }
 
     async fn request_embeddings_once(
         &self,
         texts: &[String],
         api_key: Option<&str>,
+        purpose: EmbeddingPurpose,
     ) -> Result<Vec<Vec<f32>>, (bool, String)> {
         let input = if texts.len() == 1 {
             Value::String(texts[0].clone())
@@ -661,6 +860,14 @@ impl OpenAiCompatibleEmbedder {
             "encoding_format": "float"
         });
         payload["dimensions"] = serde_json::json!(self.dimensions);
+        if self.allow_extended_tuning_fields {
+            if let Some(task) = self.embedding_task_for(purpose) {
+                payload["task"] = serde_json::json!(task);
+            }
+            if let Some(normalized) = self.normalized {
+                payload["normalized"] = serde_json::json!(normalized);
+            }
+        }
 
         let mut request = self
             .client
@@ -774,7 +981,8 @@ impl RerankProviderClient {
             .model
             .clone()
             .unwrap_or_else(|| DEFAULT_RERANK_MODEL.to_string());
-        let api_key = resolve_secret(config.providers.rerank.api_key.as_deref())?;
+        let raw_api_key = resolve_secret(config.providers.rerank.api_key.as_deref())?;
+        let api_keys = parse_api_keys(raw_api_key.as_deref());
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(config.providers.rerank.timeout_ms))
             .build()
@@ -784,7 +992,8 @@ impl RerankProviderClient {
             provider: config.providers.rerank.provider.trim().to_string(),
             endpoint,
             model,
-            api_key,
+            api_keys,
+            next_api_key: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -796,17 +1005,27 @@ impl RerankProviderClient {
         candidates: &mut [ScoredCandidate],
         blend: f64,
         mode: RerankMode,
+        diagnostics: bool,
     ) -> AppResult<()> {
         if candidates.is_empty() || mode == RerankMode::None {
             return Ok(());
         }
 
         if mode == RerankMode::CrossEncoder {
-            match self.cross_encoder_rerank(query, candidates, blend).await {
+            match self
+                .cross_encoder_rerank(query, candidates, blend, diagnostics)
+                .await
+            {
                 Ok(()) => return Ok(()),
                 Err(err) => {
-                    eprintln!(
-                        "rerank provider failed, falling back to lightweight signal: {err:?}"
+                    emit_internal_diagnostic(
+                        diagnostics,
+                        json!({
+                            "event": "retrieval.rerank.fallback",
+                            "stage": "cross-encoder",
+                            "fallback": "lightweight",
+                            "reason": truncate_for_error(&format!("{err:?}"), 240),
+                        }),
                     );
                 }
             }
@@ -814,6 +1033,20 @@ impl RerankProviderClient {
 
         self.lightweight_rerank(normalized_query, query_tokens, candidates, blend);
         Ok(())
+    }
+
+    fn api_key_attempt_order(&self, needs_api_key: bool) -> Vec<Option<String>> {
+        if self.api_keys.is_empty() {
+            if needs_api_key {
+                return Vec::new();
+            }
+            return vec![None];
+        }
+        let key_count = self.api_keys.len();
+        let start = self.next_api_key.fetch_add(1, Ordering::Relaxed) % key_count;
+        (0..key_count)
+            .map(|offset| Some(self.api_keys[(start + offset) % key_count].clone()))
+            .collect()
     }
 
     fn lightweight_rerank(
@@ -846,20 +1079,65 @@ impl RerankProviderClient {
         query: &str,
         candidates: &mut [ScoredCandidate],
         blend: f64,
+        diagnostics: bool,
     ) -> AppResult<()> {
         let needs_api_key = self.provider != "vllm";
-        if needs_api_key && self.api_key.as_deref().unwrap_or("").trim().is_empty() {
+        let attempts = self.api_key_attempt_order(needs_api_key);
+        if needs_api_key && attempts.is_empty() {
             return Err(AppError::upstream_rerank(
                 "rerank provider requires api_key for the configured provider",
             ));
         }
 
+        let mut last_error: Option<String> = None;
+        for (attempt_idx, api_key) in attempts.iter().enumerate() {
+            match self
+                .cross_encoder_rerank_once(query, candidates, blend, api_key.as_deref())
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err((retryable, message)) => {
+                    last_error = Some(message.clone());
+                    emit_internal_diagnostic(
+                        diagnostics,
+                        json!({
+                            "event": "retrieval.rerank.provider-attempt",
+                            "stage": "cross-encoder",
+                            "attempt": attempt_idx + 1,
+                            "attemptTotal": attempts.len(),
+                            "retryable": retryable,
+                            "usedApiKey": api_key.is_some(),
+                            "reason": truncate_for_error(&message, 240),
+                        }),
+                    );
+                    if retryable && attempt_idx + 1 < attempts.len() {
+                        continue;
+                    }
+                    return Err(AppError::upstream_rerank(message));
+                }
+            }
+        }
+
+        Err(AppError::upstream_rerank(last_error.unwrap_or_else(|| {
+            "rerank provider request failed across all configured credentials".to_string()
+        })))
+    }
+
+    async fn cross_encoder_rerank_once(
+        &self,
+        query: &str,
+        candidates: &mut [ScoredCandidate],
+        blend: f64,
+        api_key: Option<&str>,
+    ) -> Result<(), (bool, String)> {
         let docs: Vec<String> = candidates
             .iter()
             .map(|candidate| candidate.row.text.clone())
             .collect();
         let top_n = docs.len();
-        let (headers, body) = self.build_rerank_request(query, &docs, top_n)?;
+        let (headers, body) = self
+            .build_rerank_request(query, &docs, top_n, api_key)
+            .map_err(|err| (false, format!("{err:?}")))?;
         let response = self
             .client
             .post(&self.endpoint)
@@ -867,25 +1145,33 @@ impl RerankProviderClient {
             .body(body)
             .send()
             .await
-            .map_err(|err| {
-                AppError::upstream_rerank(format!("rerank provider request failed: {err}"))
-            })?;
+            .map_err(|err| (true, format!("rerank provider request failed: {err}")))?;
         let status = response.status();
         let body_text = response.text().await.map_err(|err| {
-            AppError::upstream_rerank(format!("failed to read rerank provider response: {err}"))
+            (
+                true,
+                format!("failed to read rerank provider response: {err}"),
+            )
         })?;
         if !status.is_success() {
-            return Err(AppError::upstream_rerank(format!(
-                "rerank provider returned status {}: {}",
-                status.as_u16(),
-                truncate_for_error(&body_text, 240),
-            )));
+            return Err((
+                is_rerank_failover_retryable(status.as_u16()),
+                format!(
+                    "rerank provider returned status {}: {}",
+                    status.as_u16(),
+                    truncate_for_error(&body_text, 240),
+                ),
+            ));
         }
 
         let value: Value = serde_json::from_str(&body_text).map_err(|err| {
-            AppError::upstream_rerank(format!("invalid rerank provider JSON response: {err}"))
+            (
+                false,
+                format!("invalid rerank provider JSON response: {err}"),
+            )
         })?;
-        let items = parse_rerank_items(&self.provider, &value)?;
+        let items =
+            parse_rerank_items(&self.provider, &value).map_err(|message| (false, message))?;
         let mut returned = HashSet::new();
         for (idx, raw_score) in items {
             if idx >= candidates.len() {
@@ -914,16 +1200,18 @@ impl RerankProviderClient {
         query: &str,
         docs: &[String],
         top_n: usize,
+        api_key: Option<&str>,
     ) -> AppResult<(reqwest::header::HeaderMap, String)> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             CONTENT_TYPE,
             reqwest::header::HeaderValue::from_static("application/json"),
         );
+        let api_key = api_key.map(str::trim).filter(|value| !value.is_empty());
         let provider = self.provider.as_str();
         let body = match provider {
             "pinecone" => {
-                if let Some(api_key) = &self.api_key {
+                if let Some(api_key) = api_key {
                     let value = reqwest::header::HeaderValue::from_str(api_key).map_err(|err| {
                         AppError::upstream_rerank(format!(
                             "invalid rerank api key header value: {err}"
@@ -945,7 +1233,7 @@ impl RerankProviderClient {
                 .to_string()
             }
             "voyage" => {
-                if let Some(api_key) = &self.api_key {
+                if let Some(api_key) = api_key {
                     let value =
                         reqwest::header::HeaderValue::from_str(&format!("Bearer {api_key}"))
                             .map_err(|err| {
@@ -971,7 +1259,7 @@ impl RerankProviderClient {
             })
             .to_string(),
             _ => {
-                if let Some(api_key) = &self.api_key {
+                if let Some(api_key) = api_key {
                     let value =
                         reqwest::header::HeaderValue::from_str(&format!("Bearer {api_key}"))
                             .map_err(|err| {
@@ -1118,6 +1406,8 @@ impl LanceMemoryRepo {
                     scope,
                     created_at: now,
                     updated_at: now,
+                    access_count: 0,
+                    last_accessed_at: 0,
                     reflection_kind: None,
                     strict_key: None,
                     vector: None,
@@ -1140,6 +1430,8 @@ impl LanceMemoryRepo {
                         scope: actor.derived_scope(),
                         created_at: now,
                         updated_at: now,
+                        access_count: 0,
+                        last_accessed_at: 0,
                         reflection_kind: None,
                         strict_key: None,
                         vector: None,
@@ -1365,6 +1657,18 @@ impl LanceMemoryRepo {
             .generic_recall_engine
             .rank_candidates(&req.query, &lexical_query, &query_embedding, seeds, limit)
             .await?;
+        if let Err(err) = self
+            .record_recall_access_metadata(&table, &req.actor, &ranked)
+            .await
+        {
+            emit_internal_diagnostic(
+                self.generic_recall_engine.settings.diagnostics,
+                json!({
+                    "event": "retrieval.access.update-failed",
+                    "reason": truncate_for_error(&format!("{err:?}"), 240),
+                }),
+            );
+        }
         let response_rows = ranked
             .into_iter()
             .map(|ranked_row| RecallGenericRow {
@@ -1409,6 +1713,18 @@ impl LanceMemoryRepo {
             .generic_recall_engine
             .rank_candidates(&req.query, &lexical_query, &query_embedding, seeds, limit)
             .await?;
+        if let Err(err) = self
+            .record_recall_access_metadata(&table, &req.actor, &ranked)
+            .await
+        {
+            emit_internal_diagnostic(
+                self.generic_recall_engine.settings.diagnostics,
+                json!({
+                    "event": "retrieval.access.update-failed",
+                    "reason": truncate_for_error(&format!("{err:?}"), 240),
+                }),
+            );
+        }
 
         let rows = ranked
             .into_iter()
@@ -1444,6 +1760,40 @@ impl LanceMemoryRepo {
         Ok(RecallReflectionResponse { rows })
     }
 
+    async fn record_recall_access_metadata(
+        &self,
+        table: &LanceTable,
+        actor: &Actor,
+        ranked: &[RankedMemoryRow],
+    ) -> AppResult<()> {
+        if ranked.is_empty() {
+            return Ok(());
+        }
+
+        let now = now_millis();
+        let principal = principal_filter(actor);
+        for ranked_row in ranked.iter().take(ACCESS_UPDATE_MAX_ROWS) {
+            let predicate = format!(
+                "id = '{}' AND {}",
+                escape_sql_literal(&ranked_row.row.id),
+                principal
+            );
+            let next_access_count =
+                clamp_access_count(ranked_row.row.access_count.saturating_add(1));
+            table
+                .update()
+                .only_if(predicate)
+                .column("access_count", next_access_count.to_string())
+                .column("last_accessed_at", now.to_string())
+                .execute()
+                .await
+                .map_err(|err| {
+                    AppError::internal(format!("failed to update recall access metadata: {err}"))
+                })?;
+        }
+        Ok(())
+    }
+
     async fn fetch_recall_seeds(
         &self,
         table: &LanceTable,
@@ -1453,6 +1803,7 @@ impl LanceMemoryRepo {
         limit: usize,
     ) -> AppResult<Vec<CandidateSeed>> {
         let candidate_pool_size = self.generic_recall_engine.candidate_pool_size(limit);
+        let diagnostics = self.generic_recall_engine.settings.diagnostics;
 
         let mut had_retrieval_error = false;
         let vector_hits = match self
@@ -1462,7 +1813,15 @@ impl LanceMemoryRepo {
             Ok(rows) => rows,
             Err(err) => {
                 had_retrieval_error = true;
-                eprintln!("vector candidate retrieval failed, falling back: {err:?}");
+                emit_internal_diagnostic(
+                    diagnostics,
+                    json!({
+                        "event": "retrieval.seed.fallback",
+                        "stage": "vector-search",
+                        "fallback": "fts-or-scan",
+                        "reason": truncate_for_error(&format!("{err:?}"), 240),
+                    }),
+                );
                 Vec::new()
             }
         };
@@ -1473,7 +1832,15 @@ impl LanceMemoryRepo {
             Ok(rows) => rows,
             Err(err) => {
                 had_retrieval_error = true;
-                eprintln!("fts candidate retrieval failed, falling back: {err:?}");
+                emit_internal_diagnostic(
+                    diagnostics,
+                    json!({
+                        "event": "retrieval.seed.fallback",
+                        "stage": "fts-search",
+                        "fallback": "vector-or-scan",
+                        "reason": truncate_for_error(&format!("{err:?}"), 240),
+                    }),
+                );
                 Vec::new()
             }
         };
@@ -1488,6 +1855,12 @@ impl LanceMemoryRepo {
             entry.vector_score = Some(entry.vector_score.unwrap_or(0.0).max(vector_score));
         }
 
+        let mut fts_hits = fts_hits;
+        fts_hits.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
         for (idx, row) in fts_hits.into_iter().enumerate() {
             let rank = idx as f64 + 1.0;
             let bm25_score = clamp_score(1.0 / (1.0 + rank.ln_1p()));
@@ -1501,6 +1874,15 @@ impl LanceMemoryRepo {
 
         let mut seeds: Vec<CandidateSeed> = merged.into_values().collect();
         if seeds.is_empty() && had_retrieval_error {
+            emit_internal_diagnostic(
+                diagnostics,
+                json!({
+                    "event": "retrieval.seed.fallback",
+                    "stage": "full-scan",
+                    "fallback": "scan-principal-rows",
+                    "reason": "vector-and-fts-empty-after-errors",
+                }),
+            );
             seeds = self
                 .query_rows(table, Some(filter.to_string()))
                 .await?
@@ -1671,7 +2053,7 @@ impl LanceMemoryRepo {
         table: LanceTable,
     ) -> AppResult<LanceTable> {
         let capabilities = self.inspect_table_capabilities(&table).await?;
-        let table = if capabilities.has_vector_column {
+        let needs_rebuild = if capabilities.has_vector_column {
             if let Some(dim) = capabilities.vector_dimensions {
                 if dim != self.vector_dimensions {
                     return Err(AppError::backend_unavailable(format!(
@@ -1680,10 +2062,16 @@ impl LanceMemoryRepo {
                     )));
                 }
             }
-            table
+            !capabilities.has_access_metadata_columns
         } else {
-            self.migrate_legacy_table_without_vector(conn, &table)
+            true
+        };
+
+        let table = if needs_rebuild {
+            self.migrate_legacy_table_to_current_schema(conn, &table, capabilities)
                 .await?
+        } else {
+            table
         };
 
         self.ensure_text_fts_index(&table).await?;
@@ -1696,6 +2084,8 @@ impl LanceMemoryRepo {
             .schema()
             .await
             .map_err(|err| AppError::internal(format!("failed to read table schema: {err}")))?;
+        let has_access_metadata_columns = schema.field_with_name("access_count").is_ok()
+            && schema.field_with_name("last_accessed_at").is_ok();
         match schema.field_with_name("vector") {
             Ok(field) => {
                 let vector_dimensions = match field.data_type() {
@@ -1721,19 +2111,22 @@ impl LanceMemoryRepo {
                 Ok(TableCapabilities {
                     has_vector_column: true,
                     vector_dimensions,
+                    has_access_metadata_columns,
                 })
             }
             Err(_) => Ok(TableCapabilities {
                 has_vector_column: false,
                 vector_dimensions: None,
+                has_access_metadata_columns,
             }),
         }
     }
 
-    async fn migrate_legacy_table_without_vector(
+    async fn migrate_legacy_table_to_current_schema(
         &self,
         conn: &LanceConnection,
         table: &LanceTable,
+        capabilities: TableCapabilities,
     ) -> AppResult<LanceTable> {
         let backup_table_name = format!("{}_legacy_backup_{}", MEMORY_TABLE_NAME, now_millis());
         let legacy_schema = table.schema().await.map_err(|err| {
@@ -1750,8 +2143,11 @@ impl LanceMemoryRepo {
                 AppError::internal(format!("failed to stream legacy table snapshot: {err}"))
             })?;
         let mut legacy_rows = rows_from_batches(&legacy_batches)?;
-        for row in &mut legacy_rows {
-            row.vector = None;
+        let needs_vector_backfill = !capabilities.has_vector_column;
+        if needs_vector_backfill {
+            for row in &mut legacy_rows {
+                row.vector = None;
+            }
         }
 
         let backup_table = conn
@@ -1787,7 +2183,7 @@ impl LanceMemoryRepo {
                 AppError::internal(format!("failed to drop legacy memory table: {err}"))
             })?;
         let rebuilt = self.create_table(conn).await?;
-        if !legacy_rows.is_empty() {
+        if !legacy_rows.is_empty() && needs_vector_backfill {
             let mut texts = Vec::with_capacity(legacy_rows.len());
             for row in &legacy_rows {
                 texts.push(row.text.clone());
@@ -1815,12 +2211,14 @@ impl LanceMemoryRepo {
                     );
                 }
             }
+        }
+        if !legacy_rows.is_empty() {
             self.insert_rows_into_table(&rebuilt, &legacy_rows).await?;
         }
         self.ensure_text_fts_index(&rebuilt).await?;
         self.ensure_vector_index(&rebuilt).await?;
         eprintln!(
-            "migrated legacy LanceDB table without vector column; backup table={}",
+            "migrated LanceDB table to current schema; backup table={}",
             backup_table_name
         );
         Ok(rebuilt)
@@ -2493,6 +2891,12 @@ fn rows_to_record_batch(rows: &[MemoryRow], vector_dimensions: usize) -> AppResu
     let scope_values: Vec<&str> = rows.iter().map(|row| row.scope.as_str()).collect();
     let created_values: Vec<i64> = rows.iter().map(|row| row.created_at).collect();
     let updated_values: Vec<i64> = rows.iter().map(|row| row.updated_at).collect();
+    let access_count_values: Vec<i64> = rows
+        .iter()
+        .map(|row| clamp_access_count(row.access_count))
+        .collect();
+    let last_accessed_at_values: Vec<i64> =
+        rows.iter().map(|row| row.last_accessed_at.max(0)).collect();
     let reflection_kind_values: Vec<Option<&str>> = rows
         .iter()
         .map(|row| row.reflection_kind.map(reflection_kind_to_str))
@@ -2531,6 +2935,8 @@ fn rows_to_record_batch(rows: &[MemoryRow], vector_dimensions: usize) -> AppResu
         Arc::new(StringArray::from(scope_values)),
         Arc::new(Int64Array::from(created_values)),
         Arc::new(Int64Array::from(updated_values)),
+        Arc::new(Int64Array::from(access_count_values)),
+        Arc::new(Int64Array::from(last_accessed_at_values)),
         Arc::new(StringArray::from(reflection_kind_values)),
         Arc::new(StringArray::from(strict_key_values)),
     ];
@@ -2553,6 +2959,8 @@ fn rows_from_batches(batches: &[RecordBatch]) -> AppResult<Vec<MemoryRow>> {
         let scope_idx = schema_index(batch, "scope")?;
         let created_idx = schema_index(batch, "created_at")?;
         let updated_idx = schema_index(batch, "updated_at")?;
+        let access_count_idx = schema_index_optional(batch, "access_count");
+        let last_accessed_at_idx = schema_index_optional(batch, "last_accessed_at");
         let reflection_kind_idx = schema_index(batch, "reflection_kind")?;
         let strict_key_idx = schema_index(batch, "strict_key")?;
 
@@ -2571,6 +2979,14 @@ fn rows_from_batches(batches: &[RecordBatch]) -> AppResult<Vec<MemoryRow>> {
         let scope_col = as_string_array(batch.column(scope_idx), "scope")?;
         let created_col = as_i64_array(batch.column(created_idx), "created_at")?;
         let updated_col = as_i64_array(batch.column(updated_idx), "updated_at")?;
+        let access_count_col = match access_count_idx {
+            Some(idx) => Some(as_i64_array(batch.column(idx), "access_count")?),
+            None => None,
+        };
+        let last_accessed_at_col = match last_accessed_at_idx {
+            Some(idx) => Some(as_i64_array(batch.column(idx), "last_accessed_at")?),
+            None => None,
+        };
         let reflection_kind_col =
             as_string_array(batch.column(reflection_kind_idx), "reflection_kind")?;
         let strict_key_col = as_string_array(batch.column(strict_key_idx), "strict_key")?;
@@ -2598,6 +3014,12 @@ fn rows_from_batches(batches: &[RecordBatch]) -> AppResult<Vec<MemoryRow>> {
                 scope: scope_col.value(row_idx).to_string(),
                 created_at: created_col.value(row_idx),
                 updated_at: updated_col.value(row_idx),
+                access_count: access_count_col
+                    .map(|col| clamp_access_count(col.value(row_idx)))
+                    .unwrap_or(0),
+                last_accessed_at: last_accessed_at_col
+                    .map(|col| col.value(row_idx).max(0))
+                    .unwrap_or(0),
                 reflection_kind,
                 strict_key,
                 vector: vector_col
@@ -2807,6 +3229,8 @@ fn memory_table_schema(vector_dimensions: usize) -> Arc<Schema> {
         Field::new("scope", DataType::Utf8, false),
         Field::new("created_at", DataType::Int64, false),
         Field::new("updated_at", DataType::Int64, false),
+        Field::new("access_count", DataType::Int64, false),
+        Field::new("last_accessed_at", DataType::Int64, false),
         Field::new("reflection_kind", DataType::Utf8, true),
         Field::new("strict_key", DataType::Utf8, true),
     ]))
@@ -3202,7 +3626,7 @@ fn char_bigram_set(text: &str) -> HashSet<String> {
     set
 }
 
-fn parse_rerank_items(provider: &str, value: &Value) -> AppResult<Vec<(usize, f64)>> {
+fn parse_rerank_items(provider: &str, value: &Value) -> Result<Vec<(usize, f64)>, String> {
     let primary = if provider == "voyage" || provider == "pinecone" {
         "data"
     } else {
@@ -3213,9 +3637,7 @@ fn parse_rerank_items(provider: &str, value: &Value) -> AppResult<Vec<(usize, f6
         .get(primary)
         .and_then(|v| v.as_array())
         .or_else(|| value.get(fallback).and_then(|v| v.as_array()))
-        .ok_or_else(|| {
-            AppError::upstream_rerank("rerank provider response missing results/data array")
-        })?;
+        .ok_or_else(|| "rerank provider response missing results/data array".to_string())?;
 
     let mut parsed = Vec::new();
     for item in items {
@@ -3228,9 +3650,9 @@ fn parse_rerank_items(provider: &str, value: &Value) -> AppResult<Vec<(usize, f6
         parsed.push((index, clamp_score(score)));
     }
     if parsed.is_empty() {
-        return Err(AppError::upstream_rerank(
-            "rerank provider response did not include usable index/score items",
-        ));
+        return Err(
+            "rerank provider response did not include usable index/score items".to_string(),
+        );
     }
     Ok(parsed)
 }
@@ -3286,8 +3708,254 @@ fn parse_api_keys(raw: Option<&str>) -> Vec<String> {
     keys
 }
 
+fn trim_optional_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
+fn supports_embedding_tuning_fields(endpoint: &str, model: &str, api_hint: &str) -> bool {
+    let model_lower = model.trim().to_ascii_lowercase();
+    if model_lower.starts_with("jina-") || model_lower.contains("jina-embeddings") {
+        return true;
+    }
+
+    let api_lower = api_hint.trim().to_ascii_lowercase();
+    if api_lower == "jina" || api_lower == "jina-compatible" {
+        return true;
+    }
+
+    endpoint.to_ascii_lowercase().contains("jina.ai")
+}
+
+fn clamp_access_count(value: i64) -> i64 {
+    value.clamp(0, MAX_ACCESS_COUNT)
+}
+
+fn compute_effective_half_life_days(
+    base_half_life_days: f64,
+    access_count: i64,
+    last_accessed_at: i64,
+    reinforcement_factor: f64,
+    max_half_life_multiplier: f64,
+    now_ms: i64,
+) -> f64 {
+    if reinforcement_factor <= 0.0 || access_count <= 0 {
+        return base_half_life_days;
+    }
+
+    let days_since_last_access = ((now_ms - last_accessed_at).max(0) as f64) / 86_400_000.0;
+    let access_freshness =
+        (-days_since_last_access * (std::f64::consts::LN_2 / ACCESS_DECAY_HALF_LIFE_DAYS)).exp();
+    let effective_access_count = clamp_access_count(access_count) as f64 * access_freshness;
+    let extension = base_half_life_days * reinforcement_factor * effective_access_count.ln_1p();
+    let cap = base_half_life_days * max_half_life_multiplier.max(1.0);
+    (base_half_life_days + extension).min(cap)
+}
+
+fn apply_mmr_diversity(
+    ranked_rows: Vec<RankedMemoryRow>,
+    similarity_threshold: f64,
+) -> (Vec<RankedMemoryRow>, usize) {
+    if ranked_rows.len() <= 1 {
+        return (ranked_rows, 0);
+    }
+
+    let threshold = similarity_threshold.clamp(0.0, 1.0);
+    let mut selected = Vec::with_capacity(ranked_rows.len());
+    let mut deferred = Vec::new();
+    for row in ranked_rows {
+        let too_similar = selected.iter().any(|existing: &RankedMemoryRow| {
+            let left = existing.row.vector.as_deref();
+            let right = row.row.vector.as_deref();
+            match (left, right) {
+                (Some(left), Some(right)) => cosine_similarity_f32(left, right) > threshold,
+                _ => false,
+            }
+        });
+        if too_similar {
+            deferred.push(row);
+        } else {
+            selected.push(row);
+        }
+    }
+    let deferred_count = deferred.len();
+    selected.extend(deferred);
+    (selected, deferred_count)
+}
+
 fn is_embedding_failover_retryable(status: u16) -> bool {
     matches!(status, 401 | 403 | 408 | 409 | 425 | 429 | 500..=599)
+}
+
+fn is_rerank_failover_retryable(status: u16) -> bool {
+    matches!(status, 401 | 403 | 408 | 409 | 425 | 429 | 500..=599)
+}
+
+fn is_embedding_context_limit_error(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    (lowered.contains("context")
+        && (lowered.contains("length")
+            || lowered.contains("window")
+            || lowered.contains("limit")
+            || lowered.contains("exceed")))
+        || lowered.contains("maximum context length")
+        || lowered.contains("too long")
+        || lowered.contains("token limit")
+        || lowered.contains("max input")
+}
+
+fn smart_chunk_text(text: &str, model: &str) -> Vec<String> {
+    let normalized = text.trim();
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let (max_chunk_size, overlap_size, min_chunk_size, max_lines_per_chunk) =
+        chunking_config_for_model(model);
+    let chars: Vec<char> = normalized.chars().collect();
+    if chars.len() <= max_chunk_size {
+        return vec![normalized.to_string()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    let max_guard = ((chars.len() / max_chunk_size.max(1)) + 8).max(8);
+    let mut guard = 0usize;
+    while start < chars.len() && guard < max_guard {
+        guard += 1;
+        let remaining = chars.len() - start;
+        if remaining <= max_chunk_size {
+            let tail = chars[start..].iter().collect::<String>().trim().to_string();
+            if !tail.is_empty() {
+                chunks.push(tail);
+            }
+            break;
+        }
+
+        let max_end = (start + max_chunk_size).min(chars.len());
+        let min_end = (start + min_chunk_size).min(max_end).max(start + 1);
+        let end = choose_chunk_end(&chars, start, min_end, max_end, max_lines_per_chunk)
+            .max(start + 1)
+            .min(chars.len());
+        let chunk = chars[start..end]
+            .iter()
+            .collect::<String>()
+            .trim()
+            .to_string();
+        if !chunk.is_empty() {
+            chunks.push(chunk);
+        }
+        if end >= chars.len() {
+            break;
+        }
+        let next = end.saturating_sub(overlap_size).max(start + 1);
+        start = next;
+    }
+
+    if chunks.is_empty() {
+        vec![normalized.to_string()]
+    } else {
+        chunks
+    }
+}
+
+fn chunking_config_for_model(model: &str) -> (usize, usize, usize, usize) {
+    let lowered = model.trim().to_ascii_lowercase();
+    let base = match lowered.as_str() {
+        "gemini-embedding-001" => 2048usize,
+        "all-minilm-l6-v2" | "all-mpnet-base-v2" => 512usize,
+        _ => 8192usize,
+    };
+    let max_chunk_size = ((base as f64) * 0.7).floor() as usize;
+    let overlap_size = ((base as f64) * 0.05).floor() as usize;
+    let min_chunk_size = ((base as f64) * 0.1).floor() as usize;
+    (
+        max_chunk_size.max(1000),
+        overlap_size,
+        min_chunk_size.max(100),
+        50,
+    )
+}
+
+fn choose_chunk_end(
+    chars: &[char],
+    start: usize,
+    min_end: usize,
+    max_end: usize,
+    max_lines_per_chunk: usize,
+) -> usize {
+    if max_lines_per_chunk > 0 {
+        let mut line_breaks = 0usize;
+        for idx in start..max_end {
+            if chars[idx] == '\n' {
+                line_breaks += 1;
+                if line_breaks >= max_lines_per_chunk {
+                    return (idx + 1).max(min_end).min(max_end);
+                }
+            }
+        }
+    }
+
+    for idx in (min_end..max_end).rev() {
+        if matches!(chars[idx], '.' | '!' | '?' | '。' | '！' | '？') {
+            let mut cursor = idx + 1;
+            while cursor < max_end && chars[cursor].is_whitespace() {
+                cursor += 1;
+            }
+            return cursor.max(min_end).min(max_end);
+        }
+    }
+
+    for idx in (min_end..max_end).rev() {
+        if chars[idx] == '\n' {
+            return (idx + 1).max(min_end).min(max_end);
+        }
+    }
+
+    for idx in (min_end..max_end).rev() {
+        if chars[idx].is_whitespace() {
+            return idx.max(min_end).min(max_end);
+        }
+    }
+
+    max_end
+}
+
+fn average_embeddings(vectors: &[Vec<f32>], dimensions: usize) -> Result<Vec<f32>, String> {
+    if vectors.is_empty() {
+        return Err("embedding context recovery produced zero chunk vectors".to_string());
+    }
+    let mut sum = vec![0.0_f64; dimensions];
+    for vector in vectors {
+        if vector.len() != dimensions {
+            return Err(format!(
+                "embedding dimension mismatch during chunk recovery: expected {}, got {}",
+                dimensions,
+                vector.len()
+            ));
+        }
+        for (idx, value) in vector.iter().enumerate() {
+            sum[idx] += f64::from(*value);
+        }
+    }
+    let factor = vectors.len() as f64;
+    Ok(sum
+        .into_iter()
+        .map(|value| (value / factor) as f32)
+        .collect())
+}
+
+fn emit_internal_diagnostic(enabled: bool, payload: Value) {
+    if !enabled {
+        return;
+    }
+    if let Ok(encoded) = serde_json::to_string(&payload) {
+        eprintln!("{encoded}");
+    } else {
+        eprintln!("{{\"event\":\"retrieval.diagnostic.serialization_failed\",\"stage\":\"emit\"}}");
+    }
 }
 
 fn is_vector_index_type(index_type: &IndexType) -> bool {

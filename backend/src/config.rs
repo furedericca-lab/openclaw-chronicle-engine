@@ -70,6 +70,12 @@ pub struct EmbeddingProviderConfig {
     pub base_url: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,
+    #[serde(default, alias = "taskQuery")]
+    pub task_query: Option<String>,
+    #[serde(default, alias = "taskPassage")]
+    pub task_passage: Option<String>,
+    #[serde(default)]
+    pub normalized: Option<bool>,
     #[serde(default = "default_embedding_timeout_ms")]
     pub timeout_ms: u64,
     #[serde(default = "default_embedding_cache_max_entries")]
@@ -132,6 +138,14 @@ pub struct RetrievalConfig {
     pub length_norm_anchor: usize,
     #[serde(default = "default_time_decay_half_life_days")]
     pub time_decay_half_life_days: f64,
+    #[serde(default = "default_reinforcement_factor")]
+    pub reinforcement_factor: f64,
+    #[serde(default = "default_max_half_life_multiplier")]
+    pub max_half_life_multiplier: f64,
+    #[serde(default = "default_mmr_diversity")]
+    pub mmr_diversity: bool,
+    #[serde(default = "default_mmr_similarity_threshold")]
+    pub mmr_similarity_threshold: f64,
     #[serde(default = "default_query_expansion")]
     pub query_expansion: bool,
     #[serde(default = "default_filter_noise")]
@@ -167,6 +181,9 @@ impl Default for EmbeddingProviderConfig {
             api: default_embedding_api(),
             base_url: None,
             api_key: None,
+            task_query: None,
+            task_passage: None,
+            normalized: None,
             timeout_ms: default_embedding_timeout_ms(),
             cache_max_entries: default_embedding_cache_max_entries(),
             cache_ttl_ms: default_embedding_cache_ttl_ms(),
@@ -202,6 +219,10 @@ impl Default for RetrievalConfig {
             recency_weight: default_recency_weight(),
             length_norm_anchor: default_length_norm_anchor(),
             time_decay_half_life_days: default_time_decay_half_life_days(),
+            reinforcement_factor: default_reinforcement_factor(),
+            max_half_life_multiplier: default_max_half_life_multiplier(),
+            mmr_diversity: default_mmr_diversity(),
+            mmr_similarity_threshold: default_mmr_similarity_threshold(),
             query_expansion: default_query_expansion(),
             filter_noise: default_filter_noise(),
             diagnostics: default_retrieval_diagnostics(),
@@ -293,6 +314,22 @@ fn default_time_decay_half_life_days() -> f64 {
     60.0
 }
 
+fn default_reinforcement_factor() -> f64 {
+    0.5
+}
+
+fn default_max_half_life_multiplier() -> f64 {
+    3.0
+}
+
+fn default_mmr_diversity() -> bool {
+    true
+}
+
+fn default_mmr_similarity_threshold() -> f64 {
+    0.85
+}
+
 fn default_query_expansion() -> bool {
     true
 }
@@ -354,6 +391,25 @@ impl AppConfig {
         if self.providers.embedding.cache_ttl_ms > 86_400_000 {
             anyhow::bail!("providers.embedding.cache_ttl_ms must be <= 86400000");
         }
+        if let Some(task_query) = &self.providers.embedding.task_query {
+            if task_query.trim().is_empty() {
+                anyhow::bail!("providers.embedding.task_query cannot be empty when configured");
+            }
+        }
+        if let Some(task_passage) = &self.providers.embedding.task_passage {
+            if task_passage.trim().is_empty() {
+                anyhow::bail!("providers.embedding.task_passage cannot be empty when configured");
+            }
+        }
+        if embedding_provider != "openai-compatible"
+            && (self.providers.embedding.task_query.is_some()
+                || self.providers.embedding.task_passage.is_some()
+                || self.providers.embedding.normalized.is_some())
+        {
+            anyhow::bail!(
+                "providers.embedding.task_query/task_passage/normalized require providers.embedding.provider = 'openai-compatible'"
+            );
+        }
 
         let rerank_mode = self.providers.rerank.mode.trim();
         if rerank_mode != "none" && rerank_mode != "lightweight" && rerank_mode != "cross-encoder" {
@@ -409,6 +465,15 @@ impl AppConfig {
         }
         if self.retrieval.time_decay_half_life_days <= 0.0 {
             anyhow::bail!("retrieval.time_decay_half_life_days must be > 0");
+        }
+        if !(0.0..=5.0).contains(&self.retrieval.reinforcement_factor) {
+            anyhow::bail!("retrieval.reinforcement_factor must be within [0, 5]");
+        }
+        if !(1.0..=10.0).contains(&self.retrieval.max_half_life_multiplier) {
+            anyhow::bail!("retrieval.max_half_life_multiplier must be within [1, 10]");
+        }
+        if !(0.0..=1.0).contains(&self.retrieval.mmr_similarity_threshold) {
+            anyhow::bail!("retrieval.mmr_similarity_threshold must be within [0, 1]");
         }
         Ok(())
     }

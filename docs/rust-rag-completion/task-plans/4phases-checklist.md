@@ -23,12 +23,16 @@ description: Execution and verification checklist for rust-rag-completion 4-phas
 | 2 | Completed | 100% | Good | 0 |
 | 3 | Completed | 100% | Good | 0 |
 | 4 | Completed | 100% | Good | 0 |
+| 5 | Completed | 100% | Good | 0 |
+| 6 | Completed | 100% | Good | 0 |
 
 ## Phase Entry Links
 1. [phase-1-rust-rag-completion.md](/root/verify/memory-lancedb-pro-context-engine-split/docs/rust-rag-completion/task-plans/phase-1-rust-rag-completion.md)
 2. [phase-2-rust-rag-completion.md](/root/verify/memory-lancedb-pro-context-engine-split/docs/rust-rag-completion/task-plans/phase-2-rust-rag-completion.md)
 3. [phase-3-rust-rag-completion.md](/root/verify/memory-lancedb-pro-context-engine-split/docs/rust-rag-completion/task-plans/phase-3-rust-rag-completion.md)
 4. [phase-4-rust-rag-completion.md](/root/verify/memory-lancedb-pro-context-engine-split/docs/rust-rag-completion/task-plans/phase-4-rust-rag-completion.md)
+5. [phase-5-rust-rag-completion.md](/root/verify/memory-lancedb-pro-context-engine-split/docs/rust-rag-completion/task-plans/phase-5-rust-rag-completion.md)
+6. [phase-6-rust-rag-completion.md](/root/verify/memory-lancedb-pro-context-engine-split/docs/rust-rag-completion/task-plans/phase-6-rust-rag-completion.md)
 
 ## Phase Execution Records
 
@@ -178,6 +182,159 @@ description: Execution and verification checklist for rust-rag-completion 4-phas
   - retrieval diagnostics are currently log-based internal hooks only; no dedicated admin trace surface exists yet.
   - key rotation/failover seam is implemented for embedding provider path; rerank provider key rotation remains deferred.
   - advanced TS access-reinforcement telemetry parity remains partially deferred (Rust has ranking/recency/decay controls but not full TS telemetry snapshot surface).
+- Checkpoint confirmed: yes
+
+### 2026-03-16 parity reprioritization and Phase 5 reopen
+- Phase: 5
+- Batch date: 2026-03-16
+- Completed tasks:
+  - re-audited the current local `dev/context-engine-split` worktree against historical TS authority files from `eec1fa6^`
+  - ranked remaining gaps into P0/P1/P2 in `docs/rust-rag-completion/rust-rag-parity-gap-priority.md`
+  - reopened execution scope with `docs/rust-rag-completion/task-plans/phase-5-rust-rag-completion.md`
+- Evidence commands:
+  - `cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -- --nocapture`
+  - `git show eec1fa6^:src/retriever.ts`
+  - `git show eec1fa6^:src/embedder.ts`
+- Evidence results:
+  - backend contract suite: pass (26 passed, 0 failed)
+  - historical TS reference review: confirmed remaining gaps are now mainly chunking recovery, rerank key failover, and structured diagnostics
+- Issues/blockers:
+  - none at reopen time; implementation delegated next
+- Resolutions:
+  - treat P0/P1 as active implementation scope and defer P2 unless near-free during closeout
+- Residual risks:
+  - P0/P1 implementation not yet landed in this entry
+- Checkpoint confirmed: yes
+
+### 2026-03-16 phase-5 parity closeout (P0/P1)
+- Phase: 5
+- Batch date: 2026-03-16
+- Completed tasks:
+  - landed provider-backed long-text embedding context-limit recovery in `backend/src/state.rs` with safe chunk splitting + chunk-vector averaging.
+  - landed rerank provider multi-key rotation with deterministic retry/failover on retryable auth/rate-limit/service/transport errors while preserving lightweight fallback semantics.
+  - replaced retrieval-path ad-hoc diagnostic prints with structured internal JSON diagnostics for seed fallback stages, rerank attempt/fallback reasons, and retrieval summary counts.
+  - added focused parity-closeout tests in `backend/tests/phase2_contract_semantics.rs`:
+    - `openai_compatible_embedding_context_limit_recovers_with_chunking`
+    - `openai_compatible_embedding_context_limit_recovery_failure_returns_upstream_error`
+    - `rerank_provider_rotates_keys_and_fails_over_on_auth_error`
+    - `rerank_provider_does_not_rotate_on_non_retryable_error`
+    - `retrieval_diagnostics_enabled_does_not_leak_internal_fields_to_v1_rows`
+- Evidence commands:
+  - `cargo fmt --manifest-path backend/Cargo.toml`
+  - `cargo check --manifest-path backend/Cargo.toml`
+  - `cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -- --nocapture`
+  - `cargo test --manifest-path backend/Cargo.toml`
+  - `bash /root/.openclaw/workspace/skills/repo-task-driven/scripts/doc_placeholder_scan.sh docs/rust-rag-completion`
+  - `bash /root/.openclaw/workspace/skills/repo-task-driven/scripts/post_refactor_text_scan.sh docs/rust-rag-completion README.md`
+- Evidence results:
+  - `cargo fmt`: pass
+  - `cargo check`: pass (non-blocking pre-existing warning remains: `ErrorCode::RateLimited` is never constructed)
+  - `cargo test --test phase2_contract_semantics`: pass (31 passed, 0 failed)
+  - `cargo test`: pass (31 passed, 0 failed)
+  - `doc_placeholder_scan.sh`: pass (`[OK] placeholder scan clean`)
+  - `post_refactor_text_scan.sh`: pass (`[OK] post-refactor text scan passed`)
+- Issues/blockers:
+  - none
+- Resolutions:
+  - completed only P0/P1 scope and kept P2 as explicit deferred backlog.
+- Residual risks:
+  - no blocked P1 work remains in this batch.
+  - deferred P2 items:
+    - access-reinforcement-aware time decay parity
+    - backend-level diversity/MMR parity
+    - provider-specific embedding tuning knobs (`taskQuery`, `taskPassage`, `normalized`)
+- Checkpoint confirmed: yes
+
+### 2026-03-16 phase-6 reopen for deferred P2 work
+- Phase: 6
+- Batch date: 2026-03-16
+- Completed tasks:
+  - confirmed Phase 5 P0/P1 closeout passed reviewer verification against repo diff and Codex verification artifacts
+  - reopened deferred backlog as explicit Phase 6 scope in `docs/rust-rag-completion/task-plans/phase-6-rust-rag-completion.md`
+- Evidence commands:
+  - `git diff -- backend/src/state.rs backend/tests/phase2_contract_semantics.rs docs/rust-rag-completion/task-plans/4phases-checklist.md`
+  - `cat /root/.openclaw/workspace/memory/codex-runs/20260316T045909Z-memory-lancedb-pro-context-engine-split-write.summary.txt`
+  - `cat /root/.openclaw/workspace/memory/codex-runs/20260316T045909Z-memory-lancedb-pro-context-engine-split-write.verify.log`
+- Evidence results:
+  - Phase 5 completion confirmed: P0/P1 behavior landed and verification passed (31 tests, 0 failed)
+- Issues/blockers:
+  - none at reopen time; P2 implementation delegated next
+- Resolutions:
+  - treat P2 as the only active scope for the next Codex continuation run
+- Residual risks:
+  - P2 work not yet landed in this entry
+- Checkpoint confirmed: yes
+
+### 2026-03-16 phase-6 deferred P2 closeout
+- Phase: 6
+- Batch date: 2026-03-16
+- Completed tasks:
+  - landed access-reinforcement-aware time decay parity in `backend/src/state.rs` with bounded access metadata fields (`access_count`, `last_accessed_at`) and capped effective half-life extension.
+  - landed backend deterministic MMR diversity pass in `backend/src/state.rs` using `retrieval.mmr_diversity` + `retrieval.mmr_similarity_threshold` before final top-k truncation.
+  - landed provider-specific embedding tuning knobs in `backend/src/config.rs` + `backend/src/state.rs`:
+    - `providers.embedding.task_query` (`taskQuery` alias)
+    - `providers.embedding.task_passage` (`taskPassage` alias)
+    - `providers.embedding.normalized`
+    - conservative provider-compatibility request shaping (send only when assumptions are compatible).
+  - added focused P2 contract tests in `backend/tests/phase2_contract_semantics.rs`:
+    - `access_reinforcement_extends_time_decay_for_old_memories`
+    - `access_reinforcement_respects_max_half_life_multiplier_bound`
+    - `mmr_diversity_reduces_duplicate_topk_deterministically`
+    - `embedding_tuning_knobs_are_sent_for_compatible_provider_assumptions`
+    - `embedding_tuning_knobs_are_omitted_when_provider_contract_is_not_compatible`
+- Evidence commands:
+  - `cargo fmt --manifest-path backend/Cargo.toml`
+  - `cargo check --manifest-path backend/Cargo.toml`
+  - `cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -- --nocapture`
+  - `cargo test --manifest-path backend/Cargo.toml`
+  - `bash /root/.openclaw/workspace/skills/repo-task-driven/scripts/doc_placeholder_scan.sh docs/rust-rag-completion`
+  - `bash /root/.openclaw/workspace/skills/repo-task-driven/scripts/post_refactor_text_scan.sh docs/rust-rag-completion README.md`
+- Evidence results:
+  - `cargo fmt`: pass
+  - `cargo check`: pass (non-blocking pre-existing warning remains: `ErrorCode::RateLimited` is never constructed)
+  - `cargo test --test phase2_contract_semantics`: pass (36 passed, 0 failed)
+  - `cargo test`: pass (36 passed, 0 failed)
+  - `doc_placeholder_scan.sh`: pass (`[OK] placeholder scan clean`)
+  - `post_refactor_text_scan.sh`: pass (`[OK] post-refactor text scan passed`)
+- Issues/blockers:
+  - none
+- Resolutions:
+  - all deferred P2 parity items were closed in this batch without DTO boundary drift.
+- Residual risks:
+  - no remaining deferred P2 parity items in active rust-rag scope.
+- Checkpoint confirmed: yes
+
+### 2026-03-16 phase-6 blocker remediation (review follow-up)
+- Phase: 6
+- Batch date: 2026-03-16
+- Completed tasks:
+  - validated and re-closed reviewer-confirmed blocker for embedding cache write+recall reuse:
+    - `OpenAiCompatibleEmbedder` cache reuse path remains shared across store and recall;
+    - cache keying stays aligned to effective request shape (model/dimensions/effective tuning markers + text digest) to avoid duplicate upstream calls for identical inputs.
+  - validated and re-closed reviewer-confirmed blocker for deterministic MMR output:
+    - final ranking before diversity uses deterministic tie-breakers (`score`, `updated_at`, `id`);
+    - diversity pass preserves deterministic selection and defer ordering across repeated recalls.
+- Evidence commands:
+  - `cargo fmt --manifest-path backend/Cargo.toml`
+  - `cargo check --manifest-path backend/Cargo.toml`
+  - `cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics embedding_provider_cache_reuses_vectors_across_write_and_recall -- --exact --nocapture`
+  - `cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics mmr_diversity_reduces_duplicate_topk_deterministically -- --exact --nocapture`
+  - `cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -- --nocapture`
+  - `cargo test --manifest-path backend/Cargo.toml`
+  - `bash /root/.openclaw/workspace/skills/repo-task-driven/scripts/doc_placeholder_scan.sh docs/rust-rag-completion`
+  - `bash /root/.openclaw/workspace/skills/repo-task-driven/scripts/post_refactor_text_scan.sh docs/rust-rag-completion README.md`
+- Evidence results:
+  - blocker exact test (cache): pass (1 passed, 0 failed)
+  - blocker exact test (MMR): pass (1 passed, 0 failed)
+  - `phase2_contract_semantics`: pass (36 passed, 0 failed)
+  - full backend tests: pass (36 passed, 0 failed)
+  - docs scans: pass (`[OK] placeholder scan clean`, `[OK] post-refactor text scan passed`)
+- Issues/blockers:
+  - none
+- Resolutions:
+  - both reviewer blockers are now verified green with targeted exact tests plus full regression suite.
+- Residual risks:
+  - no deferred Phase 6 P2 work remains after blocker remediation.
 - Checkpoint confirmed: yes
 
 ## Final Release Gate
