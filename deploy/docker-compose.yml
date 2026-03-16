@@ -9,8 +9,8 @@ services:
       - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
     volumes:
       - ./backend.toml:/etc/memory-lancedb-pro-backend/backend.toml:ro
-      - ../../data/memory-lancedb-pro-backend/lancedb:/var/lib/memory-lancedb-pro-backend/lancedb
-      - ../../data/memory-lancedb-pro-backend/sqlite:/var/lib/memory-lancedb-pro-backend/sqlite
+      - ../data/memory-lancedb-pro-backend/lancedb:/var/lib/memory-lancedb-pro-backend/lancedb
+      - ../data/memory-lancedb-pro-backend/sqlite:/var/lib/memory-lancedb-pro-backend/sqlite
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/v1/health"]
       interval: 15s

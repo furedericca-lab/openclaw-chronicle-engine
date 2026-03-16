@@ -39,7 +39,7 @@ From the repository root:
 
 ```bash
 docker build \
-  -f deploy/memory-lancedb-pro-backend/Dockerfile \
+  -f deploy/Dockerfile \
   -t memory-lancedb-pro-backend:local \
   .
 ```
@@ -49,17 +49,17 @@ docker build \
 Prepare the runtime config:
 
 ```bash
-cp deploy/memory-lancedb-pro-backend/backend.toml.example \
-  deploy/memory-lancedb-pro-backend/backend.toml
+cp deploy/backend.toml.example \
+  deploy/backend.toml
 mkdir -p data/memory-lancedb-pro-backend/lancedb
 mkdir -p data/memory-lancedb-pro-backend/sqlite
-chmod 600 deploy/memory-lancedb-pro-backend/backend.toml
+chmod 600 deploy/backend.toml
 ```
 
 Run:
 
 ```bash
-docker compose -f deploy/memory-lancedb-pro-backend/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml up -d
 ```
 
 Health check:

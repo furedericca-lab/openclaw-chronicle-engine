@@ -5,7 +5,7 @@ on:
   pull_request:
     paths:
       - "backend/**"
-      - "deploy/memory-lancedb-pro-backend/**"
+      - "deploy/**"
       - ".github/workflows/docker-backend.yml"
   push:
     branches:
@@ -14,7 +14,7 @@ on:
       - "v*"
     paths:
       - "backend/**"
-      - "deploy/memory-lancedb-pro-backend/**"
+      - "deploy/**"
       - ".github/workflows/docker-backend.yml"
 
 permissions:
@@ -78,7 +78,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: deploy/memory-lancedb-pro-backend/Dockerfile
+          file: deploy/Dockerfile
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
