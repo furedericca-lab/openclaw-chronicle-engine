@@ -1,4 +1,4 @@
-import type { MemoryEntry } from "./store.js";
+import type { MemoryEntry } from "./memory-record-types.js";
 import {
   extractReflectionSliceItems,
   extractReflectionSlices,

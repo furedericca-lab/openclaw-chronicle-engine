@@ -16,8 +16,10 @@ const { parsePluginConfig } = jiti("../index.ts");
 
 function baseConfig() {
   return {
-    embedding: {
-      apiKey: "test-api-key",
+    remoteBackend: {
+      enabled: true,
+      baseURL: "http://backend.test",
+      authToken: "token-test",
     },
   };
 }
@@ -53,17 +55,6 @@ describe("sessionStrategy legacy compatibility mapping", () => {
     assert.equal(parsed.sessionStrategy, "systemSessionMemory");
   });
 
-  it("preserves embedding.chunking when explicitly configured", () => {
-    const parsed = parsePluginConfig({
-      ...baseConfig(),
-      embedding: {
-        ...baseConfig().embedding,
-        chunking: false,
-      },
-    });
-    assert.equal(parsed.embedding.chunking, false);
-  });
-
   it("defaults generic auto-recall selection mode to mmr", () => {
     const parsed = parsePluginConfig(baseConfig());
     assert.equal(parsed.autoRecallSelectionMode, "mmr");
@@ -73,14 +64,6 @@ describe("sessionStrategy legacy compatibility mapping", () => {
     const parsed = parsePluginConfig({
       ...baseConfig(),
       autoRecallSelectionMode: "mmr",
-    });
-    assert.equal(parsed.autoRecallSelectionMode, "mmr");
-  });
-
-  it("normalizes legacy generic auto-recall selection mode to mmr", () => {
-    const parsed = parsePluginConfig({
-      ...baseConfig(),
-      autoRecallSelectionMode: "legacy",
     });
     assert.equal(parsed.autoRecallSelectionMode, "mmr");
   });

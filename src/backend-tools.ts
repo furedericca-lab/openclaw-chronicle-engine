@@ -12,7 +12,8 @@ import {
   registerSelfImprovementExtractSkillTool,
   registerSelfImprovementLogTool,
   registerSelfImprovementReviewTool,
-} from "./tools.js";
+  type SelfImprovementToolContext,
+} from "./self-improvement-tools.js";
 
 const MEMORY_CATEGORIES = [
   "preference",
@@ -49,7 +50,7 @@ export function registerRemoteMemoryTools(
     registerMemoryListTool(api, context);
   }
   if (options.enableSelfImprovementTools !== false) {
-    const passthroughCtx = { workspaceDir: options.defaultWorkspaceDir } as any;
+    const passthroughCtx: SelfImprovementToolContext = { workspaceDir: options.defaultWorkspaceDir };
     registerSelfImprovementLogTool(api, passthroughCtx);
     if (options.enableManagementTools) {
       registerSelfImprovementExtractSkillTool(api, passthroughCtx);

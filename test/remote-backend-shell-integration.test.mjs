@@ -48,7 +48,6 @@ function makeTempRoot() {
 
 function makeRemoteConfig(root, overrides = {}) {
   const base = {
-    dbPath: path.join(root, "memory-db"),
     autoCapture: true,
     sessionStrategy: "none",
     selfImprovement: { enabled: false },
@@ -230,10 +229,10 @@ describe("remote backend shell integration", () => {
     assert.equal(parsed.embedding, undefined);
   });
 
-  it("rejects local mode config without embedding at parse-time with a clear mode-aware error", () => {
+  it("rejects config when remoteBackend.enabled is not true", () => {
     assert.throws(
       () => parsePluginConfig({ autoCapture: true }),
-      /embedding config is required when remoteBackend is disabled \(local mode\)/
+      /remoteBackend\.enabled=true is required; local-authority runtime has been removed/
     );
   });
 

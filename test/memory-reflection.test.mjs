@@ -8,7 +8,6 @@ import jitiFactory from "jiti";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const pluginSdkStubPath = path.resolve(testDir, "helpers", "openclaw-plugin-sdk-stub.mjs");
-const extensionApiStubPath = path.resolve(testDir, "helpers", "openclaw-extension-api-stub.mjs");
 const jiti = jitiFactory(import.meta.url, {
   interopDefault: true,
   alias: {
@@ -19,7 +18,6 @@ const jiti = jitiFactory(import.meta.url, {
 const pluginModule = jiti("../index.ts");
 const memoryLanceDBProPlugin = pluginModule.default || pluginModule;
 const { readSessionConversationWithResetFallback, parsePluginConfig } = pluginModule;
-const { MemoryStore } = jiti("../src/store.ts");
 const { getDisplayCategoryTag } = jiti("../src/reflection-metadata.ts");
 const {
   classifyReflectionRetry,
@@ -59,7 +57,6 @@ const {
 } = jiti("../src/reflection-item-store.ts");
 const { buildReflectionMappedMetadata } = jiti("../src/reflection-mapped-metadata.ts");
 const { REFLECTION_FALLBACK_SCORE_FACTOR, computeReflectionScore } = jiti("../src/reflection-ranking.ts");
-const { MemoryRetriever } = jiti("../src/retriever.ts");
 
 function messageLine(role, text, ts) {
   return JSON.stringify({
@@ -87,8 +84,10 @@ function makeEntry({ timestamp, metadata, category = "reflection", scope = "glob
 
 function baseConfig() {
   return {
-    embedding: {
-      apiKey: "test-api-key",
+    remoteBackend: {
+      enabled: true,
+      baseURL: "http://backend.test",
+      authToken: "token-test",
     },
   };
 }
@@ -1904,554 +1903,6 @@ describe("memory reflection", () => {
     });
   });
 
-  describe("memoryReflection injectMode inheritance+derived hook flow", () => {
-    let workspaceDir;
-    let sessionFile;
-    let originalList;
-    let originalExtensionApiPath;
-    let harness;
-
-    beforeEach(() => {
-      workspaceDir = mkdtempSync(path.join(tmpdir(), "reflection-hook-flow-test-"));
-      const sessionsDir = path.join(workspaceDir, "sessions");
-      mkdirSync(sessionsDir, { recursive: true });
-      sessionFile = path.join(sessionsDir, "s1.jsonl");
-      writeFileSync(
-        sessionFile,
-        [
-          messageLine("user", "Please keep responses concise and verify test output.", 1),
-          messageLine("assistant", "Acknowledged. I will keep responses concise and verify output.", 2),
-        ].join("\n") + "\n",
-        "utf-8"
-      );
-
-      originalList = MemoryStore.prototype.list;
-      originalExtensionApiPath = process.env.OPENCLAW_EXTENSION_API_PATH;
-      process.env.OPENCLAW_EXTENSION_API_PATH = extensionApiStubPath;
-
-      const now = Date.UTC(2026, 2, 8, 12, 0, 0);
-      const day = 24 * 60 * 60 * 1000;
-      const reflectionEntries = [
-        makeEntry({
-          timestamp: now - 1 * day,
-          metadata: {
-            type: "memory-reflection-item",
-            itemKind: "invariant",
-            agentId: "main",
-            storedAt: now - 1 * day,
-            decayMidpointDays: 45,
-            decayK: 0.22,
-            baseWeight: 1.1,
-            quality: 1,
-          },
-        }),
-        makeEntry({
-          timestamp: now - 1 * day,
-          metadata: {
-            type: "memory-reflection-item",
-            itemKind: "derived",
-            agentId: "main",
-            storedAt: now - 1 * day,
-            decayMidpointDays: 7,
-            decayK: 0.65,
-            baseWeight: 1,
-            quality: 1,
-          },
-        }),
-        makeEntry({
-          timestamp: now - 45 * day,
-          metadata: {
-            type: "memory-reflection-item",
-            itemKind: "derived",
-            agentId: "main",
-            storedAt: now - 45 * day,
-            decayMidpointDays: 7,
-            decayK: 0.65,
-            baseWeight: 1,
-            quality: 1,
-          },
-        }),
-      ];
-      reflectionEntries[0].text = "Always verify edits before reporting completion.";
-      reflectionEntries[1].text = "Historical derived focus that remains relevant.";
-      reflectionEntries[2].text = "Historical stale follow-up should be filtered.";
-      MemoryStore.prototype.list = async () => reflectionEntries;
-
-      harness = createPluginApiHarness({
-        resolveRoot: workspaceDir,
-        pluginConfig: {
-          embedding: {
-            apiKey: "test-api-key",
-          },
-          autoCapture: false,
-          autoRecall: false,
-          sessionStrategy: "memoryReflection",
-          selfImprovement: {
-            enabled: true,
-            beforeResetNote: true,
-            ensureLearningFiles: false,
-          },
-          memoryReflection: {
-            injectMode: "inheritance+derived",
-            storeToLanceDB: false,
-          },
-        },
-      });
-      memoryLanceDBProPlugin.register(harness.api);
-    });
-
-    afterEach(() => {
-      MemoryStore.prototype.list = originalList;
-      if (typeof originalExtensionApiPath === "string") {
-        process.env.OPENCLAW_EXTENSION_API_PATH = originalExtensionApiPath;
-      } else {
-        delete process.env.OPENCLAW_EXTENSION_API_PATH;
-      }
-      rmSync(workspaceDir, { recursive: true, force: true });
-    });
-
-    it("injects inherited-rules in before_prompt_build and builds note with fresh open-loops + historical derived-focus", async () => {
-      const beforePromptHooks = harness.eventHandlers.get("before_prompt_build") || [];
-      assert.equal(beforePromptHooks.length, 1);
-      const inheritedResult = await beforePromptHooks[0].handler({}, {
-        sessionKey: "agent:main:session:s1",
-        agentId: "main",
-      });
-      assert.match(inheritedResult.prependContext, /<inherited-rules>/);
-      assert.doesNotMatch(inheritedResult.prependContext, /<derived-focus>/);
-
-      const commandNewHooks = harness.commandHooks.get("command:new") || [];
-      assert.equal(commandNewHooks.length, 1);
-      assert.match(String(commandNewHooks[0].meta?.name || ""), /memory-reflection\.command-new/);
-
-      const messages = [];
-      await commandNewHooks[0].handler({
-        action: "new",
-        sessionKey: "agent:main:session:s1",
-        timestamp: Date.UTC(2026, 2, 8, 12, 0, 0),
-        messages,
-        context: {
-          cfg: {},
-          workspaceDir,
-          commandSource: "cli",
-          previousSessionEntry: {
-            sessionId: "s1",
-            sessionFile,
-          },
-        },
-      });
-      assert.equal(messages.length, 1);
-      assert.match(messages[0], /^\/note self-improvement \(before reset\):/);
-      assert.match(messages[0], /<open-loops>/);
-      assert.match(messages[0], /Verify current reflection handoff after reset\./);
-      const openLoopsBlock = messages[0].match(/<open-loops>[\s\S]*?<\/open-loops>/);
-      assert.ok(openLoopsBlock);
-      assert.doesNotMatch(openLoopsBlock[0], /Historical derived focus that remains relevant\./);
-      assert.match(messages[0], /<derived-focus>/);
-      assert.match(messages[0], /Historical derived focus that remains relevant\./);
-      assert.doesNotMatch(messages[0], /Historical stale follow-up should be filtered\./);
-    });
-
-    it("keeps error-detected in before_prompt_build and coexists with inherited-rules", async () => {
-      const afterToolHooks = harness.eventHandlers.get("after_tool_call") || [];
-      const beforePromptHooks = harness.eventHandlers.get("before_prompt_build") || [];
-      assert.equal(afterToolHooks.length, 1);
-      assert.equal(beforePromptHooks.length, 1);
-
-      await afterToolHooks[0].handler(
-        { toolName: "shell", error: "ETIMEDOUT while contacting upstream" },
-        { sessionKey: "agent:main:session:s1" }
-      );
-
-      const promptResult = await beforePromptHooks[0].handler({}, {
-        sessionKey: "agent:main:session:s1",
-        agentId: "main",
-      });
-      assert.match(promptResult.prependContext, /<inherited-rules>/);
-      assert.match(promptResult.prependContext, /<error-detected>/);
-      assert.match(promptResult.prependContext, /\[shell\]/);
-      assert.doesNotMatch(promptResult.prependContext, /<derived-focus>/);
-    });
-  });
-
-  describe("reflection-recall and auto-recall coexistence", () => {
-    let workspaceDir;
-    let originalList;
-    let originalRetrieve;
-    let harness;
-
-    beforeEach(() => {
-      workspaceDir = mkdtempSync(path.join(tmpdir(), "reflection-recall-dynamic-test-"));
-      originalList = MemoryStore.prototype.list;
-      originalRetrieve = MemoryRetriever.prototype.retrieve;
-
-      const now = Date.UTC(2026, 2, 8, 12, 0, 0);
-      const day = 24 * 60 * 60 * 1000;
-      const reflectionEntries = Array.from({ length: 8 }, (_, i) =>
-        makeEntry({
-          timestamp: now - i * day,
-          metadata: {
-            type: "memory-reflection-item",
-            itemKind: "invariant",
-            agentId: "main",
-            storedAt: now - i * day,
-            decayMidpointDays: 45,
-            decayK: 0.22,
-            baseWeight: 1.1,
-            quality: 1,
-          },
-        })
-      );
-      reflectionEntries.forEach((entry, idx) => {
-        entry.text = `Dynamic reflection rule ${idx + 1}`;
-      });
-      MemoryStore.prototype.list = async (_scopeFilter, category) => {
-        if (category === "reflection") return reflectionEntries;
-        return reflectionEntries;
-      };
-
-      MemoryRetriever.prototype.retrieve = async () => [
-        {
-          entry: {
-            id: "auto-fact-1",
-            text: "User prefers concise incident updates.",
-            category: "fact",
-            scope: "global",
-            timestamp: now - 1 * day,
-            vector: [],
-            importance: 0.8,
-            metadata: "{}",
-          },
-          score: 0.91,
-          sources: {},
-        },
-        {
-          entry: {
-            id: "auto-reflection-1",
-            text: "Reflection row that should stay out of relevant-memories.",
-            category: "reflection",
-            scope: "global",
-            timestamp: now - 1 * day,
-            vector: [],
-            importance: 0.8,
-            metadata: "{}",
-          },
-          score: 0.88,
-          sources: {},
-        },
-        {
-          entry: {
-            id: "auto-decision-1",
-            text: "Decide to verify services after config edits.",
-            category: "decision",
-            scope: "global",
-            timestamp: now - 2 * day,
-            vector: [],
-            importance: 0.8,
-            metadata: "{}",
-          },
-          score: 0.85,
-          sources: {},
-        },
-      ];
-
-      harness = createPluginApiHarness({
-        resolveRoot: workspaceDir,
-        pluginConfig: {
-          embedding: { apiKey: "test-api-key" },
-          autoCapture: false,
-          autoRecall: true,
-          autoRecallTopK: 2,
-          autoRecallExcludeReflection: true,
-          autoRecallMinLength: 6,
-          sessionStrategy: "memoryReflection",
-          selfImprovement: {
-            enabled: false,
-            beforeResetNote: false,
-            ensureLearningFiles: false,
-          },
-          memoryReflection: {
-            injectMode: "inheritance-only",
-            storeToLanceDB: false,
-            recall: {
-              mode: "dynamic",
-              topK: 4,
-              includeKinds: ["invariant"],
-              maxAgeDays: 45,
-              maxEntriesPerKey: 10,
-              minRepeated: 2,
-              minScore: 0,
-              minPromptLength: 6,
-            },
-          },
-        },
-      });
-      memoryLanceDBProPlugin.register(harness.api);
-    });
-
-    afterEach(() => {
-      MemoryStore.prototype.list = originalList;
-      MemoryRetriever.prototype.retrieve = originalRetrieve;
-      rmSync(workspaceDir, { recursive: true, force: true });
-    });
-
-    it("keeps fixed inherited-rules compatibility even when autoRecall is enabled", async () => {
-      const fixedHarness = createPluginApiHarness({
-        resolveRoot: workspaceDir,
-        pluginConfig: {
-          embedding: { apiKey: "test-api-key" },
-          autoCapture: false,
-          autoRecall: true,
-          autoRecallTopK: 1,
-          sessionStrategy: "memoryReflection",
-          selfImprovement: { enabled: false, beforeResetNote: false, ensureLearningFiles: false },
-          memoryReflection: {
-            injectMode: "inheritance-only",
-            storeToLanceDB: false,
-            recall: { mode: "fixed" },
-          },
-        },
-      });
-      memoryLanceDBProPlugin.register(fixedHarness.api);
-
-      const autoRecallHooks = fixedHarness.eventHandlers.get("before_agent_start") || [];
-      assert.equal(autoRecallHooks.length, 1);
-      const promptHooks = fixedHarness.eventHandlers.get("before_prompt_build") || [];
-      assert.equal(promptHooks.length, 1);
-      const inherited = await promptHooks[0].handler(
-        { prompt: "Please recall relevant constraints for this task." },
-        { sessionId: "fixed-s1", sessionKey: "agent:main:session:fixed-s1", agentId: "main" }
-      );
-      assert.ok(inherited);
-      assert.match(inherited.prependContext, /Dynamic reflection rule 1|Stable rules inherited from memory-lancedb-pro reflections\./);
-    });
-
-    it("keeps dynamic reflection top-k independent from relevant-memories top-k and excludes reflection rows from auto-recall", async () => {
-      const beforeAgentStartHooks = harness.eventHandlers.get("before_agent_start") || [];
-      const beforePromptHooks = harness.eventHandlers.get("before_prompt_build") || [];
-      assert.equal(beforeAgentStartHooks.length, 1);
-      assert.equal(beforePromptHooks.length, 1);
-
-      const relevant = await beforeAgentStartHooks[0].handler(
-        { prompt: "Need a concise plan and recall prior decisions for this deploy?" },
-        { sessionId: "s-dyn", sessionKey: "agent:main:session:s-dyn", agentId: "main" }
-      );
-      const inherited = await beforePromptHooks[0].handler(
-        { prompt: "Need a concise plan and recall prior decisions for this deploy?" },
-        { sessionId: "s-dyn", sessionKey: "agent:main:session:s-dyn", agentId: "main" }
-      );
-      assert.ok(relevant);
-      assert.ok(inherited);
-
-      const relevantCount = (relevant.prependContext.match(/^- \[/gm) || []).length;
-      const inheritedCount = (inherited.prependContext.match(/^\d+\.\s/gm) || []).length;
-      assert.equal(relevantCount, 2);
-      assert.equal(inheritedCount, 4);
-
-      assert.doesNotMatch(relevant.prependContext, /auto-reflection-1|Reflection row that should stay out of relevant-memories\./);
-      assert.match(relevant.prependContext, /User prefers concise incident updates\./);
-      assert.match(relevant.prependContext, /Decide to verify services after config edits\./);
-      assert.match(inherited.prependContext, /Dynamic reflection rule 1/);
-    });
-
-    it("lets ordinary follow-up prompts receive inherited-rules via before_prompt_build", async () => {
-      const beforePromptHooks = harness.eventHandlers.get("before_prompt_build") || [];
-      assert.equal(beforePromptHooks.length, 1);
-
-      const followUp = await beforePromptHooks[0].handler(
-        { prompt: "继续按这个方案改，并给我步骤" },
-        { sessionId: "s-follow-up", sessionKey: "agent:main:session:s-follow-up", agentId: "main" }
-      );
-
-      assert.ok(followUp);
-      assert.match(followUp.prependContext, /<inherited-rules>/);
-      assert.match(followUp.prependContext, /Dynamic reflection rule 1/);
-    });
-
-    it("uses the shared skip gate to suppress both auto-recall and reflection recall on control prompts", async () => {
-      const beforeAgentStartHooks = harness.eventHandlers.get("before_agent_start") || [];
-      const beforePromptHooks = harness.eventHandlers.get("before_prompt_build") || [];
-      assert.equal(beforeAgentStartHooks.length, 1);
-      assert.equal(beforePromptHooks.length, 1);
-
-      const controlPrompts = [
-        "/new",
-        "/reset",
-        "A new session was started via /new or /reset. Keep this in mind.",
-        "Execute your Session Startup sequence now before continuing.",
-        "Control wrapper line\n/note self-improvement (before reset): preserve incident timeline.",
-      ];
-
-      for (const prompt of controlPrompts) {
-        const relevant = await beforeAgentStartHooks[0].handler(
-          { prompt },
-          { sessionId: `auto-${prompt.length}`, sessionKey: `agent:main:session:auto-${prompt.length}`, agentId: "main" }
-        );
-        const inherited = await beforePromptHooks[0].handler(
-          { prompt },
-          { sessionId: `reflect-${prompt.length}`, sessionKey: `agent:main:session:reflect-${prompt.length}`, agentId: "main" }
-        );
-
-        assert.equal(relevant, undefined, `expected auto-recall to skip control prompt: ${prompt}`);
-        assert.equal(inherited, undefined, `expected reflection recall to skip control prompt: ${prompt}`);
-      }
-    });
-  });
-
-  describe("generic auto-recall selection mode compatibility", () => {
-    let workspaceDir;
-    let originalRetrieve;
-    const now = Date.UTC(2026, 2, 8, 12, 0, 0);
-    const day = 24 * 60 * 60 * 1000;
-
-    beforeEach(() => {
-      workspaceDir = mkdtempSync(path.join(tmpdir(), "generic-auto-recall-selection-mode-test-"));
-      originalRetrieve = MemoryRetriever.prototype.retrieve;
-    });
-
-    afterEach(() => {
-      MemoryRetriever.prototype.retrieve = originalRetrieve;
-      rmSync(workspaceDir, { recursive: true, force: true });
-    });
-
-    function buildGenericRecallRows() {
-      return [
-        {
-          entry: {
-            id: "dup-1",
-            text: "Restart API service after config updates.",
-            category: "fact",
-            scope: "global",
-            timestamp: now - 1 * day,
-            vector: [],
-            importance: 0.8,
-            metadata: "{}",
-          },
-          score: 0.99,
-          sources: {},
-        },
-        {
-          entry: {
-            id: "dup-2",
-            text: "restart api service after config updates.",
-            category: "fact",
-            scope: "global",
-            timestamp: now - 2 * day,
-            vector: [],
-            importance: 0.8,
-            metadata: "{}",
-          },
-          score: 0.97,
-          sources: {},
-        },
-        {
-          entry: {
-            id: "alt-1",
-            text: "Run DNS and mount health checks after restart.",
-            category: "decision",
-            scope: "global",
-            timestamp: now - 1 * day,
-            vector: [],
-            importance: 0.8,
-            metadata: "{}",
-          },
-          score: 0.65,
-          sources: {},
-        },
-      ];
-    }
-
-    it("mmr mode bypasses set-wise selector and uses direct truncation", async () => {
-      MemoryRetriever.prototype.retrieve = async () => buildGenericRecallRows();
-
-      const harness = createPluginApiHarness({
-        resolveRoot: workspaceDir,
-        pluginConfig: {
-          embedding: { apiKey: "test-api-key" },
-          autoCapture: false,
-          autoRecall: true,
-          autoRecallTopK: 2,
-          autoRecallSelectionMode: "mmr",
-          autoRecallMinLength: 1,
-          selfImprovement: { enabled: false, beforeResetNote: false, ensureLearningFiles: false },
-        },
-      });
-      memoryLanceDBProPlugin.register(harness.api);
-
-      const hooks = harness.eventHandlers.get("before_agent_start") || [];
-      assert.equal(hooks.length, 1);
-      const output = await hooks[0].handler(
-        { prompt: "Need rollout memories now." },
-        { sessionId: "mmr-mode", sessionKey: "agent:main:session:mmr-mode", agentId: "main" }
-      );
-      assert.ok(output);
-      assert.match(output.prependContext, /<relevant-memories>/);
-      assert.match(output.prependContext, /Restart API service after config updates\./);
-      assert.match(output.prependContext, /restart api service after config updates\./);
-      assert.doesNotMatch(output.prependContext, /Run DNS and mount health checks after restart\./);
-    });
-
-    it("legacy alias follows the same direct-truncation path as mmr", async () => {
-      MemoryRetriever.prototype.retrieve = async () => buildGenericRecallRows();
-
-      const harness = createPluginApiHarness({
-        resolveRoot: workspaceDir,
-        pluginConfig: {
-          embedding: { apiKey: "test-api-key" },
-          autoCapture: false,
-          autoRecall: true,
-          autoRecallTopK: 2,
-          autoRecallSelectionMode: "legacy",
-          autoRecallMinLength: 1,
-          selfImprovement: { enabled: false, beforeResetNote: false, ensureLearningFiles: false },
-        },
-      });
-      memoryLanceDBProPlugin.register(harness.api);
-
-      const hooks = harness.eventHandlers.get("before_agent_start") || [];
-      assert.equal(hooks.length, 1);
-      const output = await hooks[0].handler(
-        { prompt: "Need rollout memories now." },
-        { sessionId: "legacy-alias-mode", sessionKey: "agent:main:session:legacy-alias-mode", agentId: "main" }
-      );
-      assert.ok(output);
-      assert.match(output.prependContext, /<relevant-memories>/);
-      assert.match(output.prependContext, /Restart API service after config updates\./);
-      assert.match(output.prependContext, /restart api service after config updates\./);
-      assert.doesNotMatch(output.prependContext, /Run DNS and mount health checks after restart\./);
-    });
-
-    it("setwise-v2 mode uses set-wise selector for final top-k", async () => {
-      MemoryRetriever.prototype.retrieve = async () => buildGenericRecallRows();
-
-      const harness = createPluginApiHarness({
-        resolveRoot: workspaceDir,
-        pluginConfig: {
-          embedding: { apiKey: "test-api-key" },
-          autoCapture: false,
-          autoRecall: true,
-          autoRecallTopK: 2,
-          autoRecallSelectionMode: "setwise-v2",
-          autoRecallMinLength: 1,
-          selfImprovement: { enabled: false, beforeResetNote: false, ensureLearningFiles: false },
-        },
-      });
-      memoryLanceDBProPlugin.register(harness.api);
-
-      const hooks = harness.eventHandlers.get("before_agent_start") || [];
-      assert.equal(hooks.length, 1);
-      const output = await hooks[0].handler(
-        { prompt: "Need rollout memories now." },
-        { sessionId: "setwise-mode", sessionKey: "agent:main:session:setwise-mode", agentId: "main" }
-      );
-      assert.ok(output);
-      assert.match(output.prependContext, /<relevant-memories>/);
-      assert.match(output.prependContext, /Restart API service after config updates\./);
-      assert.match(output.prependContext, /Run DNS and mount health checks after restart\./);
-      assert.doesNotMatch(output.prependContext, /restart api service after config updates\./);
-    });
-  });
-
   describe("context split orchestration modules", () => {
     it("renders tagged and error-detected prompt blocks", () => {
       const tagged = renderTaggedPromptBlock({
@@ -2493,7 +1944,8 @@ describe("memory reflection", () => {
 
     it("plans generic auto-recall via dedicated planner module", async () => {
       const state = createSessionExposureState();
-      const retrieveCalls = [];
+      const recallCalls = [];
+      const now = Date.now();
       const planner = createAutoRecallPlanner(
         {
           enabled: true,
@@ -2507,40 +1959,33 @@ describe("memory reflection", () => {
         },
         {
           state: state.autoRecallState,
-          retrieve: async (params) => {
-            retrieveCalls.push(params);
+          recallGeneric: async (params) => {
+            recallCalls.push(params);
             return [
               {
-                entry: {
-                  id: "fact-1",
-                  text: "Always run post-checks after service changes.",
-                  category: "fact",
-                  scope: "global",
-                  timestamp: Date.now(),
-                  vector: [],
-                  importance: 0.8,
-                  metadata: "{}",
-                },
+                id: "fact-1",
+                text: "Always run post-checks after service changes.",
+                category: "fact",
+                scope: "global",
                 score: 0.91,
-                sources: { bm25: { score: 0.4, rank: 1 } },
+                metadata: {
+                  createdAt: now - 1000,
+                  updatedAt: now,
+                },
               },
               {
-                entry: {
-                  id: "refl-1",
-                  text: "Reflection memory should be filtered for generic recall.",
-                  category: "reflection",
-                  scope: "global",
-                  timestamp: Date.now(),
-                  vector: [],
-                  importance: 0.8,
-                  metadata: "{}",
-                },
+                id: "refl-1",
+                text: "Reflection memory should be filtered for generic recall.",
+                category: "reflection",
+                scope: "global",
                 score: 0.89,
-                sources: {},
+                metadata: {
+                  createdAt: now - 1000,
+                  updatedAt: now,
+                },
               },
             ];
           },
-          getAccessibleScopes: (agentId) => [`agent:${agentId}`, "global"],
           sanitizeForContext: (text) => text,
         }
       );
@@ -2551,16 +1996,35 @@ describe("memory reflection", () => {
         sessionId: "session-1",
       });
 
-      assert.equal(retrieveCalls.length, 1);
-      assert.deepEqual(retrieveCalls[0].scopeFilter, ["agent:main", "global"]);
+      assert.equal(recallCalls.length, 1);
+      assert.equal(recallCalls[0].agentId, "main");
+      assert.equal(recallCalls[0].sessionId, "session-1");
       assert.ok(output);
       assert.match(output.prependContext, /<relevant-memories>/);
       assert.match(output.prependContext, /Always run post-checks/);
       assert.doesNotMatch(output.prependContext, /Reflection memory should be filtered/);
     });
 
+    it("rejects missing remote recall dependency for generic auto-recall planner", () => {
+      const state = createSessionExposureState();
+      assert.throws(
+        () =>
+          createAutoRecallPlanner(
+            {
+              enabled: true,
+              topK: 2,
+              selectionMode: "mmr",
+            },
+            {
+              state: state.autoRecallState,
+              sanitizeForContext: (text) => text,
+            }
+          ),
+        /requires remote recallGeneric dependency/
+      );
+    });
+
     it("plans reflection inherited-rules and error reminders via dedicated planner module", async () => {
-      const now = Date.now();
       const sessionState = createSessionExposureState();
       const planner = createReflectionPromptPlanner(
         {
@@ -2581,28 +2045,18 @@ describe("memory reflection", () => {
         },
         {
           sessionState,
-          storeList: async () => [
+          recallReflection: async () => [
             {
               id: "invariant-1",
               text: "Always verify scope and post-check results before concluding.",
-              vector: [],
-              category: "reflection",
+              kind: "invariant",
               scope: "global",
-              importance: 0.8,
-              timestamp: now,
-              metadata: JSON.stringify({
-                type: "memory-reflection-item",
-                itemKind: "invariant",
-                agentId: "main",
-                storedAt: now,
-                decayMidpointDays: 45,
-                decayK: 0.22,
-                baseWeight: 1.1,
-                quality: 1,
-              }),
+              score: 0.86,
+              metadata: {
+                timestamp: Date.now(),
+              },
             },
           ],
-          getAccessibleScopes: () => ["global"],
           sanitizeForContext: (text) => text,
         }
       );
@@ -2630,6 +2084,36 @@ describe("memory reflection", () => {
       assert.ok(second);
       assert.match(second, /<inherited-rules>/);
       assert.doesNotMatch(second, /<error-detected>/);
+    });
+
+    it("rejects missing remote recall dependency for reflection planner", () => {
+      const sessionState = createSessionExposureState();
+      assert.throws(
+        () =>
+          createReflectionPromptPlanner(
+            {
+              injectMode: "inheritance-only",
+              dedupeErrorSignals: true,
+              errorReminderMaxEntries: 3,
+              errorScanMaxChars: 8000,
+              recall: {
+                mode: "fixed",
+                topK: 3,
+                includeKinds: ["invariant"],
+                maxAgeDays: 45,
+                maxEntriesPerKey: 10,
+                minRepeated: 1,
+                minScore: 0.18,
+                minPromptLength: 8,
+              },
+            },
+            {
+              sessionState,
+              sanitizeForContext: (text) => text,
+            }
+          ),
+        /requires remote recallReflection dependency/
+      );
     });
 
     it("uses one shared session-clear contract for reflection errors and dynamic recall state", () => {
@@ -2671,6 +2155,7 @@ describe("memory reflection", () => {
             },
             pruneReflectionSessionState() { },
           },
+          recallReflection: async () => [],
           sanitizeForContext: (text) => text,
         }
       );

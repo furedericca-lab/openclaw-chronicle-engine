@@ -1,6 +1,6 @@
-import type { RetrievalResult } from "../retriever.js";
 import type { BackendRecallGenericRow } from "../backend-client/types.js";
 import { selectFinalAutoRecallResults } from "../auto-recall-final-selection.js";
+import type { RecallResultRow } from "../memory-record-types.js";
 import {
   filterByMaxAge,
   keepMostRecentPerNormalizedKey,
@@ -27,7 +27,7 @@ export interface AutoRecallPlannerConfig {
 
 export interface AutoRecallPlannerDependencies {
   state: DynamicRecallSessionState;
-  recallGeneric?: (params: {
+  recallGeneric: (params: {
     query: string;
     limit: number;
     agentId: string;
@@ -35,13 +35,6 @@ export interface AutoRecallPlannerDependencies {
     sessionKey?: string;
     userId?: string;
   }) => Promise<BackendRecallGenericRow[]>;
-  retrieve?: (params: {
-    query: string;
-    limit: number;
-    scopeFilter: string[];
-    source: "auto-recall";
-  }) => Promise<RetrievalResult[]>;
-  getAccessibleScopes?: (agentId: string) => string[];
   sanitizeForContext: (text: string) => string;
   logger?: {
     info?: (message: string) => void;
@@ -61,6 +54,10 @@ export function createAutoRecallPlanner(
   config: AutoRecallPlannerConfig,
   deps: AutoRecallPlannerDependencies
 ): { plan: (params: AutoRecallPlanParams) => Promise<DynamicRecallResult | undefined> } {
+  if (typeof deps.recallGeneric !== "function") {
+    throw new Error("auto-recall planner requires remote recallGeneric dependency");
+  }
+
   const plan = async (params: AutoRecallPlanParams): Promise<DynamicRecallResult | undefined> => {
     if (config.enabled !== true) return undefined;
 
@@ -68,7 +65,6 @@ export function createAutoRecallPlanner(
     const sessionId = typeof params.sessionId === "string" && params.sessionId.trim() ? params.sessionId.trim() : "default";
     const topK = Math.max(1, normalizePositiveInt(config.topK, 3));
     const fetchLimit = Math.min(20, Math.max(topK * 4, topK, 8));
-    const accessibleScopes = deps.getAccessibleScopes ? deps.getAccessibleScopes(agentId) : [];
 
     return await orchestrateDynamicRecall({
       channelName: "auto-recall",
@@ -83,23 +79,14 @@ export function createAutoRecallPlanner(
       wrapUntrustedData: true,
       logger: deps.logger,
       loadCandidates: async () => {
-        const retrieved = deps.recallGeneric
-          ? mapBackendRowsToRetrievalResults(await deps.recallGeneric({
-            query: String(params.prompt || ""),
-            limit: fetchLimit,
-            agentId,
-            sessionId,
-            sessionKey: params.sessionKey,
-            userId: params.userId,
-          }))
-          : deps.retrieve
-            ? await deps.retrieve({
-              query: String(params.prompt || ""),
-              limit: fetchLimit,
-              scopeFilter: accessibleScopes,
-              source: "auto-recall",
-            })
-            : [];
+        const retrieved = mapBackendRowsToRecallResults(await deps.recallGeneric({
+          query: String(params.prompt || ""),
+          limit: fetchLimit,
+          agentId,
+          sessionId,
+          sessionKey: params.sessionKey,
+          userId: params.userId,
+        }));
         const postProcessed = postProcessAutoRecallResults(retrieved, config);
         if (config.selectionMode === "setwise-v2") {
           return selectFinalAutoRecallResults(postProcessed, { topK });
@@ -116,9 +103,9 @@ export function createAutoRecallPlanner(
 }
 
 function postProcessAutoRecallResults(
-  results: RetrievalResult[],
+  results: RecallResultRow[],
   config: Pick<AutoRecallPlannerConfig, "categories" | "excludeReflection" | "maxAgeDays" | "maxEntriesPerKey">
-): RetrievalResult[] {
+): RecallResultRow[] {
   const allowlisted = Array.isArray(config.categories) && config.categories.length > 0
     ? results.filter((row) => config.categories!.includes(row.entry.category as AutoRecallCategory))
     : results;
@@ -152,7 +139,7 @@ function normalizePositiveInt(value: unknown, fallback: number): number {
   return Math.max(1, Math.floor(parsed));
 }
 
-function mapBackendRowsToRetrievalResults(rows: BackendRecallGenericRow[]): RetrievalResult[] {
+function mapBackendRowsToRecallResults(rows: BackendRecallGenericRow[]): RecallResultRow[] {
   return rows.map((row) => ({
     entry: {
       id: row.id,

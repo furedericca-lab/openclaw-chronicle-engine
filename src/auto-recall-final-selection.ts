@@ -1,4 +1,4 @@
-import type { RetrievalResult } from "./retriever.js";
+import type { RecallResultRow } from "./memory-record-types.js";
 import { normalizeRecallTextKey } from "./recall-engine.js";
 import {
   DEFAULT_FINAL_SELECTION_FRESHNESS_HALF_LIFE_MS,
@@ -27,9 +27,9 @@ const GENERIC_SEMANTIC_THRESHOLDS: FinalSelectSemanticThreshold[] = [
 ];
 
 export function selectFinalAutoRecallResults(
-  results: RetrievalResult[],
+  results: RecallResultRow[],
   options: AutoRecallFinalSelectionOptions = {}
-): RetrievalResult[] {
+): RecallResultRow[] {
   if (!Array.isArray(results) || results.length === 0) return [];
 
   const finalLimit = Math.min(results.length, normalizeLimit(options.topK, results.length));
@@ -39,7 +39,7 @@ export function selectFinalAutoRecallResults(
     normalizeLimit(options.shortlistLimit, Math.max(finalLimit, finalLimit * 4))
   );
 
-  const candidates: FinalSelectCandidate<RetrievalResult>[] = results.map((row) => {
+  const candidates: FinalSelectCandidate<RecallResultRow>[] = results.map((row) => {
     const normalizedKey = normalizeRecallTextKey(row.entry.text);
     return {
       id: row.entry.id,

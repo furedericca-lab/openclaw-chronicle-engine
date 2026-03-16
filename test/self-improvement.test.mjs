@@ -17,7 +17,7 @@ const jiti = jitiFactory(import.meta.url, {
 const {
   registerSelfImprovementLogTool,
   registerSelfImprovementExtractSkillTool,
-} = jiti("../src/tools.ts");
+} = jiti("../src/self-improvement-tools.ts");
 const { appendSelfImprovementEntry } = jiti("../src/self-improvement-files.ts");
 const {
   extractReflectionLearningGovernanceCandidates,
@@ -33,14 +33,7 @@ function createToolHarness(workspaceDir) {
     },
   };
 
-  const context = {
-    workspaceDir,
-    retriever: {},
-    store: {},
-    scopeManager: {},
-    embedder: {},
-    mdMirror: null,
-  };
+  const context = { workspaceDir };
 
   registerSelfImprovementLogTool(api, context);
   registerSelfImprovementExtractSkillTool(api, context);

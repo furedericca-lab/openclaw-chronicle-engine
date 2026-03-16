@@ -1,6 +1,6 @@
 /**
  * Memory LanceDB Pro Plugin
- * Enhanced long-term memory plugin with hybrid retrieval and multi-scope isolation
+ * Remote-backend-authoritative memory plugin with local context orchestration.
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
@@ -13,34 +13,10 @@ import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 
-// Import core components
-import { MemoryStore, validateStoragePath } from "./src/store.js";
-import { createEmbedder, getVectorDimensions } from "./src/embedder.js";
-import { createRetriever, DEFAULT_RETRIEVAL_CONFIG } from "./src/retriever.js";
-import { createScopeManager } from "./src/scopes.js";
-import { createMigrator } from "./src/migrate.js";
-import { registerAllMemoryTools } from "./src/tools.js";
 import { registerRemoteMemoryTools } from "./src/backend-tools.js";
-import { appendSelfImprovementEntry, ensureSelfImprovementLearningFiles } from "./src/self-improvement-files.js";
-import type { MdMirrorWriter } from "./src/tools.js";
-import { AccessTracker } from "./src/access-tracker.js";
+import { ensureSelfImprovementLearningFiles } from "./src/self-improvement-files.js";
 import { runWithReflectionTransientRetryOnce } from "./src/reflection-retry.js";
 import { resolveReflectionSessionSearchDirs, stripResetSuffix } from "./src/session-recovery.js";
-import {
-  storeReflectionToLanceDB,
-  loadAgentDerivedFocusRowsForHandoffFromEntries,
-  DEFAULT_REFLECTION_DERIVED_MAX_AGE_MS,
-  DEFAULT_REFLECTION_DERIVED_FINAL_LIMIT,
-  DEFAULT_REFLECTION_DERIVED_SHORTLIST_LIMIT,
-} from "./src/reflection-store.js";
-import {
-  extractReflectionLearningGovernanceCandidates,
-  extractReflectionMappedMemoryItems,
-  extractReflectionOpenLoops,
-} from "./src/reflection-slices.js";
-import { createReflectionEventId } from "./src/reflection-event-store.js";
-import { buildReflectionMappedMetadata } from "./src/reflection-mapped-metadata.js";
-import { createMemoryCLI } from "./cli.js";
 import {
   createSessionExposureState,
   DEFAULT_SESSION_EXPOSURE_MAX_TRACKED_SESSIONS,
@@ -65,18 +41,6 @@ import type {
 // ============================================================================
 
 interface PluginConfig {
-  embedding?: {
-    provider: "openai-compatible";
-    apiKey: string | string[];
-    model?: string;
-    baseURL?: string;
-    dimensions?: number;
-    taskQuery?: string;
-    taskPassage?: string;
-    normalized?: boolean;
-    chunking?: boolean;
-  };
-  dbPath?: string;
   autoCapture?: boolean;
   autoRecall?: boolean;
   autoRecallMinLength?: number;
@@ -88,31 +52,6 @@ interface PluginConfig {
   autoRecallMaxAgeDays?: number;
   autoRecallMaxEntriesPerKey?: number;
   captureAssistant?: boolean;
-  retrieval?: {
-    mode?: "hybrid" | "vector";
-    vectorWeight?: number;
-    bm25Weight?: number;
-    minScore?: number;
-    rerank?: "cross-encoder" | "lightweight" | "none";
-    candidatePoolSize?: number;
-    rerankApiKey?: string;
-    rerankModel?: string;
-    rerankEndpoint?: string;
-    rerankProvider?: "jina" | "siliconflow" | "voyage" | "pinecone" | "vllm";
-    recencyHalfLifeDays?: number;
-    recencyWeight?: number;
-    filterNoise?: boolean;
-    lengthNormAnchor?: number;
-    hardMinScore?: number;
-    timeDecayHalfLifeDays?: number;
-    reinforcementFactor?: number;
-    maxHalfLifeMultiplier?: number;
-  };
-  scopes?: {
-    default?: string;
-    definitions?: Record<string, { description: string }>;
-    agentAccess?: Record<string, string[]>;
-  };
   enableManagementTools?: boolean;
   sessionStrategy?: SessionStrategy;
   sessionMemory?: { enabled?: boolean; messageCount?: number };
@@ -124,7 +63,6 @@ interface PluginConfig {
   };
   memoryReflection?: {
     enabled?: boolean;
-    storeToLanceDB?: boolean;
     injectMode?: ReflectionInjectMode;
     agentId?: string;
     messageCount?: number;
@@ -144,7 +82,6 @@ interface PluginConfig {
       minPromptLength?: number;
     };
   };
-  mdMirror?: { enabled?: boolean; dir?: string };
   remoteBackend?: {
     enabled?: boolean;
     baseURL?: string;
@@ -166,11 +103,6 @@ type MemoryCategory = "preference" | "fact" | "decision" | "entity" | "other" | 
 // ============================================================================
 // Default Configuration
 // ============================================================================
-
-function getDefaultDbPath(): string {
-  const home = homedir();
-  return join(home, ".openclaw", "memory", "lancedb-pro");
-}
 
 function getDefaultWorkspaceDir(): string {
   const home = homedir();
@@ -284,38 +216,8 @@ const DEFAULT_REFLECTION_RECALL_MAX_ENTRIES_PER_KEY = 10;
 const DEFAULT_REFLECTION_RECALL_MIN_REPEATED = 2;
 const DEFAULT_REFLECTION_RECALL_MIN_SCORE = 0.18;
 const DEFAULT_REFLECTION_RECALL_MIN_PROMPT_LENGTH = 8;
-// Rendering safety guard only; ranking/store layer owns the semantic final-13 cap.
-const DERIVED_FOCUS_RENDER_HARD_LIMIT = 64;
 const REFLECTION_FALLBACK_MARKER = "(fallback) Reflection generation failed; storing minimal pointer only.";
 const DIAG_BUILD_TAG = "memory-lancedb-pro-diag-20260308-0058";
-
-function buildReflectionDerivedFocusBlock(derivedLines: string[]): string {
-  const trimmed = derivedLines
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .slice(0, DERIVED_FOCUS_RENDER_HARD_LIMIT);
-  if (trimmed.length === 0) return "";
-  return [
-    "<derived-focus>",
-    "Weighted recent derived execution deltas from reflection memory:",
-    ...trimmed.map((line, i) => `${i + 1}. ${line}`),
-    "</derived-focus>",
-  ].join("\n");
-}
-
-function buildReflectionOpenLoopsBlock(openLoopLines: string[]): string {
-  const trimmed = openLoopLines
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .slice(0, 6);
-  if (trimmed.length === 0) return "";
-  return [
-    "<open-loops>",
-    "Fresh open loops / next actions from this reflection run:",
-    ...trimmed.map((line, i) => `${i + 1}. ${line}`),
-    "</open-loops>",
-  ].join("\n");
-}
 
 function buildSelfImprovementResetNote(params?: { openLoopsBlock?: string; derivedFocusBlock?: string }): string {
   const openLoopsBlock = typeof params?.openLoopsBlock === "string" ? params.openLoopsBlock : "";
@@ -581,13 +483,6 @@ async function loadSelfImprovementReminderContent(workspaceDir?: string): Promis
   }
 }
 
-function parseAgentIdFromSessionKey(sessionKey: string | undefined): string | undefined {
-  const sk = (sessionKey ?? "").trim();
-  const parts = sk.split(":");
-  if (parts.length >= 2 && parts[0] === "agent" && parts[1]) return parts[1];
-  return undefined;
-}
-
 function resolveAgentPrimaryModelRef(cfg: unknown, agentId: string): string | undefined {
   try {
     const root = cfg as Record<string, unknown>;
@@ -614,23 +509,6 @@ function resolveAgentPrimaryModelRef(cfg: unknown, agentId: string): string | un
   return undefined;
 }
 
-function isAgentDeclaredInConfig(cfg: unknown, agentId: string): boolean {
-  const target = agentId.trim();
-  if (!target) return false;
-  try {
-    const root = cfg as Record<string, unknown>;
-    const agents = root.agents as Record<string, unknown> | undefined;
-    const list = agents?.list as unknown;
-    if (!Array.isArray(list)) return false;
-    return list.some((x) => {
-      if (!x || typeof x !== "object") return false;
-      return (x as Record<string, unknown>).id === target;
-    });
-  } catch {
-    return false;
-  }
-}
-
 function splitProviderModel(modelRef: string): { provider?: string; model?: string } {
   const s = modelRef.trim();
   if (!s) return {};
@@ -651,10 +529,6 @@ function asNonEmptyString(value: unknown): string | undefined {
 
 function isInternalReflectionSessionKey(sessionKey: unknown): boolean {
   return typeof sessionKey === "string" && sessionKey.trim().startsWith("temp:memory-reflection");
-}
-
-function isRemoteBackendEnabled(config: PluginConfig): boolean {
-  return config.remoteBackend?.enabled === true;
 }
 
 function resolveRemoteBackendRuntimeDefaults(config: PluginConfig): RuntimeContextDefaults {
@@ -1373,49 +1247,6 @@ function resolveAgentWorkspaceMap(api: OpenClawPluginApi): AgentWorkspaceMap {
   return map;
 }
 
-function createMdMirrorWriter(
-  api: OpenClawPluginApi,
-  config: PluginConfig,
-): MdMirrorWriter | null {
-  if (config.mdMirror?.enabled !== true) return null;
-
-  const fallbackDir = api.resolvePath(config.mdMirror.dir || "memory-md");
-  const workspaceMap = resolveAgentWorkspaceMap(api);
-
-  if (Object.keys(workspaceMap).length > 0) {
-    api.logger.info(
-      `mdMirror: resolved ${Object.keys(workspaceMap).length} agent workspace(s)`,
-    );
-  } else {
-    api.logger.warn(
-      `mdMirror: no agent workspaces found, writes will use fallback dir: ${fallbackDir}`,
-    );
-  }
-
-  return async (entry, meta) => {
-    try {
-      const ts = new Date(entry.timestamp || Date.now());
-      const dateStr = ts.toISOString().split("T")[0];
-
-      let mirrorDir = fallbackDir;
-      if (meta?.agentId && workspaceMap[meta.agentId]) {
-        mirrorDir = join(workspaceMap[meta.agentId], "memory");
-      }
-
-      const filePath = join(mirrorDir, `${dateStr}.md`);
-      const agentLabel = meta?.agentId ? ` agent=${meta.agentId}` : "";
-      const sourceLabel = meta?.source ? ` source=${meta.source}` : "";
-      const safeText = entry.text.replace(/\n/g, " ").slice(0, 500);
-      const line = `- ${ts.toISOString()} [${entry.category}:${entry.scope}]${agentLabel}${sourceLabel} ${safeText}\n`;
-
-      await mkdir(mirrorDir, { recursive: true });
-      await appendFile(filePath, line, "utf8");
-    } catch (err) {
-      api.logger.warn(`mdMirror: write failed: ${String(err)}`);
-    }
-  };
-}
-
 // ============================================================================
 // Version
 // ============================================================================
@@ -1442,170 +1273,51 @@ const memoryLanceDBProPlugin = {
   id: "memory-lancedb-pro",
   name: "Memory (LanceDB Pro)",
   description:
-    "Enhanced long-term memory with hybrid retrieval, multi-scope isolation, local/remote authority modes, and management CLI",
+    "Enhanced long-term memory with remote-backend authority, hybrid recall orchestration, and management tools",
   kind: "memory" as const,
 
   register(api: OpenClawPluginApi) {
     // Parse and validate configuration
     const config = parsePluginConfig(api.pluginConfig);
-    const remoteBackendEnabled = isRemoteBackendEnabled(config);
     const remoteRuntimeDefaults = resolveRemoteBackendRuntimeDefaults(config);
-    const memoryBackendClient: MemoryBackendClient | null = remoteBackendEnabled
-      ? createMemoryBackendClient({
-        baseUrl: config.remoteBackend?.baseURL || "",
-        bearerToken: config.remoteBackend?.authToken || "",
-        timeoutMs: config.remoteBackend?.timeoutMs || 10_000,
-        maxRetries: Number(config.remoteBackend?.maxRetries ?? 1),
-        retryBaseDelayMs: config.remoteBackend?.retryBackoffMs || 250,
-        logger: api.logger,
-      })
-      : null;
+    const memoryBackendClient: MemoryBackendClient = createMemoryBackendClient({
+      baseUrl: config.remoteBackend?.baseURL || "",
+      bearerToken: config.remoteBackend?.authToken || "",
+      timeoutMs: config.remoteBackend?.timeoutMs || 10_000,
+      maxRetries: Number(config.remoteBackend?.maxRetries ?? 1),
+      retryBaseDelayMs: config.remoteBackend?.retryBackoffMs || 250,
+      logger: api.logger,
+    });
     const agentWorkspaceMap = resolveAgentWorkspaceMap(api);
     const sessionExposureState = createSessionExposureState({
       maxTrackedSessions: DEFAULT_SESSION_EXPOSURE_MAX_TRACKED_SESSIONS,
     });
 
-    const localRuntime = !remoteBackendEnabled
-      ? (() => {
-        const embedding = config.embedding;
-        if (!embedding) {
-          throw new Error(
-            "embedding config invariant violated: local mode requires embedding and should be rejected at parse-time"
-          );
-        }
-        const resolvedDbPath = api.resolvePath(config.dbPath || getDefaultDbPath());
-
-        // Pre-flight: validate storage path (symlink resolution, mkdir, write check).
-        // Runs synchronously and logs warnings; does NOT block gateway startup.
-        try {
-          validateStoragePath(resolvedDbPath);
-        } catch (err) {
-          api.logger.warn(
-            `memory-lancedb-pro: storage path issue — ${String(err)}\n` +
-            `  The plugin will still attempt to start, but writes may fail.`,
-          );
-        }
-
-        const model = embedding.model || "text-embedding-3-small";
-        const vectorDim = getVectorDimensions(
-          model,
-          embedding.dimensions,
-        );
-        const store = new MemoryStore({ dbPath: resolvedDbPath, vectorDim });
-        const embedder = createEmbedder({
-          provider: "openai-compatible",
-          apiKey: embedding.apiKey,
-          model,
-          baseURL: embedding.baseURL,
-          dimensions: embedding.dimensions,
-          taskQuery: embedding.taskQuery,
-          taskPassage: embedding.taskPassage,
-          normalized: embedding.normalized,
-          chunking: embedding.chunking,
-        });
-        const retriever = createRetriever(store, embedder, {
-          ...DEFAULT_RETRIEVAL_CONFIG,
-          ...config.retrieval,
-        });
-
-        // Access reinforcement tracker (debounced write-back)
-        const accessTracker = new AccessTracker({
-          store,
-          logger: api.logger,
-          debounceMs: 5000,
-        });
-        retriever.setAccessTracker(accessTracker);
-
-        return {
-          resolvedDbPath,
-          model,
-          store,
-          embedder,
-          retriever,
-          accessTracker,
-          scopeManager: createScopeManager(config.scopes),
-          migrator: createMigrator(store),
-        };
-      })()
-      : null;
-
     api.logger.info(
       `memory-lancedb-pro@${pluginVersion}: plugin registered ` +
-      `(db: ${localRuntime?.resolvedDbPath || "(remote-authority)"}, mode: ${remoteBackendEnabled ? "remote-backend" : "local-backend"}, model: ${localRuntime?.model || "(remote-owned)"})`,
+      `(mode: remote-backend, authority: backend-owned)`,
     );
     api.logger.info(`memory-lancedb-pro: diagnostic build tag loaded (${DIAG_BUILD_TAG})`);
-    if (remoteBackendEnabled) {
-      api.logger.info(
-        `memory-lancedb-pro: remote backend enabled (${config.remoteBackend?.baseURL || "(missing baseURL)"})`
-      );
-    }
-
-    // ========================================================================
-    // Markdown Mirror
-    // ========================================================================
-
-    const mdMirror = createMdMirrorWriter(api, config);
+    api.logger.info(
+      `memory-lancedb-pro: remote backend enabled (${config.remoteBackend?.baseURL || "(missing baseURL)"})`
+    );
 
     // ========================================================================
     // Register Tools
     // ========================================================================
 
-    if (memoryBackendClient) {
-      registerRemoteMemoryTools(
-        api,
-        {
-          backendClient: memoryBackendClient,
-          runtimeDefaults: remoteRuntimeDefaults,
-        },
-        {
-          enableManagementTools: config.enableManagementTools,
-          enableSelfImprovementTools: config.selfImprovement?.enabled !== false,
-          defaultWorkspaceDir: getDefaultWorkspaceDir(),
-        }
-      );
-    } else {
-      if (!localRuntime) {
-        throw new Error("local memory runtime initialization failed");
+    registerRemoteMemoryTools(
+      api,
+      {
+        backendClient: memoryBackendClient,
+        runtimeDefaults: remoteRuntimeDefaults,
+      },
+      {
+        enableManagementTools: config.enableManagementTools,
+        enableSelfImprovementTools: config.selfImprovement?.enabled !== false,
+        defaultWorkspaceDir: getDefaultWorkspaceDir(),
       }
-      registerAllMemoryTools(
-        api,
-        {
-          retriever: localRuntime.retriever,
-          store: localRuntime.store,
-          scopeManager: localRuntime.scopeManager,
-          embedder: localRuntime.embedder,
-          agentId: undefined, // Will be determined at runtime from context
-          workspaceDir: getDefaultWorkspaceDir(),
-          mdMirror,
-        },
-        {
-          enableManagementTools: config.enableManagementTools,
-          enableSelfImprovementTools: config.selfImprovement?.enabled !== false,
-        }
-      );
-    }
-
-    // ========================================================================
-    // Register CLI Commands
-    // ========================================================================
-
-    if (!memoryBackendClient) {
-      if (!localRuntime) {
-        throw new Error("local memory runtime initialization failed");
-      }
-      api.registerCli(
-        createMemoryCLI({
-          store: localRuntime.store,
-          retriever: localRuntime.retriever,
-          scopeManager: localRuntime.scopeManager,
-          migrator: localRuntime.migrator,
-          embedder: localRuntime.embedder,
-        }),
-        { commands: ["memory-pro"] },
-      );
-    } else {
-      api.logger.info("memory-lancedb-pro: local memory-pro CLI disabled while remote backend is authoritative");
-    }
+    );
 
     // ========================================================================
     // Lifecycle Hooks
@@ -1629,45 +1341,27 @@ const memoryLanceDBProPlugin = {
       },
       {
         state: sessionExposureState.autoRecallState,
-        recallGeneric: memoryBackendClient
-          ? async (params) => {
-            const resolved = resolveBackendCallContext(
-              {
-                userId: params.userId,
-                agentId: params.agentId,
-                sessionId: params.sessionId,
-                sessionKey: params.sessionKey,
-              },
-              remoteRuntimeDefaults,
+        recallGeneric: async (params) => {
+          const resolved = resolveBackendCallContext(
+            {
+              userId: params.userId,
+              agentId: params.agentId,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+            },
+            remoteRuntimeDefaults,
+          );
+          if (!resolved.hasPrincipalIdentity) {
+            api.logger.warn(
+              `memory-lancedb-pro: auto-recall skipped remote recall (missing runtime principal: ${resolved.missingPrincipalFields.join(", ")})`
             );
-            if (!resolved.hasPrincipalIdentity) {
-              api.logger.warn(
-                `memory-lancedb-pro: auto-recall skipped remote recall (missing runtime principal: ${resolved.missingPrincipalFields.join(", ")})`
-              );
-              return [];
-            }
-            return await memoryBackendClient.recallGeneric(resolved.context, {
-              query: params.query,
-              limit: params.limit,
-            });
+            return [];
           }
-          : undefined,
-        retrieve: memoryBackendClient
-          ? undefined
-          : (params) => {
-            if (!localRuntime) {
-              throw new Error("local memory runtime initialization failed");
-            }
-            return localRuntime.retriever.retrieve(params);
-          },
-        getAccessibleScopes: memoryBackendClient
-          ? () => []
-          : (agentId) => {
-            if (!localRuntime) {
-              throw new Error("local memory runtime initialization failed");
-            }
-            return localRuntime.scopeManager.getAccessibleScopes(agentId);
-          },
+          return await memoryBackendClient.recallGeneric(resolved.context, {
+            query: params.query,
+            limit: params.limit,
+          });
+        },
         sanitizeForContext,
         logger: api.logger,
       }
@@ -1700,152 +1394,47 @@ const memoryLanceDBProPlugin = {
         }
 
         try {
-          if (memoryBackendClient) {
-            const captureItems: BackendCaptureItem[] = [];
-            for (const msg of event.messages) {
-              if (!msg || typeof msg !== "object") continue;
-              const msgObj = msg as Record<string, unknown>;
-              const roleRaw = typeof msgObj.role === "string" ? msgObj.role.toLowerCase() : "";
-              if (roleRaw !== "user" && !(config.captureAssistant === true && roleRaw === "assistant")) {
-                continue;
-              }
-              const text = extractTextContent(msgObj.content);
-              if (!text || !text.trim()) continue;
-              captureItems.push({
-                role: roleRaw === "assistant" ? "assistant" : "user",
-                text: text.trim(),
-              });
-            }
-
-            if (captureItems.length === 0) {
-              return;
-            }
-
-            const resolvedBackendCtx = resolveBackendCallContext(
-              mergeContextSources(ctx, event),
-              remoteRuntimeDefaults,
-              {
-                agentId: typeof ctx?.agentId === "string" ? ctx.agentId : undefined,
-                sessionId: typeof ctx?.sessionId === "string" ? ctx.sessionId : undefined,
-                sessionKey: typeof ctx?.sessionKey === "string" ? ctx.sessionKey : undefined,
-              }
-            );
-            if (!resolvedBackendCtx.hasPrincipalIdentity) {
-              api.logger.warn(
-                `memory-lancedb-pro: auto-capture blocked (missing runtime principal: ${resolvedBackendCtx.missingPrincipalFields.join(", ")})`
-              );
-              return;
-            }
-            const result = await memoryBackendClient.storeAutoCapture(resolvedBackendCtx.context, {
-              items: captureItems.slice(0, 64),
-            });
-            api.logger.info(
-              `memory-lancedb-pro: auto-capture forwarded to remote backend (${captureItems.length} item(s), mutations=${result.length})`
-            );
-            return;
-          }
-
-          if (!localRuntime) {
-            api.logger.warn("memory-lancedb-pro: local auto-capture skipped because local runtime is unavailable");
-            return;
-          }
-
-          // Determine agent ID and default scope
-          const agentId = ctx?.agentId || "main";
-          const defaultScope = localRuntime.scopeManager.getDefaultScope(agentId);
-
-          // Extract text content from messages
-          const texts: string[] = [];
+          const captureItems: BackendCaptureItem[] = [];
           for (const msg of event.messages) {
-            if (!msg || typeof msg !== "object") {
-              continue;
-            }
+            if (!msg || typeof msg !== "object") continue;
             const msgObj = msg as Record<string, unknown>;
-
-            const role = msgObj.role;
-            const captureAssistant = config.captureAssistant === true;
-            if (
-              role !== "user" &&
-              !(captureAssistant && role === "assistant")
-            ) {
+            const roleRaw = typeof msgObj.role === "string" ? msgObj.role.toLowerCase() : "";
+            if (roleRaw !== "user" && !(config.captureAssistant === true && roleRaw === "assistant")) {
               continue;
             }
-
-            const content = msgObj.content;
-
-            if (typeof content === "string") {
-              texts.push(content);
-              continue;
-            }
-
-            if (Array.isArray(content)) {
-              for (const block of content) {
-                if (
-                  block &&
-                  typeof block === "object" &&
-                  "type" in block &&
-                  (block as Record<string, unknown>).type === "text" &&
-                  "text" in block &&
-                  typeof (block as Record<string, unknown>).text === "string"
-                ) {
-                  texts.push((block as Record<string, unknown>).text as string);
-                }
-              }
-            }
+            const text = extractTextContent(msgObj.content);
+            if (!text || !text.trim()) continue;
+            captureItems.push({
+              role: roleRaw === "assistant" ? "assistant" : "user",
+              text: text.trim(),
+            });
           }
 
-          // Filter for capturable content
-          const toCapture = texts.filter((text) => text && shouldCapture(text));
-          if (toCapture.length === 0) {
+          if (captureItems.length === 0) {
             return;
           }
 
-          // Store each capturable piece (limit to 3 per conversation)
-          let stored = 0;
-          for (const text of toCapture.slice(0, 3)) {
-            const category = detectCategory(text);
-            const vector = await localRuntime.embedder.embedPassage(text);
-
-            // Check for duplicates using raw vector similarity (bypasses importance/recency weighting)
-            // Fail-open by design: dedup should not block auto-capture writes.
-            let existing: Awaited<ReturnType<typeof localRuntime.store.vectorSearch>> = [];
-            try {
-              existing = await localRuntime.store.vectorSearch(vector, 1, 0.1, [
-                defaultScope,
-              ]);
-            } catch (err) {
-              api.logger.warn(
-                `memory-lancedb-pro: auto-capture duplicate pre-check failed, continue store: ${String(err)}`,
-              );
+          const resolvedBackendCtx = resolveBackendCallContext(
+            mergeContextSources(ctx, event),
+            remoteRuntimeDefaults,
+            {
+              agentId: typeof ctx?.agentId === "string" ? ctx.agentId : undefined,
+              sessionId: typeof ctx?.sessionId === "string" ? ctx.sessionId : undefined,
+              sessionKey: typeof ctx?.sessionKey === "string" ? ctx.sessionKey : undefined,
             }
-
-            if (existing.length > 0 && existing[0].score > 0.95) {
-              continue;
-            }
-
-            await localRuntime.store.store({
-              text,
-              vector,
-              importance: 0.7,
-              category,
-              scope: defaultScope,
-            });
-            stored++;
-
-            // Dual-write to Markdown mirror if enabled
-            if (mdMirror) {
-              await mdMirror(
-                { text, category, scope: defaultScope, timestamp: Date.now() },
-                { source: "auto-capture", agentId },
-              );
-            }
-          }
-
-          if (stored > 0) {
-            api.logger.info(
-              `memory-lancedb-pro: auto-captured ${stored} memories for agent ${agentId} in scope ${defaultScope}`,
+          );
+          if (!resolvedBackendCtx.hasPrincipalIdentity) {
+            api.logger.warn(
+              `memory-lancedb-pro: auto-capture blocked (missing runtime principal: ${resolvedBackendCtx.missingPrincipalFields.join(", ")})`
             );
+            return;
           }
+          const result = await memoryBackendClient.storeAutoCapture(resolvedBackendCtx.context, {
+            items: captureItems.slice(0, 64),
+          });
+          api.logger.info(
+            `memory-lancedb-pro: auto-capture forwarded to remote backend (${captureItems.length} item(s), mutations=${result.length})`
+          );
         } catch (err) {
           api.logger.warn(`memory-lancedb-pro: capture failed: ${String(err)}`);
         }
@@ -2029,15 +1618,10 @@ const memoryLanceDBProPlugin = {
 
     if (config.sessionStrategy === "memoryReflection") {
       const reflectionMessageCount = config.memoryReflection?.messageCount ?? DEFAULT_REFLECTION_MESSAGE_COUNT;
-      const reflectionMaxInputChars = config.memoryReflection?.maxInputChars ?? DEFAULT_REFLECTION_MAX_INPUT_CHARS;
-      const reflectionTimeoutMs = config.memoryReflection?.timeoutMs ?? DEFAULT_REFLECTION_TIMEOUT_MS;
-      const reflectionThinkLevel = config.memoryReflection?.thinkLevel ?? DEFAULT_REFLECTION_THINK_LEVEL;
-      const reflectionAgentId = asNonEmptyString(config.memoryReflection?.agentId);
       const reflectionErrorReminderMaxEntries =
         parsePositiveInt(config.memoryReflection?.errorReminderMaxEntries) ?? DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES;
       const reflectionDedupeErrorSignals = config.memoryReflection?.dedupeErrorSignals !== false;
       const reflectionInjectMode = config.memoryReflection?.injectMode ?? "inheritance+derived";
-      const reflectionStoreToLanceDB = config.memoryReflection?.storeToLanceDB !== false;
       const reflectionRecallMode = config.memoryReflection?.recall?.mode ?? DEFAULT_REFLECTION_RECALL_MODE;
       const reflectionRecallTopK = config.memoryReflection?.recall?.topK ?? DEFAULT_REFLECTION_RECALL_TOP_K;
       const reflectionRecallIncludeKinds = config.memoryReflection?.recall?.includeKinds ?? DEFAULT_REFLECTION_RECALL_INCLUDE_KINDS;
@@ -2046,7 +1630,6 @@ const memoryLanceDBProPlugin = {
       const reflectionRecallMinRepeated = config.memoryReflection?.recall?.minRepeated ?? DEFAULT_REFLECTION_RECALL_MIN_REPEATED;
       const reflectionRecallMinScore = config.memoryReflection?.recall?.minScore ?? DEFAULT_REFLECTION_RECALL_MIN_SCORE;
       const reflectionRecallMinPromptLength = config.memoryReflection?.recall?.minPromptLength ?? DEFAULT_REFLECTION_RECALL_MIN_PROMPT_LENGTH;
-      const warnedInvalidReflectionAgentIds = new Set<string>();
       const reflectionTriggerSeenAt = new Map<string, number>();
       const REFLECTION_TRIGGER_DEDUPE_MS = 12_000;
 
@@ -2085,20 +1668,6 @@ const memoryLanceDBProPlugin = {
         return stripped;
       };
 
-      const resolveReflectionRunAgentId = (cfg: unknown, sourceAgentId: string): string => {
-        if (!reflectionAgentId) return sourceAgentId;
-        if (isAgentDeclaredInConfig(cfg, reflectionAgentId)) return reflectionAgentId;
-
-        if (!warnedInvalidReflectionAgentIds.has(reflectionAgentId)) {
-          api.logger.warn(
-            `memory-reflection: memoryReflection.agentId "${reflectionAgentId}" not found in cfg.agents.list; ` +
-            `fallback to runtime agent "${sourceAgentId}".`
-          );
-          warnedInvalidReflectionAgentIds.add(reflectionAgentId);
-        }
-        return sourceAgentId;
-      };
-
       const reflectionPromptPlanner = createReflectionPromptPlanner(
         {
           injectMode: reflectionInjectMode,
@@ -2118,49 +1687,31 @@ const memoryLanceDBProPlugin = {
         },
         {
           sessionState: sessionExposureState,
-          recallReflection: memoryBackendClient
-            ? async (params) => {
-              const resolved = resolveBackendCallContext(
-                {
-                  userId: params.userId,
-                  agentId: params.agentId,
-                  sessionId: params.sessionId,
-                  sessionKey: params.sessionKey,
-                },
-                remoteRuntimeDefaults
+          recallReflection: async (params) => {
+            const resolved = resolveBackendCallContext(
+              {
+                userId: params.userId,
+                agentId: params.agentId,
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+              },
+              remoteRuntimeDefaults
+            );
+            if (!resolved.hasPrincipalIdentity) {
+              api.logger.warn(
+                `memory-reflection: reflection-recall skipped remote call (missing runtime principal: ${resolved.missingPrincipalFields.join(", ")})`
               );
-              if (!resolved.hasPrincipalIdentity) {
-                api.logger.warn(
-                  `memory-reflection: reflection-recall skipped remote call (missing runtime principal: ${resolved.missingPrincipalFields.join(", ")})`
-                );
-                return [];
-              }
-              const mode: BackendReflectionRecallMode = params.mode === "invariant-only"
-                ? "invariant-only"
-                : "invariant+derived";
-              return await memoryBackendClient.recallReflection(resolved.context, {
-                query: String(params.prompt || "reflection-context"),
-                mode,
-                limit: params.limit,
-              });
+              return [];
             }
-            : undefined,
-          storeList: memoryBackendClient
-            ? undefined
-            : (scopeFilter, category, limit, offset) => {
-              if (!localRuntime) {
-                throw new Error("local memory runtime initialization failed");
-              }
-              return localRuntime.store.list(scopeFilter, category, limit, offset);
-            },
-          getAccessibleScopes: memoryBackendClient
-            ? undefined
-            : (agentId) => {
-              if (!localRuntime) {
-                throw new Error("local memory runtime initialization failed");
-              }
-              return localRuntime.scopeManager.getAccessibleScopes(agentId);
-            },
+            const mode: BackendReflectionRecallMode = params.mode === "invariant-only"
+              ? "invariant-only"
+              : "invariant+derived";
+            return await memoryBackendClient.recallReflection(resolved.context, {
+              query: String(params.prompt || "reflection-context"),
+              mode,
+              limit: params.limit,
+            });
+          },
           sanitizeForContext,
           logger: api.logger,
         }
@@ -2207,390 +1758,103 @@ const memoryLanceDBProPlugin = {
           const context = (event.context || {}) as Record<string, unknown>;
           const cfg = context.cfg;
           const workspaceDir = resolveWorkspaceDirFromContext(context);
-
-          if (memoryBackendClient) {
-            const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<string, unknown>;
-            const currentSessionId = typeof sessionEntry.sessionId === "string"
-              ? sessionEntry.sessionId
-              : (typeof event?.sessionId === "string" ? event.sessionId : "unknown");
-            clearSessionId = currentSessionId;
-            let currentSessionFile = typeof sessionEntry.sessionFile === "string" ? sessionEntry.sessionFile : undefined;
-            const runtimeAgentId =
-              asNonEmptyString(typeof event?.agentId === "string" ? event.agentId : undefined) ??
-              asNonEmptyString(typeof context.agentId === "string" ? context.agentId : undefined);
-            const sourceWorkspaceDir = runtimeAgentId
-              ? (agentWorkspaceMap[runtimeAgentId] || workspaceDir)
-              : workspaceDir;
-            const commandSource = typeof context.commandSource === "string" ? context.commandSource : "";
-            const triggerKey = `${trigger}|${sessionKey || "(none)"}|${currentSessionFile || currentSessionId || "unknown"}`;
-            if (isDuplicateReflectionTrigger(triggerKey)) {
-              api.logger.info(`memory-reflection: duplicate trigger skipped; key=${triggerKey}`);
-              return;
-            }
-            api.logger.info(
-              `memory-reflection: ${commandName} enqueue start; sessionKey=${sessionKey || "(none)"}; source=${commandSource || "(unknown)"}; sessionId=${currentSessionId}; sessionFile=${currentSessionFile || "(none)"}`
-            );
-
-            if ((!currentSessionFile || currentSessionFile.includes(".reset.")) && cfg) {
-              const searchDirs = resolveReflectionSessionSearchDirs({
-                context,
-                cfg,
-                workspaceDir: sourceWorkspaceDir,
-                currentSessionFile,
-                sourceAgentId: runtimeAgentId,
-              });
-              for (const sessionsDir of searchDirs) {
-                const recovered = await findPreviousSessionFile(sessionsDir, currentSessionFile, currentSessionId);
-                if (recovered) {
-                  currentSessionFile = recovered;
-                  break;
-                }
-              }
-            }
-
-            let captureItems: BackendCaptureItem[] = [];
-            if (currentSessionFile) {
-              const conversation = await readSessionConversationWithResetFallback(currentSessionFile, reflectionMessageCount);
-              if (conversation) {
-                captureItems = parseConversationToCaptureItems(conversation);
-              }
-            }
-            if (captureItems.length === 0 && Array.isArray(event.messages)) {
-              captureItems = parseEventMessagesToCaptureItems(event.messages);
-            }
-            if (captureItems.length === 0) {
-              api.logger.warn(`memory-reflection: ${commandName} no capture payload found; skip enqueue`);
-              return;
-            }
-
-            if (config.selfImprovement?.enabled !== false && config.selfImprovement?.beforeResetNote !== false) {
-              if (Array.isArray(event.messages)) {
-                const exists = event.messages.some((m: unknown) => typeof m === "string" && m.includes(SELF_IMPROVEMENT_NOTE_PREFIX));
-                if (!exists) {
-                  event.messages.push(buildSelfImprovementResetNote());
-                }
-              }
-            }
-
-            const resolvedBackendCtx = resolveBackendCallContext(
-              mergeContextSources(event, context, {
-                agentId: runtimeAgentId,
-                sessionId: currentSessionId,
-                sessionKey,
-              }),
-              remoteRuntimeDefaults,
-              {
-                agentId: runtimeAgentId,
-                sessionId: currentSessionId,
-                sessionKey,
-              }
-            );
-            if (!resolvedBackendCtx.hasPrincipalIdentity) {
-              api.logger.warn(
-                `memory-reflection: ${commandName} enqueue blocked (missing runtime principal: ${resolvedBackendCtx.missingPrincipalFields.join(", ")})`
-              );
-              return;
-            }
-            const enqueueInput = {
-              trigger,
-              messages: captureItems.slice(0, 256),
-            };
-            void memoryBackendClient
-              .enqueueReflectionJob(resolvedBackendCtx.context, enqueueInput)
-              .then((enqueue) => {
-                api.logger.info(
-                  `memory-reflection: ${commandName} enqueue accepted; jobId=${enqueue.jobId}; status=${enqueue.status}; items=${captureItems.length}`
-                );
-              })
-              .catch((err) => {
-                const msg = err instanceof Error ? err.message : String(err);
-                api.logger.warn(`memory-reflection: ${commandName} enqueue failed: ${msg}`);
-              });
-            return;
-          }
-
-          if (!cfg) {
-            api.logger.warn(`memory-reflection: ${commandName} missing cfg in hook context; skip reflection`);
-            return;
-          }
-          if (!localRuntime) {
-            api.logger.warn(`memory-reflection: ${commandName} local runtime unavailable; skip reflection`);
-            return;
-          }
-
           const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<string, unknown>;
-          const currentSessionId = typeof sessionEntry.sessionId === "string" ? sessionEntry.sessionId : "unknown";
+          const currentSessionId = typeof sessionEntry.sessionId === "string"
+            ? sessionEntry.sessionId
+            : (typeof event?.sessionId === "string" ? event.sessionId : "unknown");
           clearSessionId = currentSessionId;
           let currentSessionFile = typeof sessionEntry.sessionFile === "string" ? sessionEntry.sessionFile : undefined;
-          const sourceAgentId = parseAgentIdFromSessionKey(sessionKey) || "main";
-          const sourceWorkspaceDir = agentWorkspaceMap[sourceAgentId] || workspaceDir;
-          const reflectionRunAgentId = resolveReflectionRunAgentId(cfg, sourceAgentId);
-          const reflectionWorkspaceDir = agentWorkspaceMap[reflectionRunAgentId] || sourceWorkspaceDir;
+          const runtimeAgentId =
+            asNonEmptyString(typeof event?.agentId === "string" ? event.agentId : undefined) ??
+            asNonEmptyString(typeof context.agentId === "string" ? context.agentId : undefined);
+          const sourceWorkspaceDir = runtimeAgentId
+            ? (agentWorkspaceMap[runtimeAgentId] || workspaceDir)
+            : workspaceDir;
           const commandSource = typeof context.commandSource === "string" ? context.commandSource : "";
           const triggerKey = `${trigger}|${sessionKey || "(none)"}|${currentSessionFile || currentSessionId || "unknown"}`;
           if (isDuplicateReflectionTrigger(triggerKey)) {
-            api.logger.info(
-              `memory-reflection: duplicate trigger skipped; key=${triggerKey}`
-            );
+            api.logger.info(`memory-reflection: duplicate trigger skipped; key=${triggerKey}`);
             return;
           }
           api.logger.info(
-            `memory-reflection: ${commandName} hook start; sessionKey=${sessionKey || "(none)"}; source=${commandSource || "(unknown)"}; sessionId=${currentSessionId}; sessionFile=${currentSessionFile || "(none)"}`
+            `memory-reflection: ${commandName} enqueue start; sessionKey=${sessionKey || "(none)"}; source=${commandSource || "(unknown)"}; sessionId=${currentSessionId}; sessionFile=${currentSessionFile || "(none)"}`
           );
 
-          if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
+          if ((!currentSessionFile || currentSessionFile.includes(".reset.")) && cfg) {
             const searchDirs = resolveReflectionSessionSearchDirs({
               context,
               cfg,
               workspaceDir: sourceWorkspaceDir,
               currentSessionFile,
-              sourceAgentId,
+              sourceAgentId: runtimeAgentId,
             });
-            api.logger.info(
-              `memory-reflection: ${commandName} session recovery start for session ${currentSessionId}; initial=${currentSessionFile || "(none)"}; dirs=${searchDirs.join(" | ") || "(none)"}`
-            );
             for (const sessionsDir of searchDirs) {
               const recovered = await findPreviousSessionFile(sessionsDir, currentSessionFile, currentSessionId);
               if (recovered) {
-                api.logger.info(
-                  `memory-reflection: ${commandName} recovered session file ${recovered} from ${sessionsDir}`
-                );
                 currentSessionFile = recovered;
                 break;
               }
             }
           }
 
-          if (!currentSessionFile) {
-            const searchDirs = resolveReflectionSessionSearchDirs({
-              context,
-              cfg,
-              workspaceDir: sourceWorkspaceDir,
-              currentSessionFile,
-              sourceAgentId,
-            });
-            api.logger.warn(
-              `memory-reflection: ${commandName} missing session file after recovery for session ${currentSessionId}; dirs=${searchDirs.join(" | ") || "(none)"}`
-            );
-            return;
-          }
-
-          const conversation = await readSessionConversationWithResetFallback(currentSessionFile, reflectionMessageCount);
-          if (!conversation) {
-            api.logger.warn(
-              `memory-reflection: ${commandName} conversation empty/unusable for session ${currentSessionId}; file=${currentSessionFile}`
-            );
-            return;
-          }
-
-          const now = new Date(typeof event.timestamp === "number" ? event.timestamp : Date.now());
-          const nowTs = now.getTime();
-          const dateStr = now.toISOString().split("T")[0];
-          const timeIso = now.toISOString().split("T")[1].replace("Z", "");
-          const timeHms = timeIso.split(".")[0];
-          const timeCompact = timeIso.replace(/[:.]/g, "");
-          const targetScope = localRuntime.scopeManager.getDefaultScope(sourceAgentId);
-          const toolErrorSignals = sessionKey
-            ? reflectionPromptPlanner.getRecentErrorSignals(sessionKey, reflectionErrorReminderMaxEntries)
-            : [];
-
-          api.logger.info(
-            `memory-reflection: ${commandName} reflection generation start for session ${currentSessionId}; timeoutMs=${reflectionTimeoutMs}`
-          );
-          const reflectionGenerated = await generateReflectionText({
-            conversation,
-            maxInputChars: reflectionMaxInputChars,
-            cfg,
-            agentId: reflectionRunAgentId,
-            workspaceDir: reflectionWorkspaceDir,
-            timeoutMs: reflectionTimeoutMs,
-            thinkLevel: reflectionThinkLevel,
-            toolErrorSignals,
-            logger: api.logger,
-          });
-          api.logger.info(
-            `memory-reflection: ${commandName} reflection generation done for session ${currentSessionId}; runner=${reflectionGenerated.runner}; usedFallback=${reflectionGenerated.usedFallback ? "yes" : "no"}`
-          );
-          const reflectionText = reflectionGenerated.text;
-          if (reflectionGenerated.runner === "cli") {
-            api.logger.warn(
-              `memory-reflection: embedded runner unavailable, used openclaw CLI fallback for session ${currentSessionId}` +
-              (reflectionGenerated.error ? ` (${reflectionGenerated.error})` : "")
-            );
-          } else if (reflectionGenerated.usedFallback) {
-            api.logger.warn(
-              `memory-reflection: fallback used for session ${currentSessionId}` +
-              (reflectionGenerated.error ? ` (${reflectionGenerated.error})` : "")
-            );
-          }
-
-          let openLoopsBlock = "";
-          let derivedFocusBlock = "";
-          if (reflectionInjectMode === "inheritance+derived") {
-            openLoopsBlock = buildReflectionOpenLoopsBlock(extractReflectionOpenLoops(reflectionText));
-            try {
-              const scopes = localRuntime.scopeManager.getAccessibleScopes(sourceAgentId);
-              const historicalEntries = await localRuntime.store.list(scopes, undefined, 160, 0);
-              const historicalDerivedRows = loadAgentDerivedFocusRowsForHandoffFromEntries({
-                entries: historicalEntries,
-                agentId: sourceAgentId,
-                now: nowTs,
-                deriveMaxAgeMs: DEFAULT_REFLECTION_DERIVED_MAX_AGE_MS,
-                shortlistLimit: DEFAULT_REFLECTION_DERIVED_SHORTLIST_LIMIT,
-                finalLimit: DEFAULT_REFLECTION_DERIVED_FINAL_LIMIT,
-              });
-              const historicalDerivedLines = historicalDerivedRows
-                .map((row) => row.text);
-              derivedFocusBlock = buildReflectionDerivedFocusBlock(historicalDerivedLines);
-            } catch (err) {
-              api.logger.warn(`memory-reflection: derived-focus note build failed: ${String(err)}`);
+          let captureItems: BackendCaptureItem[] = [];
+          if (currentSessionFile) {
+            const conversation = await readSessionConversationWithResetFallback(currentSessionFile, reflectionMessageCount);
+            if (conversation) {
+              captureItems = parseConversationToCaptureItems(conversation);
             }
+          }
+          if (captureItems.length === 0 && Array.isArray(event.messages)) {
+            captureItems = parseEventMessagesToCaptureItems(event.messages);
+          }
+          if (captureItems.length === 0) {
+            api.logger.warn(`memory-reflection: ${commandName} no capture payload found; skip enqueue`);
+            return;
           }
 
           if (config.selfImprovement?.enabled !== false && config.selfImprovement?.beforeResetNote !== false) {
-            if (!Array.isArray(event.messages)) {
-              api.logger.warn(`memory-reflection: ${commandName} missing event.messages array; skip note inject`);
-            } else {
+            if (Array.isArray(event.messages)) {
               const exists = event.messages.some((m: unknown) => typeof m === "string" && m.includes(SELF_IMPROVEMENT_NOTE_PREFIX));
               if (!exists) {
-                event.messages.push(buildSelfImprovementResetNote({ openLoopsBlock, derivedFocusBlock }));
-                api.logger.info(`memory-reflection: ${commandName} injected handoff note; messages=${event.messages.length}`);
+                event.messages.push(buildSelfImprovementResetNote());
               }
             }
           }
 
-          const header = [
-            `# Reflection: ${dateStr} ${timeHms} UTC`,
-            "",
-            `- Session Key: ${sessionKey}`,
-            `- Session ID: ${currentSessionId || "unknown"}`,
-            `- Command: ${commandName}`,
-            `- Error Signatures: ${toolErrorSignals.length ? toolErrorSignals.map((s) => s.signatureHash).join(", ") : "(none)"}`,
-            "",
-          ].join("\n");
-          const reflectionBody = `${header}${reflectionText.trim()}\n`;
-
-          const outDir = join(sourceWorkspaceDir, "memory", "reflections", dateStr);
-          await mkdir(outDir, { recursive: true });
-          const agentToken = sanitizeFileToken(sourceAgentId, "agent");
-          const sessionToken = sanitizeFileToken(currentSessionId || "unknown", "session");
-          let relPath = "";
-          let writeOk = false;
-          for (let attempt = 0; attempt < 10; attempt++) {
-            const suffix = attempt === 0 ? "" : `-${Math.random().toString(36).slice(2, 8)}`;
-            const fileName = `${timeCompact}-${agentToken}-${sessionToken}${suffix}.md`;
-            const candidateRelPath = join("memory", "reflections", dateStr, fileName);
-            const candidateOutPath = join(sourceWorkspaceDir, candidateRelPath);
-            try {
-              await writeFile(candidateOutPath, reflectionBody, { encoding: "utf-8", flag: "wx" });
-              relPath = candidateRelPath;
-              writeOk = true;
-              break;
-            } catch (err: any) {
-              if (err?.code === "EEXIST") continue;
-              throw err;
-            }
-          }
-          if (!writeOk) {
-            throw new Error(`Failed to allocate unique reflection file for ${dateStr} ${timeCompact}`);
-          }
-
-          const reflectionGovernanceCandidates = extractReflectionLearningGovernanceCandidates(reflectionText);
-          if (config.selfImprovement?.enabled !== false && reflectionGovernanceCandidates.length > 0) {
-            for (const candidate of reflectionGovernanceCandidates) {
-              await appendSelfImprovementEntry({
-                baseDir: sourceWorkspaceDir,
-                type: "learning",
-                summary: candidate.summary,
-                details: candidate.details,
-                suggestedAction: candidate.suggestedAction,
-                category: "best_practice",
-                area: candidate.area || "config",
-                priority: candidate.priority || "medium",
-                status: candidate.status || "pending",
-                source: `memory-lancedb-pro/reflection:${relPath}`,
-              });
-            }
-          }
-
-          const reflectionEventId = createReflectionEventId({
-            runAt: nowTs,
-            sessionKey,
-            sessionId: currentSessionId || "unknown",
-            agentId: sourceAgentId,
-            command: commandName,
-          });
-
-          const mappedReflectionMemories = extractReflectionMappedMemoryItems(reflectionText);
-          for (const mapped of mappedReflectionMemories) {
-            const vector = await localRuntime.embedder.embedPassage(mapped.text);
-            let existing: Awaited<ReturnType<typeof localRuntime.store.vectorSearch>> = [];
-            try {
-              existing = await localRuntime.store.vectorSearch(vector, 1, 0.1, [targetScope]);
-            } catch (err) {
-              api.logger.warn(
-                `memory-reflection: mapped memory duplicate pre-check failed, continue store: ${String(err)}`,
-              );
-            }
-
-            if (existing.length > 0 && existing[0].score > 0.95) {
-              continue;
-            }
-
-            const importance = mapped.category === "decision" ? 0.85 : 0.8;
-            const metadata = JSON.stringify(buildReflectionMappedMetadata({
-              mappedItem: mapped,
-              eventId: reflectionEventId,
-              agentId: sourceAgentId,
+          const resolvedBackendCtx = resolveBackendCallContext(
+            mergeContextSources(event, context, {
+              agentId: runtimeAgentId,
+              sessionId: currentSessionId,
               sessionKey,
-              sessionId: currentSessionId || "unknown",
-              runAt: nowTs,
-              usedFallback: reflectionGenerated.usedFallback,
-              toolErrorSignals,
-              sourceReflectionPath: relPath,
-            }));
-
-            const storedEntry = await localRuntime.store.store({
-              text: mapped.text,
-              vector,
-              importance,
-              category: mapped.category,
-              scope: targetScope,
-              metadata,
-            });
-
-            if (mdMirror) {
-              await mdMirror(
-                { text: mapped.text, category: mapped.category, scope: targetScope, timestamp: storedEntry.timestamp },
-                { source: `reflection:${mapped.heading}`, agentId: sourceAgentId },
-              );
-            }
-          }
-
-          if (reflectionStoreToLanceDB) {
-            await storeReflectionToLanceDB({
-              reflectionText,
+            }),
+            remoteRuntimeDefaults,
+            {
+              agentId: runtimeAgentId,
+              sessionId: currentSessionId,
               sessionKey,
-              sessionId: currentSessionId || "unknown",
-              agentId: sourceAgentId,
-              command: commandName,
-              scope: targetScope,
-              toolErrorSignals,
-              runAt: nowTs,
-              usedFallback: reflectionGenerated.usedFallback,
-              eventId: reflectionEventId,
-              sourceReflectionPath: relPath,
-              embedPassage: (text) => localRuntime.embedder.embedPassage(text),
-              store: (entry) => localRuntime.store.store(entry),
-            });
-            reflectionPromptPlanner.invalidateAgentCache(sourceAgentId);
+            }
+          );
+          if (!resolvedBackendCtx.hasPrincipalIdentity) {
+            api.logger.warn(
+              `memory-reflection: ${commandName} enqueue blocked (missing runtime principal: ${resolvedBackendCtx.missingPrincipalFields.join(", ")})`
+            );
+            return;
           }
-
-          const dailyPath = join(sourceWorkspaceDir, "memory", `${dateStr}.md`);
-          await ensureDailyLogFile(dailyPath, dateStr);
-          await appendFile(dailyPath, `- [${timeHms} UTC] Reflection generated: \`${relPath}\`\n`, "utf-8");
-
-          api.logger.info(`memory-reflection: wrote ${relPath} for session ${currentSessionId}`);
+          const enqueueInput = {
+            trigger,
+            messages: captureItems.slice(0, 256),
+          };
+          void memoryBackendClient
+            .enqueueReflectionJob(resolvedBackendCtx.context, enqueueInput)
+            .then((enqueue) => {
+              api.logger.info(
+                `memory-reflection: ${commandName} enqueue accepted; jobId=${enqueue.jobId}; status=${enqueue.status}; items=${captureItems.length}`
+              );
+            })
+            .catch((err) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              api.logger.warn(`memory-reflection: ${commandName} enqueue failed: ${msg}`);
+            });
         } catch (err) {
           api.logger.warn(`memory-reflection: hook failed: ${String(err)}`);
         } finally {
@@ -2654,171 +1918,16 @@ const memoryLanceDBProPlugin = {
     }
 
     // ========================================================================
-    // Auto-Backup (daily JSONL export)
-    // ========================================================================
-
-    let backupTimer: ReturnType<typeof setInterval> | null = null;
-    const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-    async function runBackup() {
-      try {
-        if (!localRuntime) return;
-        const backupDir = api.resolvePath(
-          join(localRuntime.resolvedDbPath, "..", "backups"),
-        );
-        await mkdir(backupDir, { recursive: true });
-
-        const allMemories = await localRuntime.store.list(undefined, undefined, 10000, 0);
-        if (allMemories.length === 0) return;
-
-        const dateStr = new Date().toISOString().split("T")[0];
-        const backupFile = join(backupDir, `memory-backup-${dateStr}.jsonl`);
-
-        const lines = allMemories.map((m) =>
-          JSON.stringify({
-            id: m.id,
-            text: m.text,
-            category: m.category,
-            scope: m.scope,
-            importance: m.importance,
-            timestamp: m.timestamp,
-            metadata: m.metadata,
-          }),
-        );
-
-        await writeFile(backupFile, lines.join("\n") + "\n");
-
-        // Keep only last 7 backups
-        const files = (await readdir(backupDir))
-          .filter((f) => f.startsWith("memory-backup-") && f.endsWith(".jsonl"))
-          .sort();
-        if (files.length > 7) {
-          const { unlink } = await import("node:fs/promises");
-          for (const old of files.slice(0, files.length - 7)) {
-            await unlink(join(backupDir, old)).catch(() => { });
-          }
-        }
-
-        api.logger.info(
-          `memory-lancedb-pro: backup completed (${allMemories.length} entries → ${backupFile})`,
-        );
-      } catch (err) {
-        api.logger.warn(`memory-lancedb-pro: backup failed: ${String(err)}`);
-      }
-    }
-
-    // ========================================================================
     // Service Registration
     // ========================================================================
 
     api.registerService({
       id: "memory-lancedb-pro",
       start: async () => {
-        if (memoryBackendClient) {
-          api.logger.info("memory-lancedb-pro: remote backend mode active (local LanceDB startup checks and backups are disabled)");
-          return;
-        }
-        if (!localRuntime) {
-          api.logger.warn("memory-lancedb-pro: local startup checks skipped because local runtime is unavailable");
-          return;
-        }
-
-        // IMPORTANT: Do not block gateway startup on external network calls.
-        // If embedding/retrieval tests hang (bad network / slow provider), the gateway
-        // may never bind its HTTP port, causing restart timeouts.
-
-        const withTimeout = async <T>(
-          p: Promise<T>,
-          ms: number,
-          label: string,
-        ): Promise<T> => {
-          let timeout: ReturnType<typeof setTimeout> | undefined;
-          const timeoutPromise = new Promise<never>((_, reject) => {
-            timeout = setTimeout(
-              () => reject(new Error(`${label} timed out after ${ms}ms`)),
-              ms,
-            );
-          });
-          try {
-            return await Promise.race([p, timeoutPromise]);
-          } finally {
-            if (timeout) clearTimeout(timeout);
-          }
-        };
-
-        const runStartupChecks = async () => {
-          try {
-            // Test components (bounded time)
-            const embedTest = await withTimeout(
-              localRuntime.embedder.test(),
-              8_000,
-              "embedder.test()",
-            );
-            const retrievalTest = await withTimeout(
-              localRuntime.retriever.test(),
-              8_000,
-              "retriever.test()",
-            );
-
-            api.logger.info(
-              `memory-lancedb-pro: initialized successfully ` +
-              `(embedding: ${embedTest.success ? "OK" : "FAIL"}, ` +
-              `retrieval: ${retrievalTest.success ? "OK" : "FAIL"}, ` +
-              `mode: ${retrievalTest.mode}, ` +
-              `FTS: support=${retrievalTest.hasFtsSupport ? "yes" : "no"}, index=${retrievalTest.hasFtsIndex ? "yes" : "no"})`,
-            );
-
-            if (!embedTest.success) {
-              api.logger.warn(
-                `memory-lancedb-pro: embedding test failed: ${embedTest.error}`,
-              );
-            }
-            if (!retrievalTest.success) {
-              api.logger.warn(
-                `memory-lancedb-pro: retrieval test failed: ${retrievalTest.error}`,
-              );
-            }
-          } catch (error) {
-            api.logger.warn(
-              `memory-lancedb-pro: startup checks failed: ${String(error)}`,
-            );
-          }
-        };
-
-        // Fire-and-forget: allow gateway to start serving immediately.
-        setTimeout(() => void runStartupChecks(), 0);
-
-        // Run initial backup after a short delay, then schedule daily
-        setTimeout(() => void runBackup(), 60_000); // 1 min after start
-        backupTimer = setInterval(() => void runBackup(), BACKUP_INTERVAL_MS);
+        api.logger.info("memory-lancedb-pro: remote backend mode active");
       },
       stop: async () => {
-        if (memoryBackendClient) {
-          if (backupTimer) {
-            clearInterval(backupTimer);
-            backupTimer = null;
-          }
-          api.logger.info("memory-lancedb-pro: stopped (remote backend mode)");
-          return;
-        }
-        if (!localRuntime) {
-          api.logger.warn("memory-lancedb-pro: local shutdown skipped because local runtime is unavailable");
-          return;
-        }
-
-        // Flush pending access reinforcement data before shutdown
-        try {
-          await localRuntime.accessTracker.flush();
-        } catch (err) {
-          api.logger.warn("memory-lancedb-pro: flush failed on stop:", err);
-        }
-        localRuntime.accessTracker.destroy();
-
-        if (backupTimer) {
-          clearInterval(backupTimer);
-          backupTimer = null;
-        }
-        api.logger.info("memory-lancedb-pro: stopped");
+        api.logger.info("memory-lancedb-pro: stopped (remote backend mode)");
       },
     });
   },
@@ -2833,9 +1942,11 @@ export function parsePluginConfig(value: unknown): PluginConfig {
   const remoteBackendRaw = typeof cfg.remoteBackend === "object" && cfg.remoteBackend !== null
     ? cfg.remoteBackend as Record<string, unknown>
     : null;
-  const remoteBackendEnabled =
-    remoteBackendRaw?.enabled === true ||
-    (typeof remoteBackendRaw?.baseURL === "string" && remoteBackendRaw.baseURL.trim().length > 0);
+  if (!remoteBackendRaw || remoteBackendRaw.enabled !== true) {
+    throw new Error(
+      "remoteBackend.enabled=true is required; local-authority runtime has been removed"
+    );
+  }
   const remoteBackendBaseURL = typeof remoteBackendRaw?.baseURL === "string"
     ? resolveEnvVars(remoteBackendRaw.baseURL)
     : undefined;
@@ -2843,86 +1954,11 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     ? resolveEnvVars(remoteBackendRaw.authToken)
     : undefined;
 
-  if (remoteBackendEnabled) {
-    if (!remoteBackendBaseURL) {
-      throw new Error("remoteBackend.baseURL is required when remoteBackend is enabled");
-    }
-    if (!remoteBackendAuthToken) {
-      throw new Error("remoteBackend.authToken is required when remoteBackend is enabled");
-    }
+  if (!remoteBackendBaseURL) {
+    throw new Error("remoteBackend.baseURL is required when remoteBackend is enabled");
   }
-
-  let embeddingConfig: PluginConfig["embedding"];
-  if (!remoteBackendEnabled) {
-    const embedding = cfg.embedding as Record<string, unknown> | undefined;
-    if (!embedding) {
-      throw new Error("embedding config is required when remoteBackend is disabled (local mode)");
-    }
-
-    // Accept single key (string) or array of keys for round-robin rotation
-    let apiKey: string | string[];
-    if (typeof embedding.apiKey === "string") {
-      apiKey = embedding.apiKey;
-    } else if (Array.isArray(embedding.apiKey) && embedding.apiKey.length > 0) {
-      // Validate every element is a non-empty string
-      const invalid = embedding.apiKey.findIndex(
-        (k: unknown) => typeof k !== "string" || (k as string).trim().length === 0,
-      );
-      if (invalid !== -1) {
-        throw new Error(
-          `embedding.apiKey[${invalid}] is invalid: expected non-empty string`,
-        );
-      }
-      apiKey = embedding.apiKey as string[];
-    } else if (embedding.apiKey !== undefined) {
-      // apiKey is present but wrong type — throw, don't silently fall back
-      throw new Error("embedding.apiKey must be a string or non-empty array of strings");
-    } else {
-      // No apiKey configured — try env var, then fall back to dummy key for local providers (e.g. Ollama)
-      const envKey = process.env.OPENAI_API_KEY;
-      if (envKey) {
-        apiKey = envKey;
-      } else {
-        apiKey = "no-key-required";
-        console.warn(
-          "[memory-lancedb-pro] No embedding.apiKey configured and OPENAI_API_KEY env var not set. " +
-          "This is fine for local providers (Ollama), but cloud providers (Jina, OpenAI) will fail at runtime. " +
-          "Set embedding.apiKey in plugin config or export OPENAI_API_KEY to fix.",
-        );
-      }
-    }
-
-    embeddingConfig = {
-      provider: "openai-compatible",
-      apiKey,
-      model:
-        typeof embedding.model === "string"
-          ? embedding.model
-          : "text-embedding-3-small",
-      baseURL:
-        typeof embedding.baseURL === "string"
-          ? resolveEnvVars(embedding.baseURL)
-          : undefined,
-      // Accept number, numeric string, or env-var string (e.g. "${EMBED_DIM}").
-      // Also accept legacy top-level `dimensions` for convenience.
-      dimensions: parsePositiveInt(embedding.dimensions ?? cfg.dimensions),
-      taskQuery:
-        typeof embedding.taskQuery === "string"
-          ? embedding.taskQuery
-          : undefined,
-      taskPassage:
-        typeof embedding.taskPassage === "string"
-          ? embedding.taskPassage
-          : undefined,
-      normalized:
-        typeof embedding.normalized === "boolean"
-          ? embedding.normalized
-          : undefined,
-      chunking:
-        typeof embedding.chunking === "boolean"
-          ? embedding.chunking
-          : undefined,
-    };
+  if (!remoteBackendAuthToken) {
+    throw new Error("remoteBackend.authToken is required when remoteBackend is enabled");
   }
 
   const memoryReflectionRaw = typeof cfg.memoryReflection === "object" && cfg.memoryReflection !== null
@@ -2949,9 +1985,6 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     injectModeRaw === "inheritance-only" || injectModeRaw === "inheritance+derived"
       ? injectModeRaw
       : "inheritance+derived";
-  const reflectionStoreToLanceDB =
-    sessionStrategy === "memoryReflection" &&
-    (memoryReflectionRaw?.storeToLanceDB !== false);
   const memoryReflectionRecallRaw = typeof memoryReflectionRaw?.recall === "object" && memoryReflectionRaw.recall !== null
     ? memoryReflectionRaw.recall as Record<string, unknown>
     : null;
@@ -2970,13 +2003,11 @@ export function parsePluginConfig(value: unknown): PluginConfig {
   const autoRecallSelectionMode: AutoRecallSelectionMode =
     cfg.autoRecallSelectionMode === "setwise-v2"
       ? "setwise-v2"
-      : cfg.autoRecallSelectionMode === "mmr" || cfg.autoRecallSelectionMode === "legacy"
+      : cfg.autoRecallSelectionMode === "mmr"
         ? "mmr"
       : DEFAULT_AUTO_RECALL_SELECTION_MODE;
 
   return {
-    embedding: embeddingConfig,
-    dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : undefined,
     autoCapture: cfg.autoCapture !== false,
     // Default OFF: only enable when explicitly set to true.
     autoRecall: cfg.autoRecall === true,
@@ -2991,14 +2022,6 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     autoRecallMaxAgeDays: parsePositiveInt(cfg.autoRecallMaxAgeDays) ?? DEFAULT_AUTO_RECALL_MAX_AGE_DAYS,
     autoRecallMaxEntriesPerKey: parsePositiveInt(cfg.autoRecallMaxEntriesPerKey) ?? DEFAULT_AUTO_RECALL_MAX_ENTRIES_PER_KEY,
     captureAssistant: cfg.captureAssistant === true,
-    retrieval:
-      typeof cfg.retrieval === "object" && cfg.retrieval !== null
-        ? (cfg.retrieval as any)
-        : undefined,
-    scopes:
-      typeof cfg.scopes === "object" && cfg.scopes !== null
-        ? (cfg.scopes as any)
-        : undefined,
     enableManagementTools: cfg.enableManagementTools === true,
     sessionStrategy,
     selfImprovement: typeof cfg.selfImprovement === "object" && cfg.selfImprovement !== null
@@ -3017,7 +2040,6 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     memoryReflection: memoryReflectionRaw
       ? {
         enabled: sessionStrategy === "memoryReflection",
-        storeToLanceDB: reflectionStoreToLanceDB,
         injectMode: reflectionInjectMode,
         agentId: asNonEmptyString(memoryReflectionRaw.agentId),
         messageCount: reflectionMessageCount,
@@ -3043,7 +2065,6 @@ export function parsePluginConfig(value: unknown): PluginConfig {
       }
       : {
         enabled: sessionStrategy === "memoryReflection",
-        storeToLanceDB: reflectionStoreToLanceDB,
         injectMode: "inheritance+derived",
         agentId: undefined,
         messageCount: reflectionMessageCount,
@@ -3076,27 +2097,14 @@ export function parsePluginConfig(value: unknown): PluginConfig {
               : undefined,
         }
         : undefined,
-    mdMirror:
-      typeof cfg.mdMirror === "object" && cfg.mdMirror !== null
-        ? {
-          enabled:
-            (cfg.mdMirror as Record<string, unknown>).enabled === true,
-          dir:
-            typeof (cfg.mdMirror as Record<string, unknown>).dir === "string"
-              ? ((cfg.mdMirror as Record<string, unknown>).dir as string)
-              : undefined,
-        }
-        : undefined,
-    remoteBackend: remoteBackendEnabled
-      ? {
-        enabled: true,
-        baseURL: remoteBackendBaseURL,
-        authToken: remoteBackendAuthToken,
-        timeoutMs: parsePositiveInt(remoteBackendRaw?.timeoutMs) ?? 10_000,
-        maxRetries: parseNonNegativeNumber(remoteBackendRaw?.maxRetries) ?? 1,
-        retryBackoffMs: parsePositiveInt(remoteBackendRaw?.retryBackoffMs) ?? 250,
-      }
-      : undefined,
+    remoteBackend: {
+      enabled: true,
+      baseURL: remoteBackendBaseURL,
+      authToken: remoteBackendAuthToken,
+      timeoutMs: parsePositiveInt(remoteBackendRaw?.timeoutMs) ?? 10_000,
+      maxRetries: parseNonNegativeNumber(remoteBackendRaw?.maxRetries) ?? 1,
+      retryBackoffMs: parsePositiveInt(remoteBackendRaw?.retryBackoffMs) ?? 250,
+    },
   };
 }
 

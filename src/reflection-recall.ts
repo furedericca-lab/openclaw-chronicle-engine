@@ -1,4 +1,4 @@
-import type { MemoryEntry } from "./store.js";
+import type { MemoryEntry } from "./memory-record-types.js";
 import { parseReflectionMetadata } from "./reflection-metadata.js";
 import { sanitizeReflectionSliceLines } from "./reflection-slices.js";
 import { computeReflectionScore, normalizeReflectionLineForAggregation } from "./reflection-ranking.js";
