@@ -99,6 +99,24 @@ impl AppError {
         )
     }
 
+    pub fn upstream_embedding(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::UpstreamEmbeddingError,
+            true,
+            message,
+        )
+    }
+
+    pub fn upstream_rerank(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::UpstreamRerankError,
+            true,
+            message,
+        )
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
