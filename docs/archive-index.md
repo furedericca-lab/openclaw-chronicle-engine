@@ -22,6 +22,8 @@ Interpretation:
 
 Archived scopes:
 
+- `src-test-residual-cleanup-2026-03-17/`: single-contract cleanup record for removing final `src/` and `test/` old-architecture residue after the remote-backend cutover, including backend-owned recall filter forwarding, stale test naming cleanup, consolidation of test-only reflection helpers, and consolidation of self-improvement registration into the main self-improvement tool module. Collected: `2026-03-17`. Reference value: `7/10`.
+  Why: useful as a focused audit trail for the final low-level structure cleanup after the major remote-authority migration settled, especially where several small residual files were collapsed without changing runtime ownership boundaries.
 - `recall-boundary-tightening-2026-03-17/`: single-contract cleanup record for removing dead runtime noise-filter residue, pushing backend-visible recall filter semantics fully into the backend contract/execution path, and separating self-improvement registration from the remote memory adapter surface. Collected: `2026-03-17`. Reference value: `7/10`.
   Why: useful as a focused audit trail for the point where generic/reflection recall filtering stopped being plugin-owned planner logic and became explicitly backend-owned behavior.
 - `reflection-src-residual-cleanup-2026-03-17/`: single-contract cleanup record for deleting dead `src/reflection*` local-authority residue, inlining the last planner-only type, and moving the remaining test-only reflection helpers under `test/helpers/`. Collected: `2026-03-17`. Reference value: `6/10`.

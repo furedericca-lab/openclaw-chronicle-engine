@@ -10,6 +10,12 @@ export interface SelfImprovementToolContext {
   workspaceDir?: string;
 }
 
+export interface SelfImprovementRegistrationOptions {
+  enableManagementTools?: boolean;
+  enabled?: boolean;
+  defaultWorkspaceDir?: string;
+}
+
 function resolveWorkspaceDir(toolCtx: unknown, fallback?: string): string {
   const runtime = toolCtx as Record<string, unknown> | undefined;
   const runtimePath = typeof runtime?.workspaceDir === "string" ? runtime.workspaceDir.trim() : "";
@@ -255,4 +261,18 @@ export function registerSelfImprovementReviewTool(api: OpenClawPluginApi, contex
     }),
     { name: "self_improvement_review" }
   );
+}
+
+export function registerSelfImprovementTools(
+  api: OpenClawPluginApi,
+  options: SelfImprovementRegistrationOptions = {}
+) {
+  if (options.enabled === false) return;
+
+  const passthroughCtx: SelfImprovementToolContext = { workspaceDir: options.defaultWorkspaceDir };
+  registerSelfImprovementLogTool(api, passthroughCtx);
+  if (options.enableManagementTools) {
+    registerSelfImprovementExtractSkillTool(api, passthroughCtx);
+    registerSelfImprovementReviewTool(api, passthroughCtx);
+  }
 }

@@ -16,7 +16,7 @@ const jiti = jitiFactory(import.meta.url, {
 });
 
 const pluginModule = jiti("../index.ts");
-const memoryLanceDBProPlugin = pluginModule.default || pluginModule;
+const chronicleEnginePlugin = pluginModule.default || pluginModule;
 const { parsePluginConfig } = pluginModule;
 const {
   buildBackendCallContext,
@@ -240,7 +240,7 @@ describe("remote backend shell integration", () => {
     const root = makeTempRoot();
     assert.throws(
       () =>
-        memoryLanceDBProPlugin.register(
+        chronicleEnginePlugin.register(
           createPluginApiHarness({
             pluginConfig: makeRemoteConfig(root, {
               sessionStrategy: "memoryReflection",
@@ -365,11 +365,11 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
     assert.equal(
       existsSync(path.join(root, "memory-db")),
       false,
-      "remote mode should not initialize local LanceDB storage path on register"
+      "remote mode should not initialize any local memory storage path on register"
     );
 
     assert.equal(harness.cliRegistrations.length, 0, "remote mode should disable local memory-pro CLI");
@@ -425,7 +425,8 @@ describe("remote backend shell integration", () => {
     assert.equal(fetchMock.calls.length, 4);
 
     assert.equal(recallCall.path, "/v1/recall/generic");
-    assert.deepEqual(Object.keys(recallCall.body).sort(), ["actor", "limit", "query"]);
+    assert.deepEqual(Object.keys(recallCall.body).sort(), ["actor", "categories", "limit", "query"]);
+    assert.deepEqual(recallCall.body.categories, ["decision"]);
     assert.equal(recallCall.body.actor.userId, "user-7");
     assert.equal(recallCall.body.actor.agentId, "agent-7");
     assert.equal(recallCall.body.actor.sessionId, "session-runtime-7");
@@ -561,7 +562,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     for (const toolName of ["memory_reflection_status", "memory_distill_enqueue", "memory_distill_status", "memory_recall_debug", "memory_list", "memory_stats"]) {
       assert.ok(harness.toolFactories.has(toolName), `expected management tool registration: ${toolName}`);
@@ -671,7 +672,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const recall = harness.instantiateTool("memory_recall", {
       sessionKey: "agent:agent-missing:session:stable-missing",
@@ -702,7 +703,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const store = harness.instantiateTool("memory_store", {
       sessionKey: "agent:agent-missing:session:stable-missing",
@@ -730,7 +731,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const enqueue = harness.instantiateTool("memory_distill_enqueue", {
       sessionKey: "agent:agent-missing:session:stable-missing",
@@ -801,7 +802,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const toolCtx = {
       userId: "user-error",
@@ -869,7 +870,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const handler = getLatestHandler(harness.eventHandlers, "agent_end");
     await handler(
@@ -935,7 +936,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const handler = getLatestHandler(harness.eventHandlers, "agent_end");
     await handler(
@@ -986,7 +987,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const beforeAgentStart = getLatestHandler(harness.eventHandlers, "before_agent_start");
     const output = await beforeAgentStart(
@@ -1064,7 +1065,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const store = harness.instantiateTool("memory_store", {
       userId: "user-retry",
@@ -1116,7 +1117,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const store = harness.instantiateTool("memory_store", {
       userId: "user-no-retry",
@@ -1190,7 +1191,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const toolCtx = {
       userId: "user-fail",
@@ -1269,7 +1270,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const beforePromptHandler = getLatestHandler(harness.eventHandlers, "before_prompt_build");
     const output = await beforePromptHandler(
@@ -1318,7 +1319,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const beforePromptHandler = getLatestHandler(harness.eventHandlers, "before_prompt_build");
     const output = await beforePromptHandler(
@@ -1376,7 +1377,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const beforePromptHandler = getLatestHandler(harness.eventHandlers, "before_prompt_build");
     const output = await beforePromptHandler(
@@ -1428,7 +1429,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const commandNewHook = getLatestHandler(harness.commandHooks, "command:new");
     const event = {
@@ -1501,7 +1502,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const commandNewHook = getLatestHandler(harness.commandHooks, "command:new");
     const hookPromise = commandNewHook({
@@ -1560,7 +1561,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const commandResetHook = getLatestHandler(harness.commandHooks, "command:reset");
     await commandResetHook({
@@ -1602,7 +1603,7 @@ describe("remote backend shell integration", () => {
       }),
       resolveRoot: root,
     });
-    memoryLanceDBProPlugin.register(harness.api);
+    chronicleEnginePlugin.register(harness.api);
 
     const commandResetHook = getLatestHandler(harness.commandHooks, "command:reset");
     await commandResetHook({

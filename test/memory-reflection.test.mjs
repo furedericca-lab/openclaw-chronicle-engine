@@ -16,16 +16,16 @@ const jiti = jitiFactory(import.meta.url, {
 });
 
 const pluginModule = jiti("../index.ts");
-const memoryLanceDBProPlugin = pluginModule.default || pluginModule;
+const chronicleEnginePlugin = pluginModule.default || pluginModule;
 const { parsePluginConfig } = pluginModule;
-const { getDisplayCategoryTag } = jiti("./helpers/reflection-metadata-reference.ts");
+const { getDisplayCategoryTag } = jiti("./helpers/reflection-reference.ts");
 const {
   classifyReflectionRetry,
   computeReflectionRetryDelayMs,
   isReflectionNonRetryError,
   isTransientReflectionUpstreamError,
   runWithReflectionTransientRetryOnce,
-} = jiti("./helpers/reflection-retry-reference.ts");
+} = jiti("./helpers/reflection-reference.ts");
 const { selectPromptLocalAutoRecallResults } = jiti("../src/prompt-local-auto-recall-selection.ts");
 const {
   createDynamicRecallSessionState,
@@ -266,7 +266,7 @@ describe("memory reflection", () => {
 
       const result = await runWithReflectionTransientRetryOnce({
         scope: "reflection",
-        runner: "embedded",
+        runner: "direct",
         retryState,
         execute: async () => {
           attempts += 1;

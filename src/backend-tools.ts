@@ -104,12 +104,10 @@ function registerMemoryRecallTool(
           const rows = await context.backendClient.recallGeneric(resolved.context, {
             query,
             limit: clampInt(limit, 1, 20),
+            categories: category ? [category as MemoryCategory] : undefined,
           });
-          const filtered = category
-            ? rows.filter((row) => row.category === category)
-            : rows;
 
-          if (filtered.length === 0) {
+          if (rows.length === 0) {
             return {
               content: [{ type: "text", text: "No relevant memories found." }],
               details: {
@@ -120,7 +118,7 @@ function registerMemoryRecallTool(
             };
           }
 
-          const text = filtered
+          const text = rows
             .map(
               (row, i) =>
                 `${i + 1}. [${row.id}] [${row.category}] ${row.text} (${(row.score * 100).toFixed(0)}%)`
@@ -131,13 +129,13 @@ function registerMemoryRecallTool(
             content: [
               {
                 type: "text",
-                text: `Found ${filtered.length} memories:\n\n${text}`,
+                text: `Found ${rows.length} memories:\n\n${text}`,
               },
             ],
             details: {
-              count: filtered.length,
+              count: rows.length,
               query,
-              memories: filtered,
+              memories: rows,
               category: category || undefined,
               debug: debug ? { note: "Backend-scoped recall path active." } : undefined,
             },

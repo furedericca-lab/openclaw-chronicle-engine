@@ -39,6 +39,8 @@ export interface ReflectionPromptPlannerDependencies {
     userId?: string;
     mode: "invariant-only" | "invariant+derived";
     limit: number;
+    includeKinds?: ReflectionItemKind[];
+    minScore?: number;
   }) => Promise<BackendRecallReflectionRow[]>;
   sanitizeForContext: (text: string) => string;
   logger?: {

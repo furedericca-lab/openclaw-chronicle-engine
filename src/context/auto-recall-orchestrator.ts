@@ -31,6 +31,10 @@ export interface AutoRecallPlannerDependencies {
     sessionId: string;
     sessionKey?: string;
     userId?: string;
+    categories?: AutoRecallCategory[];
+    excludeReflection?: boolean;
+    maxAgeDays?: number;
+    maxEntriesPerKey?: number;
   }) => Promise<BackendRecallGenericRow[]>;
   sanitizeForContext: (text: string) => string;
   logger?: {
