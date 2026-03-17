@@ -15,6 +15,7 @@
    - Decides when to recall or inject.
    - Renders `<relevant-memories>`, `<inherited-rules>`, and `<error-detected>` blocks.
    - Keeps only session-local orchestration state.
+   - Must not own backend-visible candidate filtering semantics such as category, reflection-kind, score-threshold, age-window, or per-key recall caps.
 
 ## Runtime invariants
 

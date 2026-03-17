@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 
 import { registerRemoteMemoryTools } from "./src/backend-tools.js";
 import { ensureSelfImprovementLearningFiles } from "./src/self-improvement-files.js";
+import { registerSelfImprovementTools } from "./src/self-improvement-registration.js";
 import {
   createSessionExposureState,
   DEFAULT_SESSION_EXPOSURE_MAX_TRACKED_SESSIONS,
@@ -559,10 +560,13 @@ const chronicleEnginePlugin = {
       },
       {
         enableManagementTools: config.enableManagementTools,
-        enableSelfImprovementTools: config.selfImprovement?.enabled !== false,
-        defaultWorkspaceDir: getDefaultWorkspaceDir(),
       }
     );
+    registerSelfImprovementTools(api, {
+      enabled: config.selfImprovement?.enabled !== false,
+      enableManagementTools: config.enableManagementTools,
+      defaultWorkspaceDir: getDefaultWorkspaceDir(),
+    });
 
     // ========================================================================
     // Lifecycle Hooks
@@ -605,6 +609,10 @@ const chronicleEnginePlugin = {
           return await memoryBackendClient.recallGeneric(resolved.context, {
             query: params.query,
             limit: params.limit,
+            categories: params.categories,
+            excludeReflection: params.excludeReflection,
+            maxAgeDays: params.maxAgeDays,
+            maxEntriesPerKey: params.maxEntriesPerKey,
           });
         },
         sanitizeForContext,
@@ -959,6 +967,8 @@ const chronicleEnginePlugin = {
               query: String(params.prompt || "reflection-context"),
               mode,
               limit: params.limit,
+              includeKinds: params.includeKinds,
+              minScore: params.minScore,
             });
           },
           sanitizeForContext,

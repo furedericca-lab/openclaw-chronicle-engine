@@ -16,12 +16,6 @@ import type {
   MemoryCategory,
   ReflectionRecallMode,
 } from "./backend-client/types.js";
-import {
-  registerSelfImprovementExtractSkillTool,
-  registerSelfImprovementLogTool,
-  registerSelfImprovementReviewTool,
-  type SelfImprovementToolContext,
-} from "./self-improvement-tools.js";
 
 const MEMORY_CATEGORIES = [
   "preference",
@@ -41,8 +35,6 @@ const REFLECTION_DEBUG_MODES = ["invariant-only", "invariant+derived"] as const;
 
 export interface BackendToolRegistrationOptions {
   enableManagementTools?: boolean;
-  enableSelfImprovementTools?: boolean;
-  defaultWorkspaceDir?: string;
 }
 
 export interface BackendToolRegistrationContext {
@@ -67,14 +59,6 @@ export function registerRemoteMemoryTools(
     registerMemoryRecallDebugTool(api, context);
     registerMemoryStatsTool(api, context);
     registerMemoryListTool(api, context);
-  }
-  if (options.enableSelfImprovementTools !== false) {
-    const passthroughCtx: SelfImprovementToolContext = { workspaceDir: options.defaultWorkspaceDir };
-    registerSelfImprovementLogTool(api, passthroughCtx);
-    if (options.enableManagementTools) {
-      registerSelfImprovementExtractSkillTool(api, passthroughCtx);
-      registerSelfImprovementReviewTool(api, passthroughCtx);
-    }
   }
 }
 

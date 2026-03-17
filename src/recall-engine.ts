@@ -40,20 +40,6 @@ interface OrchestrateDynamicRecallParams<T extends DynamicRecallCandidate> {
   formatLine: (candidate: T, index: number) => string;
 }
 
-interface FilterByMaxAgeParams<T> {
-  items: T[];
-  maxAgeMs?: number;
-  now?: number;
-  getTimestamp: (item: T) => number;
-}
-
-interface KeepRecentPerKeyParams<T> {
-  items: T[];
-  maxEntriesPerKey?: number;
-  getNormalizedKey: (item: T) => string;
-  getTimestamp: (item: T) => number;
-}
-
 interface CreateDynamicRecallSessionStateOptions {
   maxSessions?: number;
 }
@@ -136,41 +122,6 @@ export async function orchestrateDynamicRecall<T extends DynamicRecallCandidate>
     }),
     injectedCount: memoryLines.length,
   };
-}
-
-export function filterByMaxAge<T>(params: FilterByMaxAgeParams<T>): T[] {
-  if (!Number.isFinite(params.maxAgeMs) || Number(params.maxAgeMs) <= 0) return [...params.items];
-  const now = Number.isFinite(params.now) ? Number(params.now) : Date.now();
-  const maxAgeMs = Number(params.maxAgeMs);
-  return params.items.filter((item) => {
-    const ts = params.getTimestamp(item);
-    return Number.isFinite(ts) && ts > 0 && now - ts <= maxAgeMs;
-  });
-}
-
-export function keepMostRecentPerNormalizedKey<T>(params: KeepRecentPerKeyParams<T>): T[] {
-  const maxEntriesPerKey = Number.isFinite(params.maxEntriesPerKey)
-    ? Math.max(1, Math.floor(Number(params.maxEntriesPerKey)))
-    : 0;
-  if (maxEntriesPerKey <= 0) return [...params.items];
-
-  const sortedByRecency = [...params.items].sort((a, b) => params.getTimestamp(b) - params.getTimestamp(a));
-  const countsByKey = new Map<string, number>();
-  const kept: T[] = [];
-
-  for (const item of sortedByRecency) {
-    const key = params.getNormalizedKey(item).trim();
-    if (!key) {
-      kept.push(item);
-      continue;
-    }
-    const current = countsByKey.get(key) || 0;
-    if (current >= maxEntriesPerKey) continue;
-    countsByKey.set(key, current + 1);
-    kept.push(item);
-  }
-
-  return kept;
 }
 
 export function normalizeRecallTextKey(text: string): string {

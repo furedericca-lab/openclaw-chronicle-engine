@@ -88,9 +88,9 @@ export function createReflectionPromptPlanner(
         userId: params.userId,
         mode: "invariant-only",
         limit: Math.max(1, Math.min(20, normalizePositiveInt(config.recall.topK, 6))),
+        includeKinds: config.recall.includeKinds,
       });
       const visible = rows
-        .filter((row) => config.recall.includeKinds.includes(row.kind))
         .slice(0, 6)
         .map((row, index) => `${index + 1}. ${deps.sanitizeForContext(row.text)}`);
       if (visible.length === 0) return undefined;
@@ -98,7 +98,6 @@ export function createReflectionPromptPlanner(
     }
 
     const topK = Math.max(1, normalizePositiveInt(config.recall.topK, 1));
-    const fetchLimit = Math.min(60, Math.max(topK * 4, topK));
     const result = await orchestrateDynamicRecall({
       channelName: "reflection-recall",
       prompt: params.prompt,
@@ -120,12 +119,11 @@ export function createReflectionPromptPlanner(
           sessionKey: params.sessionKey,
           userId: params.userId,
           mode: "invariant+derived",
-          limit: fetchLimit,
+          limit: topK,
+          includeKinds: config.recall.includeKinds,
+          minScore: config.recall.minScore,
         });
-        return rows
-          .filter((row) => config.recall.includeKinds.includes(row.kind))
-          .filter((row) => Number.isFinite(row.score) && row.score >= config.recall.minScore)
-          .slice(0, topK);
+        return rows.slice(0, topK);
       },
       formatLine: (row, index) =>
         `${index + 1}. ${deps.sanitizeForContext(row.text)} (${(row.score * 100).toFixed(0)}%)`,

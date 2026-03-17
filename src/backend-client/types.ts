@@ -214,19 +214,45 @@ export interface BackendDistillJobStatusResponse extends BackendDistillJobRespon
 export interface MemoryBackendClient {
   recallGeneric: (
     ctx: BackendCallContext,
-    input: { query: string; limit: number }
+    input: {
+      query: string;
+      limit: number;
+      categories?: MemoryCategory[];
+      excludeReflection?: boolean;
+      maxAgeDays?: number;
+      maxEntriesPerKey?: number;
+    }
   ) => Promise<BackendRecallGenericRow[]>;
   recallGenericDebug: (
     ctx: BackendCallContext,
-    input: { query: string; limit: number }
+    input: {
+      query: string;
+      limit: number;
+      categories?: MemoryCategory[];
+      excludeReflection?: boolean;
+      maxAgeDays?: number;
+      maxEntriesPerKey?: number;
+    }
   ) => Promise<BackendRecallGenericDebugResponse>;
   recallReflection: (
     ctx: BackendCallContext,
-    input: { query: string; mode: ReflectionRecallMode; limit: number }
+    input: {
+      query: string;
+      mode: ReflectionRecallMode;
+      limit: number;
+      includeKinds?: Array<"invariant" | "derived">;
+      minScore?: number;
+    }
   ) => Promise<BackendRecallReflectionRow[]>;
   recallReflectionDebug: (
     ctx: BackendCallContext,
-    input: { query: string; mode: ReflectionRecallMode; limit: number }
+    input: {
+      query: string;
+      mode: ReflectionRecallMode;
+      limit: number;
+      includeKinds?: Array<"invariant" | "derived">;
+      minScore?: number;
+    }
   ) => Promise<BackendRecallReflectionDebugResponse>;
   storeToolMemory: (
     ctx: BackendCallContext,

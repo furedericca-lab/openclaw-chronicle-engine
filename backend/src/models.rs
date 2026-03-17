@@ -220,6 +220,14 @@ pub struct RecallGenericRequest {
     pub actor: Actor,
     pub query: String,
     pub limit: u64,
+    #[serde(default)]
+    pub categories: Option<Vec<Category>>,
+    #[serde(default)]
+    pub exclude_reflection: Option<bool>,
+    #[serde(default)]
+    pub max_age_days: Option<u64>,
+    #[serde(default)]
+    pub max_entries_per_key: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -229,6 +237,10 @@ pub struct RecallReflectionRequest {
     pub query: String,
     pub mode: Option<ReflectionRecallMode>,
     pub limit: u64,
+    #[serde(default)]
+    pub include_kinds: Option<Vec<ReflectionKind>>,
+    #[serde(default)]
+    pub min_score: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -327,7 +339,7 @@ pub struct RecallGenericRow {
     pub metadata: RowMetadata,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Ord, PartialOrd)]
 #[serde(rename_all = "lowercase")]
 pub enum ReflectionKind {
     Invariant,
@@ -667,13 +679,28 @@ pub fn validate_stats_request(req: &StatsRequest) -> AppResult<()> {
 pub fn validate_recall_generic_request(req: &RecallGenericRequest) -> AppResult<()> {
     req.actor.validate()?;
     validate_non_empty("query", &req.query)?;
-    validate_limit("limit", req.limit)
+    validate_limit("limit", req.limit)?;
+    if let Some(max_age_days) = req.max_age_days {
+        validate_limit("maxAgeDays", max_age_days)?;
+    }
+    if let Some(max_entries_per_key) = req.max_entries_per_key {
+        validate_limit("maxEntriesPerKey", max_entries_per_key)?;
+    }
+    Ok(())
 }
 
 pub fn validate_recall_reflection_request(req: &RecallReflectionRequest) -> AppResult<()> {
     req.actor.validate()?;
     validate_non_empty("query", &req.query)?;
-    validate_limit("limit", req.limit)
+    validate_limit("limit", req.limit)?;
+    if let Some(min_score) = req.min_score {
+        if !(0.0..=1.0).contains(&min_score) {
+            return Err(AppError::invalid_request(
+                "minScore must be within [0, 1]",
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn validate_enqueue_reflection_job_request(req: &EnqueueReflectionJobRequest) -> AppResult<()> {

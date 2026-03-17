@@ -22,6 +22,8 @@ Interpretation:
 
 Archived scopes:
 
+- `recall-boundary-tightening-2026-03-17/`: single-contract cleanup record for removing dead runtime noise-filter residue, pushing backend-visible recall filter semantics fully into the backend contract/execution path, and separating self-improvement registration from the remote memory adapter surface. Collected: `2026-03-17`. Reference value: `7/10`.
+  Why: useful as a focused audit trail for the point where generic/reflection recall filtering stopped being plugin-owned planner logic and became explicitly backend-owned behavior.
 - `reflection-src-residual-cleanup-2026-03-17/`: single-contract cleanup record for deleting dead `src/reflection*` local-authority residue, inlining the last planner-only type, and moving the remaining test-only reflection helpers under `test/helpers/`. Collected: `2026-03-17`. Reference value: `6/10`.
   Why: useful as a narrow audit trail for the point where `src/` was finally reduced to live prompt-local reflection/recall code instead of carrying dead local-authority helper baggage.
 - `residual-debt-cleanup-2026-03-17/`: single-contract cleanup record for reconciling historical-snapshot docs wording, deleting an empty top-level docs residue, converting the Chinese noise-filter script into automated coverage, and removing the last stale compatibility phrasing from the active schema text. Collected: `2026-03-17`. Reference value: `5/10`.

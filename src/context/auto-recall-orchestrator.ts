@@ -2,9 +2,6 @@ import type { BackendRecallGenericRow } from "../backend-client/types.js";
 import { selectPromptLocalAutoRecallResults } from "../prompt-local-auto-recall-selection.js";
 import type { RecallResultRow } from "../memory-record-types.js";
 import {
-  filterByMaxAge,
-  keepMostRecentPerNormalizedKey,
-  normalizeRecallTextKey,
   orchestrateDynamicRecall,
   type DynamicRecallResult,
   type DynamicRecallSessionState,
@@ -64,7 +61,9 @@ export function createAutoRecallPlanner(
     const agentId = typeof params.agentId === "string" && params.agentId.trim() ? params.agentId.trim() : "main";
     const sessionId = typeof params.sessionId === "string" && params.sessionId.trim() ? params.sessionId.trim() : "default";
     const topK = Math.max(1, normalizePositiveInt(config.topK, 3));
-    const fetchLimit = Math.min(20, Math.max(topK * 4, topK, 8));
+    const fetchLimit = config.selectionMode === "setwise-v2"
+      ? Math.min(20, Math.max(topK * 4, topK, 8))
+      : topK;
 
     return await orchestrateDynamicRecall({
       channelName: "auto-recall",
@@ -86,12 +85,15 @@ export function createAutoRecallPlanner(
           sessionId,
           sessionKey: params.sessionKey,
           userId: params.userId,
+          categories: config.categories,
+          excludeReflection: config.excludeReflection,
+          maxAgeDays: config.maxAgeDays,
+          maxEntriesPerKey: config.maxEntriesPerKey,
         }));
-        const postProcessed = postProcessAutoRecallResults(retrieved, config);
         if (config.selectionMode === "setwise-v2") {
-          return selectPromptLocalAutoRecallResults(postProcessed, { topK });
+          return selectPromptLocalAutoRecallResults(retrieved, { topK });
         }
-        return postProcessed.slice(0, topK);
+        return retrieved.slice(0, topK);
       },
       formatLine: (row) =>
         `- [${row.entry.category}:${row.entry.scope}] ${deps.sanitizeForContext(row.entry.text)} ` +
@@ -100,37 +102,6 @@ export function createAutoRecallPlanner(
   };
 
   return { plan };
-}
-
-function postProcessAutoRecallResults(
-  results: RecallResultRow[],
-  config: Pick<AutoRecallPlannerConfig, "categories" | "excludeReflection" | "maxAgeDays" | "maxEntriesPerKey">
-): RecallResultRow[] {
-  const allowlisted = Array.isArray(config.categories) && config.categories.length > 0
-    ? results.filter((row) => config.categories!.includes(row.entry.category as AutoRecallCategory))
-    : results;
-  const withoutReflection = config.excludeReflection === true
-    ? allowlisted.filter((row) => row.entry.category !== "reflection")
-    : allowlisted;
-  const maxAgeMs = daysToMs(config.maxAgeDays);
-  const withinAge = filterByMaxAge({
-    items: withoutReflection,
-    maxAgeMs,
-    getTimestamp: (row) => row.entry.timestamp,
-  });
-  const cappedRecent = keepMostRecentPerNormalizedKey({
-    items: withinAge,
-    maxEntriesPerKey: config.maxEntriesPerKey,
-    getTimestamp: (row) => row.entry.timestamp,
-    getNormalizedKey: (row) => normalizeRecallTextKey(row.entry.text),
-  });
-  const allowedIds = new Set(cappedRecent.map((row) => row.entry.id));
-  return withinAge.filter((row) => allowedIds.has(row.entry.id));
-}
-
-function daysToMs(days: number | undefined): number | undefined {
-  if (!Number.isFinite(days) || Number(days) <= 0) return undefined;
-  return Number(days) * 24 * 60 * 60 * 1000;
 }
 
 function normalizePositiveInt(value: unknown, fallback: number): number {

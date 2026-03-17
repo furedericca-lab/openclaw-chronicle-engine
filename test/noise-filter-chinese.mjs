@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import jitiFactory from "jiti";
 
 const jiti = jitiFactory(import.meta.url, { interopDefault: true });
-const { isNoise, filterNoise } = jiti("../src/noise-filter.ts");
+const { isNoise, filterNoise } = jiti("./helpers/noise-filter-reference.ts");
 
 const SHOULD_BE_NOISE = [
   { text: "我没有相关信息", category: "denial" },

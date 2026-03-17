@@ -3745,6 +3745,137 @@ async fn reflection_recall_mode_honors_invariant_only_semantics() {
 }
 
 #[tokio::test]
+async fn generic_recall_applies_backend_owned_filter_fields() {
+    let app = setup_app();
+
+    for (idx, text) in [
+        "Verify DNS and mount health after restart.",
+        "Verify DNS and mount health after restart.",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let session_id = format!("sess-generic-filter-{idx}");
+        let store = json!({
+            "actor": actor("u1", "main", &session_id, "session-key-1"),
+            "mode": "tool-store",
+            "memory": {
+                "text": text,
+                "category": "fact"
+            }
+        });
+        let (status, _) = request_json(
+            &app,
+            Method::POST,
+            "/v1/memories/store",
+            Some(store),
+            Some(&format!("idem-generic-filter-{idx}")),
+            Some(("u1", "main")),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    let reflection_store = json!({
+        "actor": actor("u1", "main", "sess-generic-filter-reflection", "session-key-1"),
+        "mode": "tool-store",
+        "memory": {
+            "text": "Reflection-only memory should not pass generic backend filter.",
+            "category": "reflection"
+        }
+    });
+    let (status, _) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(reflection_store),
+        Some("idem-generic-filter-reflection"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let recall = json!({
+        "actor": actor("u1", "main", "sess-generic-filter-query", "session-key-1"),
+        "query": "verify DNS and mount health",
+        "limit": 5,
+        "categories": ["fact", "reflection"],
+        "excludeReflection": true,
+        "maxEntriesPerKey": 1
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/recall/generic",
+        Some(recall),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body["rows"].as_array().expect("rows should be an array");
+    assert_eq!(rows.len(), 1, "backend should enforce duplicate/key filtering");
+    assert_eq!(rows[0]["category"], "fact");
+    assert!(
+        rows[0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Verify DNS and mount health after restart."),
+        "backend should keep the fact row after applying filters"
+    );
+}
+
+#[tokio::test]
+async fn reflection_recall_applies_include_kinds_filter() {
+    let app = setup_app();
+
+    let store_reflection = json!({
+        "actor": actor("u1", "main", "sess-ref-filter-1", "session-key-1"),
+        "mode": "tool-store",
+        "memory": {
+            "text": "Always verify health checks before infra edits",
+            "category": "reflection"
+        }
+    });
+    let (status, _) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(store_reflection),
+        Some("idem-ref-filter-store"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let derived_only = json!({
+        "actor": actor("u1", "main", "sess-ref-filter-2", "session-key-1"),
+        "query": "health",
+        "mode": "invariant+derived",
+        "limit": 5,
+        "includeKinds": ["derived"],
+        "minScore": 0.0
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/recall/reflection",
+        Some(derived_only),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body["rows"].as_array().expect("rows should be an array");
+    assert_eq!(rows.len(), 0, "backend should enforce reflection kind filtering");
+}
+
+#[tokio::test]
 async fn idempotency_reuse_returns_conflict() {
     let app = setup_app();
 

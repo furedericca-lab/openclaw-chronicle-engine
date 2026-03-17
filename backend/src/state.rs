@@ -1949,6 +1949,7 @@ impl LanceMemoryRepo {
                 trace.as_mut(),
             )
             .await?;
+        let ranked = apply_generic_recall_filters(ranked, &req);
         if let Err(err) = self
             .record_recall_access_metadata(&table, &req.actor, &ranked)
             .await
@@ -2076,6 +2077,7 @@ impl LanceMemoryRepo {
                 trace.as_mut(),
             )
             .await?;
+        let ranked = apply_reflection_recall_filters(ranked, &req);
         if let Err(err) = self
             .record_recall_access_metadata(&table, &req.actor, &ranked)
             .await
@@ -2776,6 +2778,106 @@ impl LanceMemoryRepo {
             ))
         })
     }
+}
+
+fn apply_generic_recall_filters(
+    ranked: Vec<RankedMemoryRow>,
+    req: &RecallGenericRequest,
+) -> Vec<RankedMemoryRow> {
+    let category_allowlist = req
+        .categories
+        .as_ref()
+        .filter(|items| !items.is_empty())
+        .map(|items| items.iter().copied().collect::<std::collections::BTreeSet<_>>());
+    let exclude_reflection = req.exclude_reflection.unwrap_or(false);
+    let max_age_ms = req.max_age_days.map(|days| days.saturating_mul(86_400_000));
+    let now = now_millis();
+
+    let filtered = ranked
+        .into_iter()
+        .filter(|row| {
+            category_allowlist
+                .as_ref()
+                .map(|allowed| allowed.contains(&row.row.category))
+                .unwrap_or(true)
+        })
+        .filter(|row| !(exclude_reflection && matches!(row.row.category, Category::Reflection)))
+        .filter(|row| {
+            max_age_ms
+                .map(|max_age| {
+                    let ts = if row.row.updated_at > 0 {
+                        row.row.updated_at
+                    } else {
+                        row.row.created_at
+                    };
+                    ts > 0 && now.saturating_sub(ts) <= max_age as i64
+                })
+                .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+
+    apply_max_entries_per_key(filtered, req.max_entries_per_key)
+}
+
+fn apply_reflection_recall_filters(
+    ranked: Vec<RankedMemoryRow>,
+    req: &RecallReflectionRequest,
+) -> Vec<RankedMemoryRow> {
+    let allowed_kinds = req
+        .include_kinds
+        .as_ref()
+        .filter(|items| !items.is_empty())
+        .map(|items| items.iter().copied().collect::<std::collections::BTreeSet<_>>());
+    let min_score = req.min_score.unwrap_or(0.0);
+
+    ranked
+        .into_iter()
+        .filter(|row| row.score.is_finite() && row.score >= min_score)
+        .filter(|row| {
+            allowed_kinds
+                .as_ref()
+                .map(|allowed| {
+                    let kind = row.row.reflection_kind.unwrap_or(ReflectionKind::Derived);
+                    allowed.contains(&kind)
+                })
+                .unwrap_or(true)
+        })
+        .collect()
+}
+
+fn apply_max_entries_per_key(
+    ranked: Vec<RankedMemoryRow>,
+    max_entries_per_key: Option<u64>,
+) -> Vec<RankedMemoryRow> {
+    let max_entries = max_entries_per_key.unwrap_or(0);
+    if max_entries == 0 {
+        return ranked;
+    }
+
+    let mut counts_by_key = std::collections::BTreeMap::<String, u64>::new();
+    let mut kept = Vec::with_capacity(ranked.len());
+    for row in ranked {
+        let key = normalize_recall_text_key(&row.row.text);
+        if key.is_empty() {
+            kept.push(row);
+            continue;
+        }
+        let current = counts_by_key.get(&key).copied().unwrap_or(0);
+        if current >= max_entries {
+            continue;
+        }
+        counts_by_key.insert(key, current + 1);
+        kept.push(row);
+    }
+    kept
+}
+
+fn normalize_recall_text_key(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_lowercase()
 }
 
 #[derive(Clone)]

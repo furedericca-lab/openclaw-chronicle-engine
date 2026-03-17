@@ -170,6 +170,14 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
         ...withActor(ctx),
         query: input.query,
         limit: clampInt(input.limit, 1, 200),
+        ...(Array.isArray(input.categories) && input.categories.length > 0
+          ? { categories: input.categories }
+          : {}),
+        ...(input.excludeReflection === true ? { excludeReflection: true } : {}),
+        ...(Number.isFinite(input.maxAgeDays) ? { maxAgeDays: clampInt(Number(input.maxAgeDays), 1, 200) } : {}),
+        ...(Number.isFinite(input.maxEntriesPerKey)
+          ? { maxEntriesPerKey: clampInt(Number(input.maxEntriesPerKey), 1, 200) }
+          : {}),
       };
       const response = await requestJson<{ rows: BackendRecallGenericRow[] }>({
         method: "POST",
@@ -185,6 +193,14 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
         ...withActor(ctx),
         query: input.query,
         limit: clampInt(input.limit, 1, 200),
+        ...(Array.isArray(input.categories) && input.categories.length > 0
+          ? { categories: input.categories }
+          : {}),
+        ...(input.excludeReflection === true ? { excludeReflection: true } : {}),
+        ...(Number.isFinite(input.maxAgeDays) ? { maxAgeDays: clampInt(Number(input.maxAgeDays), 1, 200) } : {}),
+        ...(Number.isFinite(input.maxEntriesPerKey)
+          ? { maxEntriesPerKey: clampInt(Number(input.maxEntriesPerKey), 1, 200) }
+          : {}),
       };
       const response = await requestJson<BackendRecallGenericDebugResponse>({
         method: "POST",
@@ -204,6 +220,12 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
         query: input.query,
         mode: input.mode,
         limit: clampInt(input.limit, 1, 200),
+        ...(Array.isArray(input.includeKinds) && input.includeKinds.length > 0
+          ? { includeKinds: input.includeKinds }
+          : {}),
+        ...(Number.isFinite(input.minScore)
+          ? { minScore: clampScore(Number(input.minScore)) }
+          : {}),
       };
       const response = await requestJson<{ rows: BackendRecallReflectionRow[] }>({
         method: "POST",
@@ -220,6 +242,12 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
         query: input.query,
         mode: input.mode,
         limit: clampInt(input.limit, 1, 200),
+        ...(Array.isArray(input.includeKinds) && input.includeKinds.length > 0
+          ? { includeKinds: input.includeKinds }
+          : {}),
+        ...(Number.isFinite(input.minScore)
+          ? { minScore: clampScore(Number(input.minScore)) }
+          : {}),
       };
       const response = await requestJson<BackendRecallReflectionDebugResponse>({
         method: "POST",
@@ -440,6 +468,11 @@ function normalizeBaseUrl(value: string): string {
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function clampScore(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
 }
 
 function shouldRetryStatus(status: number): boolean {

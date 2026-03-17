@@ -20,6 +20,7 @@ In practical terms:
 - retrieval and ranking happen in the backend
 - scope and ACL happen in the backend
 - prompt injection and session-local dedupe stay in the plugin
+- backend-facing recall filter semantics stay in the backend; the plugin only keeps final prompt-only shaping such as `setwise-v2`
 
 ## 2. Architecture At A Glance
 
@@ -182,7 +183,7 @@ No, but the answer needs precision:
 | `src/context/*` | prompt-time orchestration only |
 | `src/recall-engine.ts` | local gating / dedupe / exposure-state helpers |
 | `src/adaptive-retrieval.ts` | prompt-side retrieval trigger heuristic |
-| `src/prompt-local-auto-recall-selection.ts` | prompt-local post-selection over backend rows |
+| `src/prompt-local-auto-recall-selection.ts` | prompt-local final post-selection over backend-approved rows |
 | `src/prompt-local-topk-setwise-selection.ts` | prompt-local utility used by retained local selection seams |
 
 ### Practical interpretation

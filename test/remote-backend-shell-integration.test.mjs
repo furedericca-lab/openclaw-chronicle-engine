@@ -1003,7 +1003,15 @@ describe("remote backend shell integration", () => {
     assert.equal(fetchMock.calls.length, 1);
     const recallCall = fetchMock.calls[0];
     assert.equal(recallCall.path, "/v1/recall/generic");
-    assert.deepEqual(Object.keys(recallCall.body).sort(), ["actor", "limit", "query"]);
+    assert.deepEqual(Object.keys(recallCall.body).sort(), [
+      "actor",
+      "categories",
+      "excludeReflection",
+      "limit",
+      "maxAgeDays",
+      "maxEntriesPerKey",
+      "query",
+    ]);
     assert.ok(
       harness.logs.some((entry) => entry.level === "warn" && entry.message.includes("auto-recall failed")),
       "failure should remain observable in logs"
@@ -1283,8 +1291,9 @@ describe("remote backend shell integration", () => {
     assert.equal(fetchMock.calls.length, 1);
     const recallCall = fetchMock.calls[0];
     assert.equal(recallCall.path, "/v1/recall/reflection");
-    assert.deepEqual(Object.keys(recallCall.body).sort(), ["actor", "limit", "mode", "query"]);
+    assert.deepEqual(Object.keys(recallCall.body).sort(), ["actor", "includeKinds", "limit", "mode", "query"]);
     assert.equal(recallCall.body.mode, "invariant-only");
+    assert.deepEqual(recallCall.body.includeKinds, ["invariant", "derived"]);
     assert.equal(recallCall.body.actor.userId, "user-reflect");
     assert.equal(recallCall.body.actor.agentId, "agent-reflect");
     assert.equal(recallCall.body.actor.sessionId, "session-reflect");

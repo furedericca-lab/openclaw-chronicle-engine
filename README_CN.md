@@ -20,6 +20,7 @@ Chronicle Engine 已经不是“插件内嵌一个本地记忆数据库”的形
 - 检索和排序在后端
 - scope 与 ACL 在后端
 - prompt 注入与 session 级去重保留在插件本地
+- 面向 backend 的 recall 过滤语义也留在 backend；插件只保留 `setwise-v2` 这类最终 prompt 级 shaping
 
 ## 2. 一眼看懂整体架构
 
@@ -182,7 +183,7 @@ distill 请求
 | `src/context/*` | 仅负责 prompt-time 编排 |
 | `src/recall-engine.ts` | 本地 gating / dedupe / exposure-state helper |
 | `src/adaptive-retrieval.ts` | prompt 侧 recall 触发启发式 |
-| `src/prompt-local-auto-recall-selection.ts` | 对 backend rows 做 prompt-local post-selection |
+| `src/prompt-local-auto-recall-selection.ts` | 对 backend 已批准 rows 做最终 prompt-local post-selection |
 | `src/prompt-local-topk-setwise-selection.ts` | 服务于保留本地选择 seam 的 prompt-local 工具函数 |
 
 ### 实际应该怎么理解

@@ -517,6 +517,10 @@ describe("memory reflection", () => {
           state: state.autoRecallState,
           recallGeneric: async (params) => {
             recallCalls.push(params);
+            assert.deepEqual(params.categories, ["fact", "reflection"]);
+            assert.equal(params.excludeReflection, true);
+            assert.equal(params.maxAgeDays, 30);
+            assert.equal(params.maxEntriesPerKey, 5);
             return [
               {
                 id: "fact-1",
@@ -530,9 +534,9 @@ describe("memory reflection", () => {
                 },
               },
               {
-                id: "refl-1",
-                text: "Reflection memory should be filtered for generic recall.",
-                category: "reflection",
+                id: "fact-2",
+                text: "Backend-side filtered recall already excluded reflection rows.",
+                category: "fact",
                 scope: "global",
                 score: 0.89,
                 metadata: {
@@ -558,7 +562,7 @@ describe("memory reflection", () => {
       assert.ok(output);
       assert.match(output.prependContext, /<relevant-memories>/);
       assert.match(output.prependContext, /Always run post-checks/);
-      assert.doesNotMatch(output.prependContext, /Reflection memory should be filtered/);
+      assert.match(output.prependContext, /Backend-side filtered recall already excluded reflection rows/);
     });
 
     it("keeps setwise-v2 as prompt-local post-selection over backend rows", async () => {
@@ -625,7 +629,11 @@ describe("memory reflection", () => {
       assert.equal(recallCalls.length, 1);
       assert.deepEqual(Object.keys(recallCalls[0]).sort(), [
         "agentId",
+        "categories",
+        "excludeReflection",
         "limit",
+        "maxAgeDays",
+        "maxEntriesPerKey",
         "query",
         "sessionId",
         "sessionKey",
@@ -663,6 +671,7 @@ describe("memory reflection", () => {
 
     it("plans reflection inherited-rules and error reminders via dedicated planner module", async () => {
       const sessionState = createSessionExposureState();
+      const recallCalls = [];
       const planner = createReflectionPromptPlanner(
         {
           injectMode: "inheritance+derived",
@@ -682,8 +691,9 @@ describe("memory reflection", () => {
         },
         {
           sessionState,
-          recallReflection: async () => [
-            {
+          recallReflection: async (params) => {
+            recallCalls.push(params);
+            return [{
               id: "invariant-1",
               text: "Always verify scope and post-check results before concluding.",
               kind: "invariant",
@@ -692,8 +702,8 @@ describe("memory reflection", () => {
               metadata: {
                 timestamp: Date.now(),
               },
-            },
-          ],
+            }];
+          },
           sanitizeForContext: (text) => text,
         }
       );
@@ -711,6 +721,8 @@ describe("memory reflection", () => {
       assert.match(first, /<inherited-rules>/);
       assert.match(first, /Always verify scope and post-check results before concluding\./);
       assert.match(first, /<error-detected>/);
+      assert.equal(recallCalls.length, 1);
+      assert.deepEqual(recallCalls[0].includeKinds, ["invariant"]);
 
       const second = await planner.buildBeforePromptPrependContext({
         prompt: "continue with rollout",
@@ -751,6 +763,61 @@ describe("memory reflection", () => {
           ),
         /requires remote recallReflection dependency/
       );
+    });
+
+    it("passes dynamic reflection candidate filters to backend recall", async () => {
+      const sessionState = createSessionExposureState();
+      const recallCalls = [];
+      const planner = createReflectionPromptPlanner(
+        {
+          injectMode: "inheritance+derived",
+          dedupeErrorSignals: true,
+          errorReminderMaxEntries: 2,
+          errorScanMaxChars: 8000,
+          recall: {
+            mode: "dynamic",
+            topK: 2,
+            includeKinds: ["invariant", "derived"],
+            maxAgeDays: 45,
+            maxEntriesPerKey: 10,
+            minRepeated: 1,
+            minScore: 0.4,
+            minPromptLength: 1,
+          },
+        },
+        {
+          sessionState,
+          recallReflection: async (params) => {
+            recallCalls.push(params);
+            return [
+              {
+                id: "derived-1",
+                text: "Escalate to a rollback checklist when service health is uncertain.",
+                kind: "derived",
+                scope: "global",
+                score: 0.67,
+                metadata: {
+                  timestamp: Date.now(),
+                },
+              },
+            ];
+          },
+          sanitizeForContext: (text) => text,
+        }
+      );
+
+      const output = await planner.buildBeforePromptPrependContext({
+        prompt: "What should I watch during the rollout?",
+        agentId: "main",
+        sessionId: "planner-dynamic",
+        sessionKey: "agent:main:session:planner-dynamic",
+      });
+
+      assert.ok(output);
+      assert.equal(recallCalls.length, 1);
+      assert.equal(recallCalls[0].limit, 2);
+      assert.deepEqual(recallCalls[0].includeKinds, ["invariant", "derived"]);
+      assert.equal(recallCalls[0].minScore, 0.4);
     });
 
     it("uses one shared session-clear contract for reflection errors and dynamic recall state", () => {
