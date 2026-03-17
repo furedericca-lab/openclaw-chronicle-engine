@@ -4,13 +4,13 @@ import { join } from "node:path";
 export const DEFAULT_LEARNINGS_TEMPLATE = `# Learnings
 
 Append structured entries:
-- LRN-YYYYMMDD-XXX for corrections / best practices / knowledge gaps
+- LRN-YYYYMMDD-001 for corrections / best practices / knowledge gaps
 - Include summary, details, suggested action, metadata, and status`;
 
 export const DEFAULT_ERRORS_TEMPLATE = `# Errors
 
 Append structured entries:
-- ERR-YYYYMMDD-XXX for command/tool/integration failures
+- ERR-YYYYMMDD-001 for command/tool/integration failures
 - Include symptom, context, probable cause, and prevention`;
 
 const fileWriteQueues = new Map<string, Promise<void>>();

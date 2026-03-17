@@ -1769,7 +1769,7 @@ describe("memory reflection", () => {
   });
 
   describe("sessionStrategy cutover contract", () => {
-    it("rejects removed sessionMemory compatibility fields", () => {
+    it("rejects removed sessionMemory fields", () => {
       assert.throws(
         () =>
           parsePluginConfig({
@@ -1791,7 +1791,7 @@ describe("memory reflection", () => {
       assert.equal(parsed.autoRecallExcludeReflection, true);
     });
 
-    it("defaults Reflection-Recall mode to fixed for compatibility", () => {
+    it("defaults Reflection-Recall mode to fixed", () => {
       const parsed = parsePluginConfig({
         ...baseConfig(),
         sessionStrategy: "memoryReflection",

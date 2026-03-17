@@ -1,6 +1,6 @@
 # Documentation Index
 
-This directory now keeps only the current operator and architecture references.
+This directory keeps the current operator/runtime references plus two intentionally retained top-level historical architecture snapshots.
 
 Current documents:
 
@@ -17,3 +17,4 @@ Selection rule:
 
 - If a document describes a migration plan, phased execution, placeholder gap, MVP target state, or completed cleanup, it belongs in `docs/archive/`.
 - If a document describes how the current repo works today, it stays in `docs/`.
+- Exception: `context-engine-split-2026-03-15/` and `remote-memory-backend-2026-03-17/` stay top-level as read-only historical architecture snapshots, but they are not the canonical current-state docs.

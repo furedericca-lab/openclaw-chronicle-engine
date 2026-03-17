@@ -30,7 +30,7 @@ describe("sessionStrategy cutover contract", () => {
     assert.equal(parsed.sessionStrategy, "systemSessionMemory");
   });
 
-  it("rejects removed sessionMemory compatibility fields", () => {
+  it("rejects removed sessionMemory fields", () => {
     assert.throws(
       () =>
         parsePluginConfig({

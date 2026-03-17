@@ -439,7 +439,7 @@ cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -
 - 不改变 backend authority
 - 不重建 backend retrieval / rerank / embedding authority
 
-### “旧的 `sessionMemory.*` 或被移除的 `memoryReflection.*` 兼容字段现在还能用吗？”
+### “旧的 `sessionMemory.*` 或被移除的 `memoryReflection.*` 字段现在还能用吗？”
 
 不能。`1.0.0-beta.0` 已删除这些只用于迁移的 alias。请只使用当前 schema 中仍然保留的有效字段。
 

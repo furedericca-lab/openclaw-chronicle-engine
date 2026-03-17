@@ -1,8 +1,13 @@
 ---
-description: Canonical technical architecture for context-engine-split.
+description: Historical 2026-03-15 technical architecture snapshot for context-engine-split.
 ---
 
 # context-engine-split Technical Documentation
+
+Historical snapshot note:
+- this document records the 2026-03-15 context-engine split design state;
+- it is not the canonical post-`1.0.0-beta.0` contract or active file-layout authority;
+- references to local compatibility guarantees and to `src/reflection-store.ts` below are snapshot-era design context, not current runtime guidance.
 
 ## Canonical Architecture
 
@@ -11,14 +16,14 @@ Current runtime contract remains:
 - Slot ownership: OpenClaw memory slot
 - Public surfaces: memory tools, reflection/self-improvement tools, current config schema
 
-Target internal architecture after this branch:
+Target internal architecture in this snapshot:
 
 1. **Backend memory core**
    - `src/store.ts`
    - `src/embedder.ts`
    - `src/retriever.ts`
    - `src/scopes.ts`
-   - `src/reflection-store.ts`
+   - historical `src/reflection-store.ts` snapshot (the current repo no longer keeps this file at top level)
    - `src/tools.ts`
 
 2. **Context orchestration core**
@@ -33,7 +38,7 @@ Target internal architecture after this branch:
 ## Key Constraints and Non-Goals
 
 Constraints:
-- Preserve current `memory` plugin contract and config compatibility.
+- Preserve the 2026-03-15 `memory` plugin contract assumptions captured by this snapshot.
 - Preserve gated hook paths:
   - `before_agent_start`
   - `before_prompt_build`
@@ -150,5 +155,5 @@ A later standalone ContextEngine adapter should stay thin and consume existing s
 
 - Full regression: `npm test`
 - Reflection-heavy paths: `node --test test/memory-reflection.test.mjs test/self-improvement.test.mjs`
-- Config compatibility: `node test/config-session-strategy-migration.test.mjs`
+- Session-strategy cutover guard: `node --test test/config-session-strategy-cutover.test.mjs`
 - Doc hygiene: placeholder/residual scans under `docs/context-engine-split`

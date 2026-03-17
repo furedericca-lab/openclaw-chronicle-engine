@@ -15,7 +15,7 @@ Current backend-heavy modules:
 - `src/embedder.ts` — embedding provider abstraction.
 - `src/retriever.ts` — hybrid retrieval, scoring, rerank.
 - `src/scopes.ts` — scope access model.
-- `src/reflection-store.ts` / `src/reflection-item-store.ts` / `src/reflection-event-store.ts` — reflection persistence.
+- historical `src/reflection-store.ts` plus `src/reflection-item-store.ts` / `src/reflection-event-store.ts` — reflection persistence in the 2026-03-15 snapshot; the current repo no longer keeps `src/reflection-store.ts` at top level.
 - `src/tools.ts` — memory/self-improvement tool registration.
 
 Current orchestration-heavy ownership in `index.ts`:
@@ -48,7 +48,7 @@ Supporting orchestration helpers already exist, but are mixed with plugin wiring
    Evidence: no module currently exposes a backend-facing API like "recall generic rows" or "recall reflection rows" without also deciding output tags and block formatting.
 
 5. **Hook-driven behavior is gated and cannot be assumed safe to move blindly.**
-   Evidence: tests in `test/memory-reflection.test.mjs` and `test/config-session-strategy-migration.test.mjs` cover session strategy, dynamic reflection recall, and selection-mode compatibility. These paths must remain green before any later contract change.
+   Evidence: tests in `test/memory-reflection.test.mjs` and `test/config-session-strategy-cutover.test.mjs` cover session strategy, dynamic reflection recall, and selection-mode behavior. These paths must remain green before any later contract change.
 
 ## Architecture/implementation options and trade-offs
 
@@ -100,7 +100,7 @@ Primary repo command:
 
 Focused path checks:
 - `node --test test/memory-reflection.test.mjs test/self-improvement.test.mjs`
-- `node test/config-session-strategy-migration.test.mjs`
+- `node --test test/config-session-strategy-cutover.test.mjs`
 
 Documentation/residual checks:
 - `bash /root/.openclaw/workspace/skills/repo-task-driven/scripts/doc_placeholder_scan.sh docs/context-engine-split`

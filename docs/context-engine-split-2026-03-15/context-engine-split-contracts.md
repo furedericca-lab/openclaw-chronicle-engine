@@ -1,8 +1,12 @@
 ---
-description: API and schema contracts for context-engine-split.
+description: Historical 2026-03-15 API and schema snapshot for context-engine-split.
 ---
 
 # context-engine-split Contracts
+
+Historical snapshot note:
+- this contract records the 2026-03-15 branch assumptions for the context-engine split;
+- it is preserved for architecture history, not as the current post-`1.0.0-beta.0` config/schema authority.
 
 ## API Contracts
 
@@ -101,10 +105,10 @@ Authority rule:
 - local orchestration and adapter modules may pass actor identity and query inputs only;
 - local modules must not compute readable scopes, requested scopes, or policy overrides.
 
-Compatibility rule:
+Compatibility rule in this snapshot:
 - No config key rename in this branch.
 - `autoRecallSelectionMode: legacy` must continue to parse as `mmr`.
-- `sessionMemory.*` legacy compatibility mapping must remain intact.
+- `sessionMemory.*` legacy compatibility mapping was still assumed intact at this point in time.
 
 ## Event contracts
 

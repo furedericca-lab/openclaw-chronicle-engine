@@ -1,8 +1,12 @@
 ---
-description: Scope boundaries and milestones for context-engine-split.
+description: Historical 2026-03-15 scope and milestone snapshot for context-engine-split.
 ---
 
 # context-engine-split Scope and Milestones
+
+Historical snapshot note:
+- this file records the milestone framing for the 2026-03-15 internal split effort;
+- current runtime authority and current config cutover status are documented elsewhere.
 
 ## In Scope
 
@@ -39,7 +43,7 @@ Acceptance gate:
 
 ### Milestone 3 — Behavior-parity verification
 Acceptance gate:
-- Tests covering auto-recall, reflection recall, config compatibility, and self-improvement paths pass.
+- Tests covering auto-recall, reflection recall, session-strategy/config behavior for that snapshot, and self-improvement paths pass.
 - README/docs reflect internal architecture shift without claiming a completed external plugin-contract migration.
 
 ### Milestone 4 — ContextEngine handoff readiness

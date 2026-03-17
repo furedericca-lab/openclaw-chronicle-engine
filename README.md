@@ -435,7 +435,7 @@ It is not backend ownership.
 
 No. It is a prompt-local lexical/coverage selector over ordinary backend-returned rows. It only shapes prompt injection and does not recreate backend retrieval, rerank, or embedding authority.
 
-### “Do old `sessionMemory.*` or removed `memoryReflection.*` compatibility fields still work?”
+### “Do old `sessionMemory.*` or removed `memoryReflection.*` fields still work?”
 
 No. `1.0.0-beta.0` removes those migration-only aliases. Use the active schema fields only.
 

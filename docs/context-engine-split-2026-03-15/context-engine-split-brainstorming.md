@@ -1,14 +1,18 @@
 ---
-description: Brainstorming and decision framing for context-engine-split.
+description: Historical 2026-03-15 brainstorming snapshot for context-engine-split.
 ---
 
 # context-engine-split Brainstorming
+
+Historical snapshot note:
+- this file captures the 2026-03-15 decision framing before the later backend-authority and `1.0.0-beta.0` cutover work;
+- references to compatibility layers and to `src/reflection-store.ts` are preserved as snapshot context, not current repo guidance.
 
 ## Problem
 
 `memory-lancedb-pro` currently mixes two concerns in `index.ts`: long-term memory backend work (LanceDB storage, embedding, retrieval, reflection persistence, tool registration) and turn-time context orchestration (prompt gating, `<relevant-memories>` injection, `<inherited-rules>` injection, `<error-detected>` injection, session-local dedupe/suppression state, and `/new`/`/reset` reflection flows). This makes the plugin harder to evolve toward a dedicated ContextEngine path without destabilizing memory retrieval behavior.
 
-Desired outcome: keep `memory-lancedb-pro` as a strong memory backend while extracting prompt-time orchestration behind a thin compatibility layer that can later move into a separate ContextEngine implementation. Success means backend retrieval/tool behavior stays stable, prompt orchestration becomes modular, and migration can be validated by active-path tests before any external contract switch.
+Desired outcome: keep `memory-lancedb-pro` as a strong memory backend while extracting prompt-time orchestration behind a thin internal seam that could later move into a separate ContextEngine implementation. Success means backend retrieval/tool behavior stays stable, prompt orchestration becomes modular, and migration can be validated by active-path tests before any external contract switch.
 
 ## Scope
 
@@ -29,7 +33,7 @@ Out of scope:
 
 - Framework reality first: this repository currently implements `kind: "memory"` in `openclaw.plugin.json`; no fake contract migration is allowed in this branch.
 - Active paths must stay working: `before_agent_start`, `before_prompt_build`, `after_tool_call`, `agent_end`, `command:new`, and `command:reset`.
-- Storage/retrieval concerns must remain in backend modules such as `src/store.ts`, `src/embedder.ts`, `src/retriever.ts`, `src/reflection-store.ts`, and `src/tools.ts`.
+- Storage/retrieval concerns must remain in backend modules such as `src/store.ts`, `src/embedder.ts`, `src/retriever.ts`, the historical `src/reflection-store.ts` snapshot, and `src/tools.ts`.
 - Prompt-time exposure decisions must move toward orchestration modules without changing user-facing config keys.
 - Tests must cover unset-vs-set config behavior and hook-driven paths before any future default-path switch.
 
