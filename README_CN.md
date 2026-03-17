@@ -103,6 +103,20 @@ Chronicle Engine 已经不是“插件内嵌一个本地记忆数据库”的形
           -> 后续 recall 再读取已持久化的 reflection rows
 ```
 
+### distill job 流
+
+```text
+distill 请求
+  -> 插件 / backend client
+    -> POST /v1/distill/jobs
+      -> backend 校验 actor + source + mode
+        -> backend 异步排队 distill job
+          -> worker 路径清洗 transcript / messages
+            -> backend 持久化 distill artifacts
+              -> 可选写入 memory rows
+                -> GET /v1/distill/jobs/{jobId} 查看状态和结果
+```
+
 ## 5. 旧 TS RAG vs 当前 Rust Remote RAG
 
 ### 能力对照表
@@ -120,6 +134,7 @@ Chronicle Engine 已经不是“插件内嵌一个本地记忆数据库”的形
 | Diversity / MMR | 历史 TS 能力 | Rust backend | 已具备 |
 | Reflection recall 权威 | 本地 TS + 本地持久化路径 | Rust backend recall 路径 | 已替换 |
 | Reflection async jobs | 本地 / 插件耦合执行 | Rust backend enqueue + job tracking | 已替换 |
+| Distill async jobs | 历史 sidecar / example 流水线 | Rust backend distill jobs | 已具备初版 backend-native 能力 |
 | Scope derivation / ACL | 历史上本地 TS 有参与 | 仅 Rust backend | 已替换 |
 | 可检查 retrieval trace | 历史 TS 有更厚 telemetry 对象 | Rust backend debug trace routes | 达到可接受 parity，但不是 1:1 复刻 |
 | Prompt 注入渲染 | 本地 TS | 本地 TS | 有意保留 |
@@ -214,12 +229,31 @@ Chronicle Engine 已经不是“插件内嵌一个本地记忆数据库”的形
 | diversity / MMR | 支持 | backend 权威 |
 | auto-recall prompt 注入 | 支持 | 本地编排 + backend recall |
 | reflection recall + enqueue | 支持 | backend recall/jobs + 本地 prompt 规划 |
+| distill job enqueue + 轮询 | 支持 | backend 权威异步 job 面 |
+| distill inline-messages 清洗 + artifact 持久化 | 支持 | backend 初版 executor |
+| distill `session-transcript` source | 暂未实现 | 契约已冻结，source resolution 仍 deferred |
 | `memory_store` / `memory_update` / `memory_forget` | 支持 | 远程后端工具 |
 | `memory_list` / `memory_stats` | 支持 | 可选管理工具 |
 | 本地 `memory-pro` CLI | 不支持 | 已移除 |
 | 受支持的本地权威运行时 | 不支持 | 已移除 |
 
-## 9. 调试与可观测性
+## 9. Distill：旧 sidecar 与当前 backend-native 方向
+
+| 事项 | 历史 `jsonl_distill.py` / sidecar 流水线 | 当前 backend-native 方向 |
+|---|---|---|
+| Job ownership | 外部脚本 + worker | Rust backend job surface |
+| Source preprocessing | 脚本本地过滤 / 清洗 | backend cleanup / filtering pipeline |
+| Persistence | 外部再导回存储 | backend 自己持久化 artifacts，并可选写 memory |
+| 状态检查 | 队列文件 / worker 日志 | `GET /v1/distill/jobs/{jobId}` |
+| Runtime authority | 已不是 canonical path | backend-native 才是 canonical direction |
+
+重要边界：
+
+- `scripts/jsonl_distill.py` 和 `examples/new-session-distill/*` 现在只是 migration-reference / example residue
+- 它们不是当前受支持运行路径
+- 当前受支持方向是 backend-native distill jobs
+
+## 10. 调试与可观测性
 
 现在有两层可观测面：
 
@@ -233,7 +267,7 @@ Chronicle Engine 已经不是“插件内嵌一个本地记忆数据库”的形
 - 普通 recall DTO 不暴露厚重 score-breakdown 内部字段
 - debug trace route 的存在，是为了在不污染运行时契约的前提下补足调试能力
 
-## 10. 安装
+## 11. 安装
 
 ### 克隆到 OpenClaw 插件目录
 
@@ -272,7 +306,7 @@ openclaw plugins info openclaw-chronicle-engine
 openclaw config get plugins.slots.memory
 ```
 
-## 11. 最小可用配置
+## 12. 最小可用配置
 
 把下面内容放到 `plugins.entries.openclaw-chronicle-engine.config`。
 
@@ -300,7 +334,7 @@ openclaw config get plugins.slots.memory
 | `maxRetries` | 否 | 传输层重试次数 |
 | `retryBackoffMs` | 否 | 重试回退时间 |
 
-## 12. 工具
+## 13. 工具
 
 ### 核心工具
 
@@ -319,7 +353,14 @@ openclaw config get plugins.slots.memory
 - `self_improvement_review`
 - `self_improvement_extract_skill`
 
-## 13. 仓库结构
+### Backend client job 面
+
+插件侧 backend client 还提供：
+
+- reflection jobs
+- distill jobs
+
+## 14. 仓库结构
 
 ```text
 backend/                  Rust backend 实现
@@ -331,7 +372,7 @@ src/context/*             prompt-time orchestration
 test/*                    插件侧测试
 ```
 
-## 14. 测试
+## 15. 测试
 
 ### 插件测试
 
@@ -345,7 +386,7 @@ npm test
 cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -- --nocapture
 ```
 
-## 15. 常见误解
+## 16. 常见误解
 
 ### “这还是本地 LanceDB 插件吗？”
 
@@ -369,7 +410,19 @@ cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -
 - 不改变 backend authority
 - 不改变 `/v1/recall/*` 契约
 
-## 16. 参考
+### “distill 现在是不是还靠旧的 `jsonl_distill.py` sidecar？”
+
+不是。这个脚本现在只作为迁移参考残留存在。
+
+当前受支持方向是：
+
+- backend-native distill jobs
+- backend-owned status
+- backend-owned artifacts
+
+旧 sidecar / example 流水线不是 canonical runtime path。
+
+## 17. 参考
 
 - 运行时架构：`docs/runtime-architecture.md`
 - 文档索引：`docs/README.md`

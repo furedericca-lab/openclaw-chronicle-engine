@@ -13,7 +13,7 @@ Target runtime architecture:
    - LanceDB for memory/reflection storage
    - SQLite job table for reflection enqueue/status
    - owns ACL, scope derivation, retrieval/ranking, model config, gateway config, reflection execution, persistence
-   - future extension point: transcript-distill jobs if distill becomes a first-class backend capability
+   - additionally owns backend-native distill job family with enqueue/status plus the initial `inline-messages` executor slice in this snapshot refresh
 
 2. **Local integration shell**
    - OpenClaw plugin wiring in `index.ts`
@@ -38,7 +38,7 @@ Constraints:
 - backend config comes from static TOML only in MVP;
 - reflection execution is backend-owned and async;
 - `/new` and `/reset` must not block on reflection completion.
-- transcript distill is not yet a shipped backend runtime capability in this snapshot.
+- transcript distill is partially shipped in this snapshot; `session-transcript` source resolution remains deferred.
 
 Non-goals:
 
@@ -123,7 +123,7 @@ Capability boundary note:
 
 - `reflection` is a shipped backend-owned async capability for reflective row generation;
 - `auto-capture` is a shipped backend-owned mutation path for ordinary memory extraction;
-- `distill` is not yet shipped here and should be treated as a future backend-native async transcript capability rather than as the current sidecar example pipeline.
+- `distill` now ships backend-owned enqueue/status plus an initial `inline-messages` executor slice, and should still be treated as a deferred backend-native async transcript capability rather than as the current sidecar example pipeline.
 
 ## Operational behavior
 
@@ -166,10 +166,14 @@ Capability boundary note:
   - shell submits transcript items;
   - backend decides extraction, dedupe, classification, update/delete/noop behavior.
 
-- transcript distill (deferred future capability):
-  - no canonical `/v1` distill route exists in this snapshot;
+- transcript distill (partially shipped capability):
+  - canonical routes now exist:
+    - `POST /v1/distill/jobs`
+    - `GET /v1/distill/jobs/{jobId}`
+  - current implementation supports `inline-messages` execution, artifact persistence, and optional memory-row persistence;
+  - `session-transcript` source resolution and richer extraction/reduction remain deferred;
   - current repo residue such as `scripts/jsonl_distill.py` and `examples/new-session-distill/*` is not part of the active runtime architecture;
-  - if distill is added later, it should follow backend-native async job semantics rather than sidecar queue-file plus local import semantics.
+  - follow-up distill execution should continue following backend-native async job semantics rather than sidecar queue-file plus local import semantics.
 
 - explicit memory update:
   - shell submits `memoryId` plus a constrained patch payload;
@@ -225,7 +229,7 @@ Data-plane route notes:
 
 - `POST /v1/memories/stats` is the canonical caller-scoped stats endpoint in MVP;
 - `GET /v1/reflection/jobs/{jobId}` remains a caller-scoped diagnostic route, not an operator-global inspection route.
-- no distill enqueue/status data-plane route is shipped in this snapshot.
+- distill enqueue/status routes are now shipped as caller-scoped runtime data-plane triggers/diagnostics, and `inline-messages` requests execute asynchronously to terminal status with persisted artifacts.
 
 Shell should log:
 

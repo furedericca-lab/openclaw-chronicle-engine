@@ -2,14 +2,18 @@ use crate::{
     config::AppConfig,
     error::{AppError, AppResult},
     models::{
-        clamped_limit, validate_non_empty, Actor, Category, DeleteRequest,
-        EnqueueReflectionJobResponse, ListRequest, ListResponse, ListRow, MemoryAction,
-        MemoryMutationResult, Principal, RecallGenericRequest, RecallGenericResponse,
-        RecallGenericRow, RecallReflectionRequest, RecallReflectionResponse, ReflectionJobStatus,
-        ReflectionJobStatusResponse, ReflectionKind, ReflectionMetadata, ReflectionRecallMode,
-        ReflectionTrigger, RetrievalTrace, RetrievalTraceKind, RetrievalTraceQuery,
-        RetrievalTraceStage, RetrievalTraceStageStatus, RowMetadata, StatsResponse, StoreRequest,
-        StoreResponse, UpdateRequest, UpdateResponse, DEFAULT_IMPORTANCE,
+        clamped_limit, validate_non_empty, Actor, Category, DeleteRequest, DistillArtifact,
+        DistillArtifactEvidence, DistillArtifactKind, DistillArtifactPersistence,
+        DistillJobResultSummary, DistillJobStatus, DistillJobStatusResponse, DistillMode,
+        DistillPersistMode, DistillSource, DistillSourceKind, EnqueueDistillJobRequest,
+        EnqueueDistillJobResponse, EnqueueReflectionJobResponse, ListRequest, ListResponse,
+        ListRow, MemoryAction, MemoryMutationResult, MessageRole, Principal, RecallGenericRequest,
+        RecallGenericResponse, RecallGenericRow, RecallReflectionRequest, RecallReflectionResponse,
+        ReflectionJobStatus, ReflectionJobStatusResponse, ReflectionKind, ReflectionMetadata,
+        ReflectionRecallMode, ReflectionTrigger, RetrievalTrace, RetrievalTraceKind,
+        RetrievalTraceQuery, RetrievalTraceStage, RetrievalTraceStageStatus, RowMetadata,
+        StatsResponse, StoreRequest, StoreResponse, ToolStoreMemory, UpdateRequest, UpdateResponse,
+        DEFAULT_IMPORTANCE,
     },
 };
 use arrow_array::{
@@ -48,6 +52,7 @@ const MAX_EMBEDDING_RECOVERY_CHUNKS: usize = 256;
 const ACCESS_DECAY_HALF_LIFE_DAYS: f64 = 30.0;
 const MAX_ACCESS_COUNT: i64 = 10_000;
 const ACCESS_UPDATE_MAX_ROWS: usize = 64;
+const DISTILL_MAX_QUOTE_LEN: usize = 160;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -70,6 +75,74 @@ impl AppState {
             memory_repo,
             job_store,
             idempotency_store,
+        })
+    }
+
+    pub async fn execute_distill_job(
+        &self,
+        job_id: String,
+        req: EnqueueDistillJobRequest,
+    ) -> AppResult<()> {
+        self.job_store.mark_distill_running(&job_id)?;
+        match self.run_distill_job(&job_id, &req).await {
+            Ok(summary) => self.job_store.complete_distill(&job_id, &summary),
+            Err(error) => self.job_store.fail_distill(&job_id, &error),
+        }
+    }
+
+    async fn run_distill_job(
+        &self,
+        job_id: &str,
+        req: &EnqueueDistillJobRequest,
+    ) -> AppResult<DistillJobResultSummary> {
+        let prepared = match &req.source {
+            DistillSource::InlineMessages { messages } => prepare_inline_distill_messages(messages),
+            DistillSource::SessionTranscript { .. } => {
+                return Err(AppError::invalid_request(
+                    "session-transcript source is not available in the backend yet; use inline-messages for distill execution",
+                ))
+            }
+        };
+
+        let max_artifacts = req.options.max_artifacts.unwrap_or(20).min(50) as usize;
+        let mut warnings = Vec::new();
+        if prepared.is_empty() {
+            warnings.push("all transcript messages were filtered as noise".to_string());
+        }
+
+        let mut artifacts = build_distill_artifacts(job_id, &prepared, req.mode, max_artifacts);
+        let mut persisted_memory_count = 0u64;
+
+        if let DistillPersistMode::PersistMemoryRows = req.options.persist_mode {
+            for artifact in &mut artifacts {
+                let response = self
+                    .memory_repo
+                    .store(StoreRequest::ToolStore {
+                        actor: req.actor.clone(),
+                        memory: ToolStoreMemory {
+                            text: artifact.text.clone(),
+                            category: Some(artifact.category),
+                            importance: Some(artifact.importance),
+                        },
+                    })
+                    .await?;
+                let persisted_ids: Vec<String> =
+                    response.results.into_iter().map(|row| row.id).collect();
+                persisted_memory_count += persisted_ids.len() as u64;
+                artifact.persistence = Some(DistillArtifactPersistence {
+                    persist_mode: DistillPersistMode::PersistMemoryRows,
+                    persisted_memory_ids: persisted_ids,
+                });
+            }
+        }
+
+        self.job_store
+            .insert_distill_artifacts(job_id, &artifacts)?;
+
+        Ok(DistillJobResultSummary {
+            artifact_count: artifacts.len() as u64,
+            persisted_memory_count,
+            warnings,
         })
     }
 }
@@ -231,6 +304,13 @@ struct RetrievalTraceCollector {
 #[derive(Default)]
 struct RerankTraceSummary {
     stage: Option<RetrievalTraceStage>,
+}
+
+#[derive(Clone)]
+struct DistillPreparedMessage {
+    message_id: u64,
+    role: MessageRole,
+    text: String,
 }
 
 impl RetrievalTraceCollector {
@@ -3068,6 +3148,65 @@ impl JobStore {
         Ok(EnqueueReflectionJobResponse { job_id, status })
     }
 
+    pub fn enqueue_distill(
+        &self,
+        req: &EnqueueDistillJobRequest,
+    ) -> AppResult<EnqueueDistillJobResponse> {
+        validate_non_empty("actor.userId", &req.actor.user_id)?;
+        validate_non_empty("actor.agentId", &req.actor.agent_id)?;
+
+        let status = DistillJobStatus::Queued;
+        let now = now_millis();
+        let job_id = format!("distill_job_{}", Uuid::new_v4().simple());
+        let conn = self.open_conn().map_err(AppError::from)?;
+        let (source_kind, session_key, session_id) = match &req.source {
+            DistillSource::SessionTranscript {
+                session_key,
+                session_id,
+            } => (
+                distill_source_kind_to_str(DistillSourceKind::SessionTranscript),
+                Some(session_key.as_str()),
+                session_id.as_deref(),
+            ),
+            DistillSource::InlineMessages { .. } => (
+                distill_source_kind_to_str(DistillSourceKind::InlineMessages),
+                None,
+                None,
+            ),
+        };
+
+        conn.execute(
+            "INSERT INTO distill_jobs (
+                job_id,
+                user_id,
+                agent_id,
+                session_key,
+                session_id,
+                mode,
+                source_kind,
+                status,
+                result_summary_json,
+                error_json,
+                created_at,
+                updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, NULL, ?9, ?9)",
+            params![
+                &job_id,
+                &req.actor.user_id,
+                &req.actor.agent_id,
+                session_key,
+                session_id,
+                distill_mode_to_str(req.mode),
+                source_kind,
+                distill_status_to_str(status),
+                now,
+            ],
+        )
+        .map_err(|err| AppError::internal(format!("failed to enqueue distill job: {err}")))?;
+
+        Ok(EnqueueDistillJobResponse { job_id, status })
+    }
+
     pub fn get_scoped(
         &self,
         job_id: &str,
@@ -3168,6 +3307,256 @@ impl JobStore {
         Ok(Some(response))
     }
 
+    pub fn get_scoped_distill(
+        &self,
+        job_id: &str,
+        user_id: &str,
+        agent_id: &str,
+    ) -> AppResult<Option<DistillJobStatusResponse>> {
+        let conn = self.open_conn().map_err(AppError::from)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT
+                    user_id,
+                    agent_id,
+                    mode,
+                    source_kind,
+                    status,
+                    result_summary_json,
+                    error_json,
+                    created_at,
+                    updated_at
+                 FROM distill_jobs
+                 WHERE job_id = ?1",
+            )
+            .map_err(|err| AppError::internal(format!("failed to prepare query: {err}")))?;
+
+        let mut rows = stmt
+            .query(params![job_id])
+            .map_err(|err| AppError::internal(format!("failed to query distill job: {err}")))?;
+
+        let Some(row) = rows
+            .next()
+            .map_err(|err| AppError::internal(format!("failed to fetch distill job row: {err}")))?
+        else {
+            return Ok(None);
+        };
+
+        let owner_user_id: String = row
+            .get(0)
+            .map_err(|err| AppError::internal(format!("failed to read owner user_id: {err}")))?;
+        let owner_agent_id: String = row
+            .get(1)
+            .map_err(|err| AppError::internal(format!("failed to read owner agent_id: {err}")))?;
+
+        if owner_user_id != user_id || owner_agent_id != agent_id {
+            return Ok(None);
+        }
+
+        let mode = parse_distill_mode(
+            &row.get::<_, String>(2)
+                .map_err(|err| AppError::internal(format!("failed to read mode: {err}")))?,
+        )?;
+        let source_kind =
+            parse_distill_source_kind(&row.get::<_, String>(3).map_err(|err| {
+                AppError::internal(format!("failed to read source_kind: {err}"))
+            })?)?;
+        let status = parse_distill_status(
+            &row.get::<_, String>(4)
+                .map_err(|err| AppError::internal(format!("failed to read status: {err}")))?,
+        )?;
+        let result_summary_json: Option<String> = row.get(5).map_err(|err| {
+            AppError::internal(format!("failed to read result_summary_json: {err}"))
+        })?;
+        let error_json: Option<String> = row
+            .get(6)
+            .map_err(|err| AppError::internal(format!("failed to read error_json: {err}")))?;
+        let created_at: i64 = row
+            .get(7)
+            .map_err(|err| AppError::internal(format!("failed to read created_at: {err}")))?;
+        let updated_at: i64 = row
+            .get(8)
+            .map_err(|err| AppError::internal(format!("failed to read updated_at: {err}")))?;
+
+        let result = result_summary_json
+            .as_deref()
+            .map(parse_distill_job_result_summary)
+            .transpose()?;
+        let error = error_json
+            .as_deref()
+            .map(parse_job_status_error)
+            .transpose()?;
+
+        Ok(Some(DistillJobStatusResponse {
+            job_id: job_id.to_string(),
+            status,
+            mode,
+            source_kind,
+            created_at,
+            updated_at,
+            result,
+            error,
+        }))
+    }
+
+    pub fn mark_distill_running(&self, job_id: &str) -> AppResult<()> {
+        self.update_distill_status(job_id, DistillJobStatus::Running)
+    }
+
+    pub fn complete_distill(
+        &self,
+        job_id: &str,
+        summary: &DistillJobResultSummary,
+    ) -> AppResult<()> {
+        let conn = self.open_conn().map_err(AppError::from)?;
+        let updated = conn
+            .execute(
+                "UPDATE distill_jobs
+                 SET status = ?2,
+                     result_summary_json = ?3,
+                     error_json = NULL,
+                     updated_at = ?4
+                 WHERE job_id = ?1",
+                params![
+                    job_id,
+                    distill_status_to_str(DistillJobStatus::Completed),
+                    serde_json::to_string(summary).map_err(|err| {
+                        AppError::internal(format!(
+                            "failed to serialize distill result summary: {err}"
+                        ))
+                    })?,
+                    now_millis(),
+                ],
+            )
+            .map_err(|err| AppError::internal(format!("failed to complete distill job: {err}")))?;
+        if updated == 0 {
+            return Err(AppError::not_found(
+                "distill job not found during completion",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn fail_distill(&self, job_id: &str, error: &AppError) -> AppResult<()> {
+        let payload = crate::models::JobStatusError {
+            code: match error.status() {
+                axum::http::StatusCode::BAD_REQUEST => "DISTILL_SOURCE_UNAVAILABLE".to_string(),
+                axum::http::StatusCode::SERVICE_UNAVAILABLE => "UPSTREAM_DISTILL_ERROR".to_string(),
+                _ => "INTERNAL_ERROR".to_string(),
+            },
+            message: error.message().to_string(),
+            retryable: error.status() == axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            details: json!({}),
+        };
+        let conn = self.open_conn().map_err(AppError::from)?;
+        let updated = conn
+            .execute(
+                "UPDATE distill_jobs
+                 SET status = ?2,
+                     result_summary_json = NULL,
+                     error_json = ?3,
+                     updated_at = ?4
+                 WHERE job_id = ?1",
+                params![
+                    job_id,
+                    distill_status_to_str(DistillJobStatus::Failed),
+                    serde_json::to_string(&payload).map_err(|err| {
+                        AppError::internal(format!(
+                            "failed to serialize distill error payload: {err}"
+                        ))
+                    })?,
+                    now_millis(),
+                ],
+            )
+            .map_err(|err| AppError::internal(format!("failed to fail distill job: {err}")))?;
+        if updated == 0 {
+            return Err(AppError::not_found("distill job not found during failure"));
+        }
+        Ok(())
+    }
+
+    pub fn insert_distill_artifacts(
+        &self,
+        job_id: &str,
+        artifacts: &[DistillArtifact],
+    ) -> AppResult<()> {
+        let mut conn = self.open_conn().map_err(AppError::from)?;
+        let tx = conn.transaction().map_err(|err| {
+            AppError::internal(format!(
+                "failed to start distill artifact transaction: {err}"
+            ))
+        })?;
+        for artifact in artifacts {
+            tx.execute(
+                "INSERT INTO distill_artifacts (
+                    artifact_id,
+                    job_id,
+                    kind,
+                    category,
+                    importance,
+                    text,
+                    evidence_json,
+                    tags_json,
+                    persistence_json,
+                    created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    &artifact.artifact_id,
+                    job_id,
+                    distill_artifact_kind_to_str(artifact.kind),
+                    artifact.category.as_str(),
+                    artifact.importance,
+                    &artifact.text,
+                    serde_json::to_string(&artifact.evidence).map_err(|err| {
+                        AppError::internal(format!("failed to serialize artifact evidence: {err}"))
+                    })?,
+                    serde_json::to_string(&artifact.tags).map_err(|err| {
+                        AppError::internal(format!("failed to serialize artifact tags: {err}"))
+                    })?,
+                    artifact
+                        .persistence
+                        .as_ref()
+                        .map(serde_json::to_string)
+                        .transpose()
+                        .map_err(|err| {
+                            AppError::internal(format!(
+                                "failed to serialize artifact persistence: {err}"
+                            ))
+                        })?,
+                    now_millis(),
+                ],
+            )
+            .map_err(|err| {
+                AppError::internal(format!("failed to insert distill artifact: {err}"))
+            })?;
+        }
+        tx.commit().map_err(|err| {
+            AppError::internal(format!("failed to commit distill artifacts: {err}"))
+        })?;
+        Ok(())
+    }
+
+    fn update_distill_status(&self, job_id: &str, status: DistillJobStatus) -> AppResult<()> {
+        let conn = self.open_conn().map_err(AppError::from)?;
+        let updated = conn
+            .execute(
+                "UPDATE distill_jobs
+                 SET status = ?2,
+                     updated_at = ?3
+                 WHERE job_id = ?1",
+                params![job_id, distill_status_to_str(status), now_millis()],
+            )
+            .map_err(|err| {
+                AppError::internal(format!("failed to update distill job status: {err}"))
+            })?;
+        if updated == 0 {
+            return Err(AppError::not_found(
+                "distill job not found during status update",
+            ));
+        }
+        Ok(())
+    }
+
     fn init_schema(&self) -> anyhow::Result<()> {
         let conn = self.open_conn()?;
         conn.execute_batch(
@@ -3186,6 +3575,33 @@ impl JobStore {
                 error_retryable INTEGER,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS distill_jobs (
+                job_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                session_key TEXT,
+                session_id TEXT,
+                mode TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                result_summary_json TEXT,
+                error_json TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS distill_artifacts (
+                artifact_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                category TEXT NOT NULL,
+                importance REAL NOT NULL,
+                text TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                tags_json TEXT NOT NULL,
+                persistence_json TEXT,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(job_id) REFERENCES distill_jobs(job_id)
             );",
         )?;
         Ok(())
@@ -3457,6 +3873,254 @@ fn vector_from_list_column(
     ))
 }
 
+fn prepare_inline_distill_messages(
+    messages: &[crate::models::CaptureItem],
+) -> Vec<DistillPreparedMessage> {
+    messages
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| {
+            let cleaned = clean_distill_text(&item.text);
+            if cleaned.is_empty() || is_noise_distill_text(&cleaned) {
+                return None;
+            }
+            Some(DistillPreparedMessage {
+                message_id: (idx + 1) as u64,
+                role: item.role,
+                text: cleaned,
+            })
+        })
+        .collect()
+}
+
+fn clean_distill_text(text: &str) -> String {
+    let mut cleaned = text.trim().to_string();
+    if cleaned.is_empty() {
+        return String::new();
+    }
+
+    if cleaned.contains("<relevant-memories>") {
+        while let Some(start) = cleaned.find("<relevant-memories>") {
+            if let Some(end_rel) = cleaned[start..].find("</relevant-memories>") {
+                let end = start + end_rel + "</relevant-memories>".len();
+                cleaned.replace_range(start..end, "");
+            } else {
+                cleaned.truncate(start);
+                break;
+            }
+        }
+    }
+
+    for prefix in [
+        "Conversation info (untrusted metadata):",
+        "Replied message (untrusted, for context):",
+    ] {
+        if let Some(rest) = cleaned.strip_prefix(prefix) {
+            cleaned = rest.trim_start().to_string();
+        }
+    }
+
+    cleaned = strip_json_fences(&cleaned);
+    cleaned = collapse_blank_lines(&cleaned);
+    cleaned.trim().to_string()
+}
+
+fn strip_json_fences(input: &str) -> String {
+    let mut out = String::new();
+    let mut remaining = input;
+    loop {
+        let Some(start) = remaining.find("```json") else {
+            out.push_str(remaining);
+            break;
+        };
+        out.push_str(&remaining[..start]);
+        let after_start = &remaining[start + "```json".len()..];
+        let Some(end) = after_start.find("```") else {
+            break;
+        };
+        remaining = &after_start[end + "```".len()..];
+    }
+    out
+}
+
+fn collapse_blank_lines(input: &str) -> String {
+    let mut out = String::new();
+    let mut blank_run = 0_u8;
+    for line in input.lines() {
+        if line.trim().is_empty() {
+            blank_run = blank_run.saturating_add(1);
+            if blank_run <= 1 && !out.is_empty() {
+                out.push('\n');
+            }
+            continue;
+        }
+        blank_run = 0;
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(line.trim_end());
+    }
+    out
+}
+
+fn is_noise_distill_text(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if trimmed.starts_with('/') {
+        return true;
+    }
+    if trimmed.starts_with("✅ New session started") || trimmed.starts_with("NO_REPLY") {
+        return true;
+    }
+    let lowered = trimmed.to_lowercase();
+    if lowered.contains("[queued messages while agent was busy]")
+        || lowered.contains("you are running a boot check")
+        || lowered.contains("boot.md — gateway startup health check")
+        || lowered.contains("read heartbeat.md")
+        || lowered.contains("[claude_code_done]")
+        || lowered.contains("claude_code_done")
+    {
+        return true;
+    }
+    if trimmed.len() > 2000 {
+        return true;
+    }
+    if trimmed.starts_with("```") && trimmed.ends_with("```") {
+        return true;
+    }
+    false
+}
+
+fn build_distill_artifacts(
+    job_id: &str,
+    prepared: &[DistillPreparedMessage],
+    mode: DistillMode,
+    max_artifacts: usize,
+) -> Vec<DistillArtifact> {
+    let mut seen = HashSet::new();
+    let mut rows = Vec::new();
+
+    for message in prepared {
+        let normalized = normalize_recall_text(&message.text);
+        if normalized.is_empty() || !seen.insert(normalized) {
+            continue;
+        }
+        rows.push(build_distill_artifact(job_id, message, mode));
+    }
+
+    rows.sort_by(|a, b| {
+        b.importance
+            .partial_cmp(&a.importance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.text.cmp(&b.text))
+    });
+    rows.truncate(max_artifacts);
+    rows
+}
+
+fn build_distill_artifact(
+    job_id: &str,
+    message: &DistillPreparedMessage,
+    mode: DistillMode,
+) -> DistillArtifact {
+    let quote = truncate_for_error(&message.text, DISTILL_MAX_QUOTE_LEN);
+    let category = infer_distill_category(&message.text, mode);
+    let importance = infer_distill_importance(&message.text, message.role);
+    let tags = extract_distill_tags(&message.text);
+    let summary = summarize_distill_text(&message.text, mode);
+    DistillArtifact {
+        artifact_id: format!("art_{}", Uuid::new_v4().simple()),
+        job_id: job_id.to_string(),
+        kind: match mode {
+            DistillMode::SessionLessons => DistillArtifactKind::Lesson,
+            DistillMode::GovernanceCandidates => DistillArtifactKind::GovernanceCandidate,
+        },
+        category,
+        importance,
+        text: summary,
+        evidence: vec![DistillArtifactEvidence {
+            message_ids: vec![message.message_id],
+            quote,
+        }],
+        tags,
+        persistence: None,
+    }
+}
+
+fn summarize_distill_text(text: &str, mode: DistillMode) -> String {
+    let prefix = match mode {
+        DistillMode::SessionLessons => "Lesson: ",
+        DistillMode::GovernanceCandidates => "Governance candidate: ",
+    };
+    format!("{prefix}{}", truncate_for_error(text, 440))
+}
+
+fn infer_distill_category(text: &str, mode: DistillMode) -> Category {
+    let lowered = text.to_lowercase();
+    if matches!(mode, DistillMode::GovernanceCandidates) {
+        return Category::Decision;
+    }
+    if lowered.contains("prefer") || lowered.contains("preference") {
+        Category::Preference
+    } else if lowered.contains("decide")
+        || lowered.contains("decision")
+        || lowered.contains("should")
+        || lowered.contains("must")
+    {
+        Category::Decision
+    } else if lowered.contains("error")
+        || lowered.contains("fix")
+        || lowered.contains("cause")
+        || lowered.contains("timeout")
+    {
+        Category::Fact
+    } else {
+        Category::Other
+    }
+}
+
+fn infer_distill_importance(text: &str, role: MessageRole) -> f64 {
+    let mut score: f64 = 0.55;
+    let lowered = text.to_lowercase();
+    if lowered.contains("error")
+        || lowered.contains("fix")
+        || lowered.contains("timeout")
+        || lowered.contains("restart")
+    {
+        score += 0.15;
+    }
+    if lowered.contains("because") || lowered.contains("cause") || lowered.contains("prevention") {
+        score += 0.1;
+    }
+    if matches!(role, MessageRole::Assistant) {
+        score += 0.05;
+    }
+    if text.len() > 180 {
+        score += 0.05;
+    }
+    score.clamp(0.0, 0.95)
+}
+
+fn extract_distill_tags(text: &str) -> Vec<String> {
+    let mut tags = Vec::new();
+    let normalized = normalize_recall_text(text);
+    for token in lexical_tokens(&normalized) {
+        if token.len() < 3 {
+            continue;
+        }
+        if tags.iter().any(|existing| existing == &token) {
+            continue;
+        }
+        tags.push(token);
+        if tags.len() >= 5 {
+            break;
+        }
+    }
+    tags
+}
+
 fn parse_status(raw: &str) -> AppResult<ReflectionJobStatus> {
     match raw {
         "queued" => Ok(ReflectionJobStatus::Queued),
@@ -3475,6 +4139,78 @@ fn status_to_str(status: ReflectionJobStatus) -> &'static str {
         ReflectionJobStatus::Running => "running",
         ReflectionJobStatus::Completed => "completed",
         ReflectionJobStatus::Failed => "failed",
+    }
+}
+
+fn parse_distill_status(raw: &str) -> AppResult<DistillJobStatus> {
+    match raw {
+        "queued" => Ok(DistillJobStatus::Queued),
+        "running" => Ok(DistillJobStatus::Running),
+        "completed" => Ok(DistillJobStatus::Completed),
+        "failed" => Ok(DistillJobStatus::Failed),
+        _ => Err(AppError::internal(format!(
+            "unknown distill job status persisted: {raw}"
+        ))),
+    }
+}
+
+fn distill_status_to_str(status: DistillJobStatus) -> &'static str {
+    match status {
+        DistillJobStatus::Queued => "queued",
+        DistillJobStatus::Running => "running",
+        DistillJobStatus::Completed => "completed",
+        DistillJobStatus::Failed => "failed",
+    }
+}
+
+fn parse_distill_mode(raw: &str) -> AppResult<DistillMode> {
+    match raw {
+        "session-lessons" => Ok(DistillMode::SessionLessons),
+        "governance-candidates" => Ok(DistillMode::GovernanceCandidates),
+        _ => Err(AppError::internal(format!(
+            "unknown distill mode persisted: {raw}"
+        ))),
+    }
+}
+
+fn distill_mode_to_str(mode: DistillMode) -> &'static str {
+    match mode {
+        DistillMode::SessionLessons => "session-lessons",
+        DistillMode::GovernanceCandidates => "governance-candidates",
+    }
+}
+
+fn parse_distill_source_kind(raw: &str) -> AppResult<DistillSourceKind> {
+    match raw {
+        "session-transcript" => Ok(DistillSourceKind::SessionTranscript),
+        "inline-messages" => Ok(DistillSourceKind::InlineMessages),
+        _ => Err(AppError::internal(format!(
+            "unknown distill source kind persisted: {raw}"
+        ))),
+    }
+}
+
+fn distill_source_kind_to_str(kind: DistillSourceKind) -> &'static str {
+    match kind {
+        DistillSourceKind::SessionTranscript => "session-transcript",
+        DistillSourceKind::InlineMessages => "inline-messages",
+    }
+}
+
+fn parse_distill_job_result_summary(raw: &str) -> AppResult<DistillJobResultSummary> {
+    serde_json::from_str(raw)
+        .map_err(|err| AppError::internal(format!("invalid distill result_summary_json: {err}")))
+}
+
+fn parse_job_status_error(raw: &str) -> AppResult<crate::models::JobStatusError> {
+    serde_json::from_str(raw)
+        .map_err(|err| AppError::internal(format!("invalid job error_json: {err}")))
+}
+
+fn distill_artifact_kind_to_str(kind: DistillArtifactKind) -> &'static str {
+    match kind {
+        DistillArtifactKind::Lesson => "lesson",
+        DistillArtifactKind::GovernanceCandidate => "governance-candidate",
     }
 }
 

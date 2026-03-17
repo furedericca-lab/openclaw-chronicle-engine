@@ -12,8 +12,8 @@ Canonical documents (active):
 
 Snapshot clarification:
 
-- this 2026-03-17 snapshot covers shipped runtime data-plane capabilities such as recall, auto-capture, memory mutation, and reflection jobs;
-- transcript distill is not a shipped capability in this snapshot;
+- this 2026-03-17 snapshot covers shipped runtime data-plane capabilities such as recall, auto-capture, memory mutation, reflection jobs, and distill enqueue/status with `inline-messages` execution;
+- transcript distill `session-transcript` execution is still not shipped in this snapshot;
 - sidecar/example artifacts such as `scripts/jsonl_distill.py` and `examples/new-session-distill/*` are therefore reference material, not canonical runtime architecture.
 
 Historical execution artifacts:

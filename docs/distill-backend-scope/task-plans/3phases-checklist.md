@@ -21,6 +21,7 @@ description: Execution and verification checklist for distill-backend-scope 3-ph
 - Phase 1: completed, 100%, healthy, blockers: none
 - Phase 2: completed, 100%, healthy, blockers: none
 - Phase 3: completed, 100%, healthy, blockers: none
+- Runtime implementation addendum: completed for inline-messages executor slice; session-transcript source resolution deferred
 
 ## Phase Entry Links
 
@@ -81,6 +82,21 @@ description: Execution and verification checklist for distill-backend-scope 3-ph
     - pass: `[OK] post-refactor text scan passed`
 - Checkpoint confirmation:
   - Phase 3 complete; remote backend docs now include the missing distill viewpoint and the new scope passes doc scans.
+
+## Runtime Implementation Addendum
+
+- Completed in current batch:
+  - backend DTOs, validation, and routes for `POST /v1/distill/jobs` and `GET /v1/distill/jobs/{jobId}`
+  - caller-scoped `distill_jobs` storage plus active `distill_artifacts` persistence
+  - background `inline-messages` executor with terminal status transitions
+  - optional memory-row persistence for `persist-memory-rows`
+  - contract tests for enqueue/status, owner scoping, validation, execution, and persistence
+- Evidence commands + result status:
+  - `cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -- --nocapture`
+    - pass: `47 passed / 0 failed`
+- Remaining deferred work:
+  - `session-transcript` source resolution
+  - provider-driven extraction/reduce beyond the deterministic reducer
 
 ## Final Release Gate
 

@@ -9,6 +9,8 @@ export type MemoryCategory =
 export type ReflectionRecallMode = "invariant-only" | "invariant+derived";
 export type ReflectionTrigger = "new" | "reset";
 export type MessageRole = "user" | "assistant" | "system";
+export type DistillMode = "session-lessons" | "governance-candidates";
+export type DistillPersistMode = "artifacts-only" | "persist-memory-rows";
 
 export interface BackendActor {
   userId: string;
@@ -125,6 +127,44 @@ export interface BackendReflectionJobStatusResponse extends BackendReflectionJob
   };
 }
 
+export interface BackendDistillInlineSource {
+  kind: "inline-messages";
+  messages: BackendCaptureItem[];
+}
+
+export interface BackendDistillSessionTranscriptSource {
+  kind: "session-transcript";
+  sessionKey: string;
+  sessionId?: string;
+}
+
+export type BackendDistillSource =
+  | BackendDistillInlineSource
+  | BackendDistillSessionTranscriptSource;
+
+export interface BackendDistillJobResponse {
+  jobId: string;
+  status: "queued" | "running" | "completed" | "failed";
+}
+
+export interface BackendDistillJobStatusResponse extends BackendDistillJobResponse {
+  mode: DistillMode;
+  sourceKind: BackendDistillSource["kind"];
+  createdAt: number;
+  updatedAt: number;
+  result?: {
+    artifactCount: number;
+    persistedMemoryCount: number;
+    warnings: string[];
+  };
+  error?: {
+    code: string;
+    message: string;
+    retryable: boolean;
+    details: Record<string, unknown>;
+  };
+}
+
 export interface MemoryBackendClient {
   recallGeneric: (
     ctx: BackendCallContext,
@@ -163,4 +203,23 @@ export interface MemoryBackendClient {
     ctx: BackendCallContext,
     input: { jobId: string }
   ) => Promise<BackendReflectionJobStatusResponse>;
+  enqueueDistillJob: (
+    ctx: BackendCallContext,
+    input: {
+      mode: DistillMode;
+      source: BackendDistillSource;
+      options: {
+        persistMode: DistillPersistMode;
+        maxMessages?: number;
+        chunkChars?: number;
+        chunkOverlapMessages?: number;
+        maxArtifacts?: number;
+      };
+      idempotencyKey?: string;
+    }
+  ) => Promise<BackendDistillJobResponse>;
+  getDistillJobStatus: (
+    ctx: BackendCallContext,
+    input: { jobId: string }
+  ) => Promise<BackendDistillJobStatusResponse>;
 }

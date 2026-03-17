@@ -360,6 +360,58 @@ pub struct EnqueueReflectionJobRequest {
     pub messages: Vec<CaptureItem>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EnqueueDistillJobRequest {
+    pub actor: Actor,
+    pub mode: DistillMode,
+    pub source: DistillSource,
+    pub options: DistillOptions,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DistillMode {
+    SessionLessons,
+    GovernanceCandidates,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum DistillSource {
+    SessionTranscript {
+        #[serde(rename = "sessionKey")]
+        session_key: String,
+        #[serde(default)]
+        #[serde(rename = "sessionId")]
+        session_id: Option<String>,
+    },
+    InlineMessages {
+        messages: Vec<CaptureItem>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DistillOptions {
+    #[serde(default)]
+    pub max_messages: Option<u64>,
+    #[serde(default)]
+    pub chunk_chars: Option<u64>,
+    #[serde(default)]
+    pub chunk_overlap_messages: Option<u64>,
+    #[serde(default)]
+    pub max_artifacts: Option<u64>,
+    pub persist_mode: DistillPersistMode,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DistillPersistMode {
+    ArtifactsOnly,
+    PersistMemoryRows,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReflectionTrigger {
@@ -374,9 +426,25 @@ pub struct EnqueueReflectionJobResponse {
     pub status: ReflectionJobStatus,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnqueueDistillJobResponse {
+    pub job_id: String,
+    pub status: DistillJobStatus,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReflectionJobStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DistillJobStatus {
     Queued,
     Running,
     Completed,
@@ -396,7 +464,73 @@ pub struct ReflectionJobStatusResponse {
     pub error: Option<JobStatusError>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistillJobStatusResponse {
+    pub job_id: String,
+    pub status: DistillJobStatus,
+    pub mode: DistillMode,
+    pub source_kind: DistillSourceKind,
+    pub created_at: i64,
+    pub updated_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<DistillJobResultSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JobStatusError>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DistillSourceKind {
+    SessionTranscript,
+    InlineMessages,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistillJobResultSummary {
+    pub artifact_count: u64,
+    pub persisted_memory_count: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistillArtifact {
+    pub artifact_id: String,
+    pub job_id: String,
+    pub kind: DistillArtifactKind,
+    pub category: Category,
+    pub importance: f64,
+    pub text: String,
+    pub evidence: Vec<DistillArtifactEvidence>,
+    pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persistence: Option<DistillArtifactPersistence>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DistillArtifactKind {
+    Lesson,
+    GovernanceCandidate,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistillArtifactEvidence {
+    pub message_ids: Vec<u64>,
+    pub quote: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistillArtifactPersistence {
+    pub persist_mode: DistillPersistMode,
+    pub persisted_memory_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobStatusError {
     pub code: String,
@@ -521,6 +655,57 @@ pub fn validate_enqueue_reflection_job_request(req: &EnqueueReflectionJobRequest
     }
     for item in &req.messages {
         validate_non_empty("messages[].text", &item.text)?;
+    }
+    Ok(())
+}
+
+pub fn validate_enqueue_distill_job_request(req: &EnqueueDistillJobRequest) -> AppResult<()> {
+    req.actor.validate()?;
+    match &req.source {
+        DistillSource::SessionTranscript {
+            session_key,
+            session_id,
+        } => {
+            validate_non_empty("source.sessionKey", session_key)?;
+            if let Some(session_id) = session_id {
+                validate_non_empty("source.sessionId", session_id)?;
+            }
+        }
+        DistillSource::InlineMessages { messages } => {
+            if messages.is_empty() {
+                return Err(AppError::invalid_request(
+                    "source.messages must be non-empty for inline-messages",
+                ));
+            }
+            for item in messages {
+                validate_non_empty("source.messages[].text", &item.text)?;
+            }
+        }
+    }
+
+    if matches!(
+        req.options.persist_mode,
+        DistillPersistMode::PersistMemoryRows
+    ) && !matches!(req.mode, DistillMode::SessionLessons)
+    {
+        return Err(AppError::invalid_request(
+            "persistMemoryRows is only allowed for mode=session-lessons",
+        ));
+    }
+
+    validate_optional_positive("options.maxMessages", req.options.max_messages)?;
+    validate_optional_positive("options.chunkChars", req.options.chunk_chars)?;
+    validate_optional_positive(
+        "options.chunkOverlapMessages",
+        req.options.chunk_overlap_messages,
+    )?;
+    validate_optional_positive("options.maxArtifacts", req.options.max_artifacts)?;
+    Ok(())
+}
+
+fn validate_optional_positive(field: &str, value: Option<u64>) -> AppResult<()> {
+    if let Some(value) = value {
+        validate_limit(field, value)?;
     }
     Ok(())
 }

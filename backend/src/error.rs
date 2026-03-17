@@ -139,6 +139,10 @@ impl AppError {
         self.status
     }
 
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
     fn new(
         status: StatusCode,
         code: ErrorCode,

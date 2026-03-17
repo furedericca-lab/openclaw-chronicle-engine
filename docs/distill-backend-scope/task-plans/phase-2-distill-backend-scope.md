@@ -14,7 +14,7 @@ description: Phase 2 task list for distill-backend-scope.
 
 - the future target is backend-native distill jobs, not sidecar preservation;
 - reflection and auto-capture remain separate capabilities;
-- this phase is design-only and must not claim shipped runtime code.
+- this phase freezes the design baseline that later runtime code must follow without reopening the contract.
 
 ## Format
 

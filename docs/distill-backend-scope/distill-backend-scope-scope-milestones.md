@@ -14,10 +14,10 @@ description: Scope boundaries and milestones for distill-backend-scope.
 
 ## Out of Scope
 
-- implementing Rust backend distill endpoints;
 - removing the current sidecar example code;
 - changing current reflection or auto-capture behavior;
 - rewriting README guidance beyond what is needed for architectural clarity.
+- shipping `session-transcript` source resolution or provider-driven extraction/reduce behavior.
 
 ## Milestones
 
@@ -55,5 +55,5 @@ Acceptance gate:
 
 - the repo has one active scope describing future backend-native distill alignment;
 - the repo has one active scope describing how current distill residue will be cleaned up over time;
-- the remote backend snapshot explicitly explains why distill is not yet shipped and how it relates to reflection and auto-capture;
+- the remote backend snapshot explicitly explains that `inline-messages` distill execution is shipped while `session-transcript` source resolution remains deferred, and how it relates to reflection and auto-capture;
 - future implementation work can begin without re-discovering what `jsonl_distill.py` is for or whether it is canonical.

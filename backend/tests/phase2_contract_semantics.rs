@@ -146,6 +146,27 @@ async fn request_json_with_token(
     (status, value)
 }
 
+async fn poll_distill_job(
+    app: &Router,
+    job_id: &str,
+    auth_context: (&str, &str),
+) -> (StatusCode, Value) {
+    let path = format!("/v1/distill/jobs/{job_id}");
+    for _ in 0..40 {
+        let (status, body) =
+            request_json(app, Method::GET, &path, None, None, Some(auth_context), &[]).await;
+        if status != StatusCode::OK {
+            return (status, body);
+        }
+        let state = body["status"].as_str().unwrap_or_default();
+        if state == "completed" || state == "failed" {
+            return (status, body);
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    request_json(app, Method::GET, &path, None, None, Some(auth_context), &[]).await
+}
+
 fn setup_app() -> Router {
     let tmp = std::env::temp_dir().join(format!(
         "memory-lancedb-pro-backend-test-{}",
@@ -2722,6 +2743,352 @@ async fn reflection_job_status_is_scoped_to_user_and_agent() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn distill_job_enqueue_and_status_follow_frozen_contract() {
+    let app = setup_app();
+
+    let enqueue = json!({
+        "actor": actor("u1", "main", "sess-1", "session-key-1"),
+        "mode": "session-lessons",
+        "source": {
+            "kind": "session-transcript",
+            "sessionKey": "session-key-1",
+            "sessionId": "sess-1"
+        },
+        "options": {
+            "maxMessages": 400,
+            "chunkChars": 12000,
+            "chunkOverlapMessages": 10,
+            "maxArtifacts": 20,
+            "persistMode": "artifacts-only"
+        }
+    });
+
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/distill/jobs",
+        Some(enqueue),
+        Some("idem-distill-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(body["status"], "queued");
+    let job_id = body["jobId"].as_str().expect("jobId should exist");
+
+    let (status, body) = poll_distill_job(&app, job_id, ("u1", "main")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["jobId"], job_id);
+    assert!(matches!(
+        body["status"].as_str(),
+        Some("queued" | "running" | "completed" | "failed")
+    ));
+    assert_eq!(body["mode"], "session-lessons");
+    assert_eq!(body["sourceKind"], "session-transcript");
+    assert!(body["createdAt"].is_number());
+    assert!(body["updatedAt"].is_number());
+    if body["status"] == "completed" {
+        assert!(body["result"]["artifactCount"].is_number());
+        assert!(body["result"]["persistedMemoryCount"].is_number());
+    }
+    if body["status"] == "failed" {
+        assert_eq!(body["error"]["code"], "DISTILL_SOURCE_UNAVAILABLE");
+    }
+}
+
+#[tokio::test]
+async fn distill_job_status_is_scoped_to_user_and_agent() {
+    let app = setup_app();
+
+    let enqueue = json!({
+        "actor": actor("u1", "main", "sess-1", "session-key-1"),
+        "mode": "session-lessons",
+        "source": {
+            "kind": "inline-messages",
+            "messages": [
+                { "role": "user", "text": "extract lessons from this session" }
+            ]
+        },
+        "options": {
+            "persistMode": "artifacts-only"
+        }
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/distill/jobs",
+        Some(enqueue),
+        Some("idem-distill-2"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let job_id = body["jobId"].as_str().expect("jobId should exist");
+    let status_path = format!("/v1/distill/jobs/{job_id}");
+
+    let (status, _) = request_json(
+        &app,
+        Method::GET,
+        &status_path,
+        None,
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = request_json(
+        &app,
+        Method::GET,
+        &status_path,
+        None,
+        None,
+        Some(("u2", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn distill_inline_messages_job_completes_and_persists_artifacts_and_memories() {
+    let tmp = std::env::temp_dir().join(format!(
+        "memory-lancedb-pro-backend-distill-complete-{}",
+        Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&tmp).expect("temp test path should be created");
+    let app = setup_app_at(&tmp);
+
+    let enqueue = json!({
+        "actor": actor("u1", "main", "sess-1", "session-key-1"),
+        "mode": "session-lessons",
+        "source": {
+            "kind": "inline-messages",
+            "messages": [
+                { "role": "assistant", "text": "Fix: restart mosdns after disabling systemd-resolved to recover DNS on openclaw." },
+                { "role": "assistant", "text": "User prefers Neovim for quick config edits." }
+            ]
+        },
+        "options": {
+            "persistMode": "persist-memory-rows",
+            "maxArtifacts": 5
+        }
+    });
+
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/distill/jobs",
+        Some(enqueue),
+        Some("idem-distill-complete-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let job_id = body["jobId"].as_str().expect("jobId should exist");
+    let (status, body) = poll_distill_job(&app, job_id, ("u1", "main")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "completed");
+    assert_eq!(body["result"]["artifactCount"], 2);
+    assert_eq!(body["result"]["persistedMemoryCount"], 2);
+
+    let recall = json!({
+        "actor": actor("u1", "main", "sess-2", "session-key-1"),
+        "query": "mosdns restart",
+        "limit": 5
+    });
+    let (status, recall_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/recall/generic",
+        Some(recall),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(recall_body["rows"]
+        .as_array()
+        .expect("rows should be an array")
+        .iter()
+        .any(|row| row["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("restart mosdns")));
+
+    let conn = rusqlite::Connection::open(tmp.join("sqlite/jobs.db")).expect("sqlite should open");
+    let artifact_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM distill_artifacts WHERE job_id = ?1",
+            rusqlite::params![job_id],
+            |row| row.get(0),
+        )
+        .expect("artifact rows should be queryable");
+    assert_eq!(artifact_count, 2);
+}
+
+#[tokio::test]
+async fn distill_session_transcript_job_fails_until_source_resolution_exists() {
+    let app = setup_app();
+
+    let enqueue = json!({
+        "actor": actor("u1", "main", "sess-1", "session-key-1"),
+        "mode": "session-lessons",
+        "source": {
+            "kind": "session-transcript",
+            "sessionKey": "session-key-1",
+            "sessionId": "sess-1"
+        },
+        "options": {
+            "persistMode": "artifacts-only"
+        }
+    });
+
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/distill/jobs",
+        Some(enqueue),
+        Some("idem-distill-source-missing-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let job_id = body["jobId"].as_str().expect("jobId should exist");
+    let (status, body) = poll_distill_job(&app, job_id, ("u1", "main")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "failed");
+    assert_eq!(body["error"]["code"], "DISTILL_SOURCE_UNAVAILABLE");
+}
+
+#[tokio::test]
+async fn distill_inline_messages_filters_slash_noise_to_zero_artifacts() {
+    let app = setup_app();
+
+    let enqueue = json!({
+        "actor": actor("u1", "main", "sess-1", "session-key-1"),
+        "mode": "session-lessons",
+        "source": {
+            "kind": "inline-messages",
+            "messages": [
+                { "role": "user", "text": "/note remember this" },
+                { "role": "assistant", "text": "✅ New session started" },
+                { "role": "assistant", "text": "NO_REPLY" }
+            ]
+        },
+        "options": {
+            "persistMode": "artifacts-only"
+        }
+    });
+
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/distill/jobs",
+        Some(enqueue),
+        Some("idem-distill-noise-only-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let job_id = body["jobId"].as_str().expect("jobId should exist");
+    let (status, body) = poll_distill_job(&app, job_id, ("u1", "main")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "completed");
+    assert_eq!(body["result"]["artifactCount"], 0);
+    assert_eq!(body["result"]["persistedMemoryCount"], 0);
+    assert!(body["result"]["warnings"]
+        .as_array()
+        .expect("warnings should be an array")
+        .iter()
+        .any(|warning| warning
+            .as_str()
+            .unwrap_or_default()
+            .contains("filtered as noise")));
+}
+
+#[tokio::test]
+async fn distill_job_rejects_empty_inline_messages() {
+    let app = setup_app();
+
+    let enqueue = json!({
+        "actor": actor("u1", "main", "sess-1", "session-key-1"),
+        "mode": "session-lessons",
+        "source": {
+            "kind": "inline-messages",
+            "messages": []
+        },
+        "options": {
+            "persistMode": "artifacts-only"
+        }
+    });
+
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/distill/jobs",
+        Some(enqueue),
+        Some("idem-distill-invalid-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"]["message"]
+        .as_str()
+        .expect("error message should exist")
+        .contains("source.messages must be non-empty"));
+}
+
+#[tokio::test]
+async fn distill_job_rejects_persist_memory_rows_for_governance_candidates() {
+    let app = setup_app();
+
+    let enqueue = json!({
+        "actor": actor("u1", "main", "sess-1", "session-key-1"),
+        "mode": "governance-candidates",
+        "source": {
+            "kind": "session-transcript",
+            "sessionKey": "session-key-1"
+        },
+        "options": {
+            "persistMode": "persist-memory-rows"
+        }
+    });
+
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/distill/jobs",
+        Some(enqueue),
+        Some("idem-distill-invalid-2"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"]["message"]
+        .as_str()
+        .expect("error message should exist")
+        .contains("persistMemoryRows is only allowed for mode=session-lessons"));
 }
 
 #[tokio::test]

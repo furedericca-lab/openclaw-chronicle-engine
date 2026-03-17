@@ -281,7 +281,9 @@ Capability-boundary note:
 
 - `reflection` is a shipped `/v1` runtime capability;
 - `auto-capture` is a shipped `/v1` write capability;
-- transcript distill is intentionally not part of the frozen shipped `/v1` surface in this snapshot.
+- transcript distill enqueue/status is now part of the frozen shipped `/v1` surface in this snapshot;
+- `inline-messages` execution/artifact population is shipped;
+- `session-transcript` source resolution is still deferred.
 
 ### `POST /v1/memories/store`
 
@@ -774,9 +776,11 @@ Async contract in MVP:
 
 Deferred future async surface:
 
-- if transcript distill becomes first-class later, it should use explicit backend-native enqueue/status routes such as:
+- transcript distill now ships explicit backend-native enqueue/status routes:
   - `POST /v1/distill/jobs`
   - `GET /v1/distill/jobs/{jobId}`
+- the current implementation includes caller-scoped async execution for `inline-messages`, persisted artifacts, and optional memory-row persistence;
+- `session-transcript` requests currently terminate with structured source-unavailable failure until transcript resolution ships;
 - the current repo-side `scripts/jsonl_distill.py` and `examples/new-session-distill/*` do not define a shipped runtime contract.
 
 ## Validation rules and compatibility policy
@@ -799,6 +803,10 @@ Validation rules:
   - `reserved` -> `in_progress` -> `failed` when the protected side effect fails before completion
 - failed idempotency records may be retried with the same key only when payload fingerprint matches
 - completed idempotency records currently return `409 IDEMPOTENCY_CONFLICT` for repeated requests because full response replay is still deferred in MVP
+- `POST /v1/distill/jobs` freezes:
+  - explicit `mode`, `source`, and `options.persistMode` DTOs
+  - caller-scoped ownership bound to trusted runtime principal headers
+  - current reachable status surface of `queued -> running -> completed|failed`
 
 Compatibility policy:
 
@@ -808,7 +816,7 @@ Compatibility policy:
 - shell must stay thin and not regain local scope authority;
 - no dual-authority fallback path is allowed during migration;
 - local `src/context/*` remains local even after backend migration.
-- transcript distill, if introduced later, must follow the same backend-owned authority model rather than reviving sidecar import pipelines.
+- transcript distill follow-up execution must continue following the same backend-owned authority model rather than reviving sidecar import pipelines.
 
 ## Security-sensitive fields and redaction / masking requirements
 

@@ -6,23 +6,25 @@ description: API and schema contracts for distill-backend-scope.
 
 ## API Contracts
 
-This scope does not ship a new public API yet, but it freezes the intended direction:
+This scope now ships backend-native distill enqueue/status plus the initial `inline-messages` executor slice, and freezes the remaining direction:
 
-- any future distill capability must be exposed as backend-native runtime endpoints;
+- distill capability is exposed as backend-native runtime endpoints for enqueue/status;
 - the sidecar queue-file plus `memory-pro import` flow is not an accepted future authority model;
-- future distill enqueue/status should follow the same actor-principal discipline as reflection jobs.
+- distill enqueue/status follows the same actor-principal discipline as reflection jobs.
 - old sidecar distill residue must be treated as cleanup debt with an explicit disposition, not as an alternate supported runtime path.
 
-Planned public-shape direction:
+Current shipped public shape:
 
 - `POST /v1/distill/jobs`
 - `GET /v1/distill/jobs/{jobId}`
 
-Frozen implementation-prep direction:
+Frozen follow-up direction:
 
 - first implementation should ship exactly one async distill job family;
-- first implementation should not multiplex distill onto reflection endpoints;
-- first implementation should use explicit request/response DTOs rather than implicit transcript-import side effects.
+- distill should not multiplex onto reflection endpoints;
+- distill should use explicit request/response DTOs rather than implicit transcript-import side effects.
+- `inline-messages` execution, artifact persistence, and optional memory-row persistence are shipped in the current batch.
+- `session-transcript` source resolution and richer provider-driven extraction remain follow-up phases.
 
 ### Proposed `POST /v1/distill/jobs`
 
@@ -82,6 +84,12 @@ Response `202`:
   "status": "queued"
 }
 ```
+
+Current shipped behavior:
+
+- accepted requests persist a caller-scoped `distill_jobs` row with `status = "queued"`;
+- backend now asynchronously executes `inline-messages` requests to `running -> completed|failed`;
+- `session-transcript` requests are accepted into the job family but currently terminate with a structured source-unavailable failure.
 
 ### Proposed `GET /v1/distill/jobs/{jobId}`
 
@@ -258,6 +266,12 @@ Frozen lifecycle rules:
 - direct `queued -> completed` is not allowed;
 - direct `queued -> failed` is not allowed;
 - retries, if later supported, should create a new job record rather than mutating a completed/failed job back to `queued`.
+
+Current implementation note:
+
+- `queued`, `running`, `completed`, and `failed` are now all reachable in the shipped implementation;
+- current successful execution is limited to `source.kind = "inline-messages"`;
+- future work must preserve the frozen DTO/state model while expanding source resolution and extraction quality.
 
 Contract rule:
 

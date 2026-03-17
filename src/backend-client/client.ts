@@ -3,6 +3,8 @@ import type {
   BackendCallContext,
   BackendCaptureItem,
   BackendDeleteInput,
+  BackendDistillJobResponse,
+  BackendDistillJobStatusResponse,
   BackendListInput,
   BackendMemoryMutationResult,
   BackendReflectionJobResponse,
@@ -304,6 +306,31 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
       const response = await requestJson<BackendReflectionJobStatusResponse>({
         method: "GET",
         path: `/v1/reflection/jobs/${encodeURIComponent(input.jobId)}`,
+        ctx,
+      });
+      return response;
+    },
+
+    async enqueueDistillJob(ctx, input) {
+      const response = await requestJson<BackendDistillJobResponse>({
+        method: "POST",
+        path: "/v1/distill/jobs",
+        ctx,
+        idempotencyKey: input.idempotencyKey || randomUUID(),
+        body: {
+          ...withActor(ctx),
+          mode: input.mode,
+          source: input.source,
+          options: input.options,
+        },
+      });
+      return response;
+    },
+
+    async getDistillJobStatus(ctx, input) {
+      const response = await requestJson<BackendDistillJobStatusResponse>({
+        method: "GET",
+        path: `/v1/distill/jobs/${encodeURIComponent(input.jobId)}`,
         ctx,
       });
       return response;

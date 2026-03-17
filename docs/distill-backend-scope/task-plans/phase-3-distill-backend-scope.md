@@ -28,7 +28,7 @@ description: Phase 3 task list for distill-backend-scope.
 
 Goal: update the remote backend snapshot so distill is explicitly placed in the architecture story.
 
-Definition of Done: the remote backend docs explain what distill is, why it is not yet shipped, how it differs from reflection and auto-capture, and why the old sidecar residue is cleanup debt rather than alternate architecture.
+Definition of Done: the remote backend docs explain what distill is, which enqueue/status skeleton is now shipped, which executor behavior remains deferred, how it differs from reflection and auto-capture, and why the old sidecar residue is cleanup debt rather than alternate architecture.
 
 Tasks:
 

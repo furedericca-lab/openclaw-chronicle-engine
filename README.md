@@ -103,6 +103,20 @@ User prompt
           -> later recall reads persisted reflection rows
 ```
 
+### Distill job flow
+
+```text
+distill request
+  -> plugin/backend client
+    -> POST /v1/distill/jobs
+      -> backend validates actor + source + mode
+        -> backend enqueues async distill job
+          -> worker path cleans transcript/messages
+            -> backend persists distill artifacts
+              -> optional memory-row persistence
+                -> GET /v1/distill/jobs/{jobId} to inspect status/result
+```
+
 ## 5. Old TS RAG vs Current Rust Remote RAG
 
 ### Capability comparison
@@ -120,6 +134,7 @@ User prompt
 | Diversity / MMR | Historical TS-side capability | Rust backend | Present |
 | Reflection recall authority | Local TS + local persistence path | Rust backend recall path | Replaced |
 | Reflection async jobs | Local/plugin-coupled execution | Rust backend enqueue + job tracking | Replaced |
+| Distill async jobs | Historical sidecar/example pipeline | Rust backend distill jobs | Present, initial backend-native slice |
 | Scope derivation / ACL | Local TS participation existed historically | Rust backend only | Replaced |
 | Inspectable retrieval trace | Historical TS had thicker telemetry objects | Rust backend debug trace routes | Acceptable parity, not 1:1 shape recreation |
 | Prompt injection rendering | Local TS | Local TS | Intentionally retained |
@@ -214,12 +229,31 @@ That means:
 | Diversity / MMR | Yes | Backend-owned |
 | Auto-recall prompt injection | Yes | Local orchestration over backend recall |
 | Reflection recall + enqueue | Yes | Backend-owned recall/jobs, local prompt planning |
+| Distill job enqueue + polling | Yes | Backend-owned async job surface |
+| Distill inline-message cleaning + artifact persistence | Yes | Backend-owned initial executor slice |
+| Distill `session-transcript` source | Not yet | Frozen contract exists, source resolution still deferred |
 | `memory_store` / `memory_update` / `memory_forget` | Yes | Remote-backed |
 | `memory_list` / `memory_stats` | Yes | Optional management tools |
 | Local `memory-pro` CLI | No | Removed |
 | Supported local-authority runtime | No | Removed |
 
-## 9. Debuggability
+## 9. Distill: Old Sidecar vs Current Backend-Native Direction
+
+| Concern | Historical `jsonl_distill.py` / sidecar pipeline | Current backend-native direction |
+|---|---|---|
+| Job ownership | External script + worker | Rust backend job surface |
+| Source preprocessing | Script-local filtering/cleanup | Backend cleanup/filtering pipeline |
+| Persistence | External import back into storage | Backend-owned artifacts and optional memory persistence |
+| Status inspection | Queue files / external worker logs | `GET /v1/distill/jobs/{jobId}` |
+| Runtime authority | Not canonical anymore | Canonical direction |
+
+Important boundary:
+
+- `scripts/jsonl_distill.py` and `examples/new-session-distill/*` are now migration-reference / example residue
+- they are not the supported runtime path
+- the supported direction is backend-native distill jobs
+
+## 10. Debuggability
 
 Chronicle Engine now has two layers of observability:
 
@@ -233,7 +267,7 @@ Important boundary:
 - ordinary recall DTOs do **not** expose raw score-breakdown internals
 - debug trace routes exist so debugging gets richer visibility without bloating runtime contracts
 
-## 10. Install
+## 11. Install
 
 ### Clone into the OpenClaw plugin workspace
 
@@ -272,7 +306,7 @@ openclaw plugins info openclaw-chronicle-engine
 openclaw config get plugins.slots.memory
 ```
 
-## 11. Minimal Supported Configuration
+## 12. Minimal Supported Configuration
 
 Use this as `plugins.entries.openclaw-chronicle-engine.config`.
 
@@ -300,7 +334,7 @@ Required fields:
 | `maxRetries` | No | Transport retry count |
 | `retryBackoffMs` | No | Retry backoff |
 
-## 12. Tools
+## 13. Tools
 
 ### Core tools
 
@@ -319,7 +353,14 @@ Enable `enableManagementTools: true` to expose:
 - `self_improvement_review`
 - `self_improvement_extract_skill`
 
-## 13. Repository Layout
+### Backend client job surfaces
+
+The plugin client also has backend job adapters for:
+
+- reflection jobs
+- distill jobs
+
+## 14. Repository Layout
 
 ```text
 backend/                  Rust backend implementation
@@ -331,7 +372,7 @@ src/context/*             prompt-time orchestration
 test/*                    plugin-side tests
 ```
 
-## 14. Testing
+## 15. Testing
 
 ### Plugin tests
 
@@ -345,7 +386,7 @@ npm test
 cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -- --nocapture
 ```
 
-## 15. Common Misunderstandings
+## 16. Common Misunderstandings
 
 ### “Is this still a local LanceDB plugin?”
 
@@ -365,7 +406,19 @@ It is not backend ownership.
 
 No. It is treated as a prompt-local seam because it only shapes already-returned rows for prompt injection. It does not redefine backend authority or API contracts.
 
-## 16. References
+### “Does distill still mean running the old `jsonl_distill.py` sidecar?”
+
+No. That script remains only as migration/reference residue.
+
+The supported direction is:
+
+- backend-native distill jobs
+- backend-owned status
+- backend-owned artifacts
+
+The old sidecar/example pipeline is not the canonical runtime path.
+
+## 17. References
 
 - Runtime architecture: `docs/runtime-architecture.md`
 - Docs index: `docs/README.md`

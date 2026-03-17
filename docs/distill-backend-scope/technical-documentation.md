@@ -18,11 +18,19 @@ Current canonical capability split:
    - input source: ordinary runtime transcript/tool items
    - output: ordinary memory mutation results
 
-3. `distill` (planned, not yet shipped)
+3. `distill` (enqueue/status plus initial executor slice shipped)
    - backend-native async job family for transcript-wide lesson extraction or governance-oriented summarization
-   - input source: explicit transcript source or transcript items
-   - output: backend-owned distill artifacts or persisted lesson rows
-   - initial implementation target uses a dedicated distill job table plus a dedicated artifact store/table
+   - shipped in current batch:
+     - `POST /v1/distill/jobs`
+     - `GET /v1/distill/jobs/{jobId}`
+     - dedicated `distill_jobs` table
+     - dedicated `distill_artifacts` table
+     - background executor for `inline-messages`
+     - artifact persistence population
+     - optional persisted lesson-row writes for `persist-memory-rows`
+   - still deferred:
+     - `session-transcript` source resolution
+     - provider-driven extraction/reduce beyond the current deterministic reducer
 
 The existing sidecar distiller example is not canonical runtime architecture.
 It is also an explicit cleanup target once backend-native distill parity exists.
@@ -33,12 +41,13 @@ Constraints:
 
 - remote backend remains the only authority for persistence, ACL, scope, and job ownership;
 - shell may enqueue or provide transcript context, but must not own distill persistence semantics;
-- any future distill path must remain non-blocking for user interaction;
+- distill enqueue/status must remain non-blocking for user interaction;
 - distill must not silently reuse old local `memory-pro import` authority paths.
 
 Non-goals for this scope:
 
-- implementing distill jobs now;
+- implementing `session-transcript` source resolution now;
+- implementing provider-driven extraction/reduce beyond the current deterministic reducer now;
 - replacing reflection with distill;
 - replacing auto-capture with distill;
 - preserving the sidecar queue directory / systemd worker model as canonical architecture.
@@ -75,15 +84,23 @@ Planned backend-owned stages:
 6. reduce / dedupe / score;
 7. persistence and caller-scoped job visibility.
 
-Frozen implementation-prep job model:
+Current shipped executor slice:
 
 1. enqueue request validation;
 2. `distill_jobs.status = queued`;
-3. worker/executor transitions job to `running`;
-4. backend resolves transcript source and prepares cleaned chunks;
-5. provider extraction and reducer produce artifacts;
-6. backend persists artifacts and optional memory-row mappings;
-7. job transitions to `completed` or `failed`.
+3. background executor transitions `queued -> running`;
+4. `inline-messages` source is cleaned, filtered, distilled, and persisted into `distill_artifacts`;
+5. optional `persist-memory-rows` writes ordinary backend-owned memory rows;
+6. caller-scoped status polling returns `completed|failed` with frozen DTO shape.
+
+Frozen follow-up job model:
+
+1. enqueue request validation;
+2. executor transitions job to `running`;
+3. backend resolves transcript source and prepares cleaned chunks;
+4. provider extraction and reducer produce artifacts;
+5. backend persists artifacts and optional memory-row mappings;
+6. job transitions to `completed` or `failed`.
 
 Shell/local responsibilities should remain narrow:
 
@@ -117,10 +134,9 @@ Frozen initial persistence modes:
 
 ## Interfaces and Contracts
 
-Planned contract direction:
+Current contract direction:
 
-- future distill should look more like `POST /v1/reflection/jobs` than like `scripts/jsonl_distill.py`;
-- if introduced, distill should get explicit enqueue/status endpoints rather than piggyback on example queue files;
+- distill now follows explicit backend enqueue/status endpoints rather than example queue files;
 - transcript cleaning rules and reduction heuristics may be ported from the sidecar, but persistence and ownership must be backend-native.
 
 Contract distinction from existing capabilities:
@@ -129,7 +145,7 @@ Contract distinction from existing capabilities:
 | --- | --- | --- | --- | --- |
 | reflection | `/new` / `/reset` async jobs | moderate | reflection rows | backend |
 | auto-capture | ordinary write path | low to moderate | memory mutation results | backend |
-| distill | planned async transcript jobs | moderate to high | lessons / governance artifacts / optional persisted rows | backend |
+| distill | async transcript jobs | moderate to high | lessons / governance artifacts / optional persisted rows | backend |
 
 Frozen initial DTO field expectations:
 
@@ -173,6 +189,12 @@ Frozen initial storage recommendation:
   - `tags_json`
   - `persistence_json`
 
+Current implementation note:
+
+- `distill_jobs` and `distill_artifacts` tables are now created in SQLite;
+- `inline-messages` execution populates both `distill_jobs` terminal state and `distill_artifacts`;
+- `session-transcript` requests currently fail with a structured source-unavailable error until backend transcript resolution ships.
+
 ## Security and Reliability
 
 - distill jobs must inherit the same caller-principal and ownership discipline as reflection jobs;
@@ -208,6 +230,21 @@ When implementation begins, tests should be grouped into:
    - artifact row persistence
    - optional memory-row persistence mapping
    - no reflection-table coupling
+
+Current shipped contract tests:
+
+1. enqueue/status contract tests
+   - `POST /v1/distill/jobs` returns `202` + queued DTO
+   - `GET /v1/distill/jobs/{jobId}` is caller-scoped
+2. validation tests
+   - inline-messages source must be non-empty
+   - `persist-memory-rows` is rejected for `governance-candidates`
+3. executor tests
+   - inline-messages distill reaches `completed`
+   - artifacts are persisted
+   - optional memory rows are persisted
+   - slash/control-only input is filtered down to zero artifacts
+   - `session-transcript` reaches `failed` with source-unavailable semantics
 
 Future backend test matrix derived from `jsonl_distill.py`:
 

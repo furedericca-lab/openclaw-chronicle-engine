@@ -16,6 +16,12 @@ Current canonical backend-owned capabilities already shipped:
   - backend-owned extraction/mutation semantics
 - `generic recall` / `reflection recall`
   - backend-owned retrieval and ranking
+- `distill enqueue/status skeleton`
+  - `POST /v1/distill/jobs`
+  - `GET /v1/distill/jobs/{jobId}`
+  - backend-owned async job-family contract
+  - `inline-messages` executor and artifact persistence shipped
+  - `session-transcript` source resolution still deferred
 
 Current distill-related residue still in the repo:
 
@@ -40,14 +46,14 @@ Current cleanup/disposition view:
 Important current-state distinction:
 
 - `reflection` and `auto-capture` are active backend contracts;
-- `distiller` is not an active backend contract;
-- the distiller path still assumes a local/sidecar worker plus `openclaw memory-pro import`.
+- `distill` is now an active backend contract for enqueue/status plus `inline-messages` execution;
+- the old distiller path still assumes a local/sidecar worker plus `openclaw memory-pro import`.
 
 ## Gap Analysis
 
-1. **Transcript distillation has no backend-native contract today.**
-   - The remote backend docs describe reflection jobs and auto-capture, but not a future transcript distill job family.
-   - This leaves `jsonl_distill.py` floating outside the canonical architecture story.
+1. **Transcript distillation now has a backend-native execution slice, but not full source parity yet.**
+   - The repo now has backend enqueue/status routes, dedicated `distill_jobs` / `distill_artifacts` tables, and an `inline-messages` executor.
+   - This closes the first real execution gap, but `jsonl_distill.py` still carries the `session-transcript` ingest/filter behavior reference until source parity lands.
 
 2. **Useful transcript-ingestion logic still exists only in the sidecar script.**
    - `scripts/jsonl_distill.py` already solves:
@@ -70,7 +76,7 @@ Important current-state distinction:
    - Without a frozen request/response shape, backend implementation would still reopen design questions around source modes, persistence modes, and artifact/result schemas.
    - Without a frozen state machine, backend implementation could accidentally overload reflection job rows or invent incompatible retry semantics.
 
-4. **The remote backend docs currently under-explain the difference between reflection, auto-capture, and transcript distill.**
+4. **The remote backend docs must continue distinguishing reflection, auto-capture, and transcript distill clearly even after the skeleton ships.**
    - Reflection:
      - asynchronous reflective generation around `/new` and `/reset`;
      - output is reflection rows for later recall.
@@ -78,8 +84,8 @@ Important current-state distinction:
      - request-time transcript-to-memory mutation path;
      - output is ordinary memory mutations.
    - Distill:
-   - not yet shipped;
-   - would be a heavier transcript-wide lesson extraction or governance path.
+     - enqueue/status plus `inline-messages` execution now shipped;
+     - `session-transcript` resolution and richer provider-driven extraction still deferred.
 
 5. **There is cleanup debt, not just capability debt.**
    - The sidecar pipeline is still visible in active repo paths.
@@ -179,6 +185,17 @@ Frozen implementation-prep decisions:
 | artifact persistence strategy | dedicated `distill_artifacts` store/table |
 | reflection-table reuse | rejected |
 | direct sidecar batch-file compatibility | rejected |
+
+Current implementation batch completed:
+
+| Area | Implemented now |
+| --- | --- |
+| backend routes | `POST /v1/distill/jobs`, `GET /v1/distill/jobs/{jobId}` |
+| validation | source-mode validation, persist-mode restriction, positive-option checks |
+| storage | `distill_jobs` and `distill_artifacts` schema creation plus artifact inserts |
+| execution | async `inline-messages` cleaning/filtering, deterministic artifact build, optional memory-row persistence |
+| security | runtime principal matching and caller-scoped status visibility |
+| tests | enqueue/status, validation, execution, persistence, and source-unavailable tests in `backend/tests/phase2_contract_semantics.rs` |
 
 ## Validation Plan
 
