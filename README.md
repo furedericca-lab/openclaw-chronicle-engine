@@ -60,8 +60,13 @@ In practical terms:
 | Recall candidate generation | Owns | Does not own |
 | Ranking / rerank / MMR / decay | Owns | Does not own |
 | Scope derivation / ACL | Owns | Must not reconstruct |
+| Auto-capture write acceptance + persistence | Owns | Only forwards runtime payloads |
 | Reflection job execution | Owns | Only enqueues |
+| Distill job execution | Owns | Only enqueues / polls |
+| Distill source cleaning / artifact persistence | Owns | Does not own |
+| Debug recall / distill status surfaces | Owns | Only calls typed client adapters |
 | Hook registration | Does not own | Owns |
+| Backend DTO transport adapters | Does not own | Owns |
 | Prompt block rendering | Does not own | Owns |
 | Session-local exposure suppression | Does not own | Owns |
 | Fail-open vs fail-closed route behavior | Shared contract, backend-enforced + plugin-handled | Owns runtime behavior at hook/tool boundary |

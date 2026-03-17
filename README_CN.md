@@ -60,8 +60,13 @@ Chronicle Engine 已经不是“插件内嵌一个本地记忆数据库”的形
 | recall candidate 生成 | 负责 | 不负责 |
 | ranking / rerank / MMR / decay | 负责 | 不负责 |
 | scope derivation / ACL | 负责 | 不允许本地重建 |
+| auto-capture 写入接收与持久化 | 负责 | 只负责转发运行时 payload |
 | reflection job 执行 | 负责 | 只负责 enqueue |
+| distill job 执行 | 负责 | 只负责 enqueue / poll |
+| distill source 清洗与 artifact 持久化 | 负责 | 不负责 |
+| debug recall / distill status 接口面 | 负责 | 只负责调用 typed client adapter |
 | hook 注册 | 不负责 | 负责 |
+| backend DTO 传输适配 | 不负责 | 负责 |
 | prompt block 渲染 | 不负责 | 负责 |
 | session 级曝光抑制 | 不负责 | 负责 |
 | fail-open / fail-closed 的插件边界行为 | 与契约共享 | 负责在 hook/tool 边界执行 |
