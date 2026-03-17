@@ -13,6 +13,7 @@ Target runtime architecture:
    - LanceDB for memory/reflection storage
    - SQLite job table for reflection enqueue/status
    - owns ACL, scope derivation, retrieval/ranking, model config, gateway config, reflection execution, persistence
+   - future extension point: transcript-distill jobs if distill becomes a first-class backend capability
 
 2. **Local integration shell**
    - OpenClaw plugin wiring in `index.ts`
@@ -37,12 +38,14 @@ Constraints:
 - backend config comes from static TOML only in MVP;
 - reflection execution is backend-owned and async;
 - `/new` and `/reset` must not block on reflection completion.
+- transcript distill is not yet a shipped backend runtime capability in this snapshot.
 
 Non-goals:
 
 - multi-node coordination;
 - broker-backed distributed job execution;
 - moving prompt rendering or session-local orchestration into the backend;
+- preserving example sidecar distiller flows as canonical runtime architecture;
 - environment variable configuration for the backend MVP.
 
 ## Interfaces between components
@@ -116,6 +119,12 @@ The local shell adapter should expose contracts shaped for local orchestration, 
 
 The local adapter should not expose admin/control-plane operations to local orchestration.
 
+Capability boundary note:
+
+- `reflection` is a shipped backend-owned async capability for reflective row generation;
+- `auto-capture` is a shipped backend-owned mutation path for ordinary memory extraction;
+- `distill` is not yet shipped here and should be treated as a future backend-native async transcript capability rather than as the current sidecar example pipeline.
+
 ## Operational behavior
 
 ### Startup
@@ -156,6 +165,11 @@ The local adapter should not expose admin/control-plane operations to local orch
 - auto-capture:
   - shell submits transcript items;
   - backend decides extraction, dedupe, classification, update/delete/noop behavior.
+
+- transcript distill (deferred future capability):
+  - no canonical `/v1` distill route exists in this snapshot;
+  - current repo residue such as `scripts/jsonl_distill.py` and `examples/new-session-distill/*` is not part of the active runtime architecture;
+  - if distill is added later, it should follow backend-native async job semantics rather than sidecar queue-file plus local import semantics.
 
 - explicit memory update:
   - shell submits `memoryId` plus a constrained patch payload;
@@ -211,6 +225,7 @@ Data-plane route notes:
 
 - `POST /v1/memories/stats` is the canonical caller-scoped stats endpoint in MVP;
 - `GET /v1/reflection/jobs/{jobId}` remains a caller-scoped diagnostic route, not an operator-global inspection route.
+- no distill enqueue/status data-plane route is shipped in this snapshot.
 
 Shell should log:
 
@@ -244,6 +259,7 @@ Idempotency lifecycle behavior in current MVP:
 - admin-token bypass applies only to explicitly marked management endpoints and must remain auditable.
 - until admin routes are explicitly implemented, admin tokens must not grant access to any data-plane endpoint.
 - debug-scoped retrieval trace routes are not admin-token routes; they remain on the runtime principal boundary and exist to expose inspectable recall traces without widening ordinary recall DTOs.
+- sidecar transcript distill utilities such as `scripts/jsonl_distill.py` must not be treated as alternate authority paths for persistence or ACL.
 - all admin requests must emit an audit record with request id, operator identity, endpoint/method, target selector, timestamp, result status, and status code;
 - admin mutations must additionally require and record a reason field.
 - error payloads must not leak secrets or raw upstream provider payloads.
@@ -286,6 +302,7 @@ Explicitly deferred from remote MVP parity:
 - `export`
 - `import`
 - `reembed`
+- transcript distill endpoints
 - migration utilities
 - FTS maintenance and deep retrieval telemetry endpoints
 - admin mutation/config endpoints

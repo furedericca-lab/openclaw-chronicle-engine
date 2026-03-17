@@ -54,6 +54,7 @@ Contract rules:
 - ordinary runtime contracts must not expose or depend on admin capabilities;
 - user tokens are for data-plane operations only;
 - admin-token authority is valid only on explicitly marked admin/control-plane routes.
+- sidecar queue-file or `memory-pro import` flows are not accepted substitutes for runtime data-plane contracts.
 
 ### Shared request schema
 
@@ -275,6 +276,12 @@ Contract rules:
 Status model:
 
 - `200`, `400`, `401`, `403`, `429`, `500`, `503`
+
+Capability-boundary note:
+
+- `reflection` is a shipped `/v1` runtime capability;
+- `auto-capture` is a shipped `/v1` write capability;
+- transcript distill is intentionally not part of the frozen shipped `/v1` surface in this snapshot.
 
 ### `POST /v1/memories/store`
 
@@ -765,6 +772,13 @@ Async contract in MVP:
 - main dialogue path must not depend on polling completion
 - global operator inspection belongs to admin routes, not caller-scoped data-plane status routes
 
+Deferred future async surface:
+
+- if transcript distill becomes first-class later, it should use explicit backend-native enqueue/status routes such as:
+  - `POST /v1/distill/jobs`
+  - `GET /v1/distill/jobs/{jobId}`
+- the current repo-side `scripts/jsonl_distill.py` and `examples/new-session-distill/*` do not define a shipped runtime contract.
+
 ## Validation rules and compatibility policy
 
 Validation rules:
@@ -794,6 +808,7 @@ Compatibility policy:
 - shell must stay thin and not regain local scope authority;
 - no dual-authority fallback path is allowed during migration;
 - local `src/context/*` remains local even after backend migration.
+- transcript distill, if introduced later, must follow the same backend-owned authority model rather than reviving sidecar import pipelines.
 
 ## Security-sensitive fields and redaction / masking requirements
 
