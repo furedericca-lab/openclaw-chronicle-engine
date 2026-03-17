@@ -85,7 +85,7 @@ type SessionStrategy = "memoryReflection" | "systemSessionMemory" | "none";
 type ReflectionInjectMode = "inheritance-only" | "inheritance+derived";
 type ReflectionRecallMode = "fixed" | "dynamic";
 type ReflectionRecallKind = "invariant" | "derived";
-type AutoRecallSelectionMode = "mmr" | "setwise-v2";
+type AutoRecallSelectionMode = "mmr";
 type MemoryCategory = "preference" | "fact" | "decision" | "entity" | "other" | "reflection";
 
 // ============================================================================
@@ -1245,11 +1245,12 @@ export function parsePluginConfig(value: unknown): PluginConfig {
   const reflectionRecallMinRepeated = parsePositiveInt(memoryReflectionRecallRaw?.minRepeated) ?? DEFAULT_REFLECTION_RECALL_MIN_REPEATED;
   const reflectionRecallMinScore = parseNonNegativeNumber(memoryReflectionRecallRaw?.minScore) ?? DEFAULT_REFLECTION_RECALL_MIN_SCORE;
   const reflectionRecallMinPromptLength = parsePositiveInt(memoryReflectionRecallRaw?.minPromptLength) ?? DEFAULT_REFLECTION_RECALL_MIN_PROMPT_LENGTH;
+  if (cfg.autoRecallSelectionMode === "setwise-v2") {
+    throw new Error("autoRecallSelectionMode=setwise-v2 is no longer supported; use mmr");
+  }
   const autoRecallSelectionMode: AutoRecallSelectionMode =
-    cfg.autoRecallSelectionMode === "setwise-v2"
-      ? "setwise-v2"
-      : cfg.autoRecallSelectionMode === "mmr"
-        ? "mmr"
+    cfg.autoRecallSelectionMode === "mmr"
+      ? "mmr"
       : DEFAULT_AUTO_RECALL_SELECTION_MODE;
 
   return {

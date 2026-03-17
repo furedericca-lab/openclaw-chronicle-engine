@@ -20,7 +20,7 @@ Chronicle Engine 已经不是“插件内嵌一个本地记忆数据库”的形
 - 检索和排序在后端
 - scope 与 ACL 在后端
 - prompt 注入与 session 级去重保留在插件本地
-- 面向 backend 的 recall 过滤语义也留在 backend；插件只保留 `setwise-v2` 这类最终 prompt 级 shaping
+- 面向 backend 的 recall 过滤语义也留在 backend；插件只保留 prompt-time 编排和渲染
 
 ## 2. 一眼看懂整体架构
 
@@ -145,7 +145,7 @@ distill 请求
 | 可检查 retrieval trace | 历史 TS 有更厚 telemetry 对象 | Rust backend debug trace routes | 达到可接受 parity，但不是 1:1 复刻 |
 | Prompt 注入渲染 | 本地 TS | 本地 TS | 有意保留 |
 | Session-local 暴露抑制 | 本地 TS | 本地 TS | 有意保留 |
-| 最终 prompt-only 后选 (`setwise-v2`) | 本地 TS | 本地 TS，作用于 backend 已返回 rows | 有意保留为 prompt-local seam |
+| 通用 auto-recall 最终裁剪 | 本地 TS | 本地 TS，作用于 backend 已返回 rows | 仅限直接 prompt 注入截断 |
 
 ### 哪些历史形态没有原样复刻
 
@@ -183,8 +183,6 @@ distill 请求
 | `src/context/*` | 仅负责 prompt-time 编排 |
 | `src/recall-engine.ts` | 本地 gating / dedupe / exposure-state helper |
 | `src/adaptive-retrieval.ts` | prompt 侧 recall 触发启发式 |
-| `src/prompt-local-auto-recall-selection.ts` | 对 backend 已批准 rows 做最终 prompt-local post-selection |
-| `src/prompt-local-topk-setwise-selection.ts` | 服务于保留本地选择 seam 的 prompt-local 工具函数 |
 
 ### 实际应该怎么理解
 
@@ -425,14 +423,6 @@ cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -
 - 同一个 session 里怎么避免重复暴露
 
 它不负责 backend 权威。
-
-### “`setwise-v2` 是不是旧 TS RAG 没迁完？”
-
-不是。它现在被定义成 `prompt-local seam`：
-
-- 只对 backend 已经返回的普通 rows 做 lexical/coverage 导向的 prompt 注入层二次裁剪
-- 不改变 backend authority
-- 不重建 backend retrieval / rerank / embedding authority
 
 ### “旧的 `sessionMemory.*` 或被移除的 `memoryReflection.*` 字段现在还能用吗？”
 

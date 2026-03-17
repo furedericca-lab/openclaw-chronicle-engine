@@ -20,7 +20,7 @@ In practical terms:
 - retrieval and ranking happen in the backend
 - scope and ACL happen in the backend
 - prompt injection and session-local dedupe stay in the plugin
-- backend-facing recall filter semantics stay in the backend; the plugin only keeps final prompt-only shaping such as `setwise-v2`
+- backend-facing recall filter semantics stay in the backend; the plugin only keeps prompt-time orchestration and rendering
 
 ## 2. Architecture At A Glance
 
@@ -145,7 +145,7 @@ distill request
 | Inspectable retrieval trace | Historical TS had thicker telemetry objects | Rust backend debug trace routes | Acceptable parity, not 1:1 shape recreation |
 | Prompt injection rendering | Local TS | Local TS | Intentionally retained |
 | Session-local exposure suppression | Local TS | Local TS | Intentionally retained |
-| Final prompt-only post-selection (`setwise-v2`) | Local TS | Local TS over backend-returned rows | Intentionally retained as prompt-local seam |
+| Final generic auto-recall trimming | Local TS | Local TS over backend-returned rows | Limited to direct prompt injection truncation |
 
 ### What was not recreated 1:1
 
@@ -183,8 +183,6 @@ No, but the answer needs precision:
 | `src/context/*` | prompt-time orchestration only |
 | `src/recall-engine.ts` | local gating / dedupe / exposure-state helpers |
 | `src/adaptive-retrieval.ts` | prompt-side retrieval trigger heuristic |
-| `src/prompt-local-auto-recall-selection.ts` | prompt-local final post-selection over backend-approved rows |
-| `src/prompt-local-topk-setwise-selection.ts` | prompt-local utility used by retained local selection seams |
 
 ### Practical interpretation
 
@@ -425,10 +423,6 @@ No. `src/context/*` is prompt-time orchestration:
 - how to suppress repeated exposure in the same session
 
 It is not backend ownership.
-
-### “Is `setwise-v2` a leftover backend implementation in TS?”
-
-No. It is a prompt-local lexical/coverage selector over ordinary backend-returned rows. It only shapes prompt injection and does not recreate backend retrieval, rerank, or embedding authority.
 
 ### “Do old `sessionMemory.*` or removed `memoryReflection.*` fields still work?”
 

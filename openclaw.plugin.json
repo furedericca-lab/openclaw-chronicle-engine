@@ -98,11 +98,10 @@
       "autoRecallSelectionMode": {
         "type": "string",
         "enum": [
-          "mmr",
-          "setwise-v2"
+          "mmr"
         ],
         "default": "mmr",
-        "description": "Generic Auto-Recall final top-k mode over ordinary backend-returned rows. mmr keeps direct truncation after prompt-local post-processing as the canonical mode; setwise-v2 applies a prompt-local lexical/coverage selector without recreating backend retrieval, rerank, or embedding authority."
+        "description": "Generic Auto-Recall final top-k mode over ordinary backend-returned rows. mmr is the canonical backend-owned ranking path followed by direct prompt injection truncation."
       },
       "autoRecallCategories": {
         "type": "array",
@@ -329,7 +328,7 @@
     },
     "autoRecallSelectionMode": {
       "label": "Auto-Recall Selection Mode",
-      "help": "Generic final top-k mode over ordinary backend rows: mmr is the canonical direct-truncation mode; setwise-v2 applies a prompt-local lexical/coverage selector without recreating backend retrieval, rerank, or embedding authority.",
+      "help": "Generic final top-k mode over ordinary backend rows. mmr is the canonical backend-owned ranking path followed by direct prompt injection truncation.",
       "advanced": true
     },
     "autoRecallCategories": {

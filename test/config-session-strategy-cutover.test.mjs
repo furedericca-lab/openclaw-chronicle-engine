@@ -54,12 +54,15 @@ describe("sessionStrategy cutover contract", () => {
     assert.equal(parsed.autoRecallSelectionMode, "mmr");
   });
 
-  it("parses explicit generic auto-recall selection mode setwise-v2", () => {
-    const parsed = parsePluginConfig({
-      ...baseConfig(),
-      autoRecallSelectionMode: "setwise-v2",
-    });
-    assert.equal(parsed.autoRecallSelectionMode, "setwise-v2");
+  it("rejects removed generic auto-recall selection mode setwise-v2", () => {
+    assert.throws(
+      () =>
+        parsePluginConfig({
+          ...baseConfig(),
+          autoRecallSelectionMode: "setwise-v2",
+        }),
+      /autoRecallSelectionMode=setwise-v2 is no longer supported; use mmr/
+    );
   });
 
   it("rejects removed local reflection-generation fields", () => {

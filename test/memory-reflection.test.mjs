@@ -26,7 +26,6 @@ const {
   isTransientReflectionUpstreamError,
   runWithReflectionTransientRetryOnce,
 } = jiti("./helpers/reflection-reference.ts");
-const { selectPromptLocalAutoRecallResults } = jiti("../src/prompt-local-auto-recall-selection.ts");
 const {
   createDynamicRecallSessionState,
   clearDynamicRecallSessionState,
@@ -563,91 +562,6 @@ describe("memory reflection", () => {
       assert.match(output.prependContext, /<relevant-memories>/);
       assert.match(output.prependContext, /Always run post-checks/);
       assert.match(output.prependContext, /Backend-side filtered recall already excluded reflection rows/);
-    });
-
-    it("keeps setwise-v2 as prompt-local post-selection over backend rows", async () => {
-      const state = createSessionExposureState();
-      const recallCalls = [];
-      const now = Date.now();
-      const planner = createAutoRecallPlanner(
-        {
-          enabled: true,
-          minPromptLength: 1,
-          topK: 3,
-          selectionMode: "setwise-v2",
-          maxEntriesPerKey: 10,
-        },
-        {
-          state: state.autoRecallState,
-          recallGeneric: async (params) => {
-            recallCalls.push(params);
-            return [
-              {
-                id: "dup-1",
-                text: "Verify DNS and mount health after service restart.",
-                category: "fact",
-                scope: "global",
-                score: 0.99,
-                metadata: { createdAt: now - 1000, updatedAt: now },
-              },
-              {
-                id: "dup-2",
-                text: "Verify dns and mount health after service restart!",
-                category: "fact",
-                scope: "global",
-                score: 0.985,
-                metadata: { createdAt: now - 1000, updatedAt: now },
-              },
-              {
-                id: "decision-1",
-                text: "Record rollback command before changing service units.",
-                category: "decision",
-                scope: "global",
-                score: 0.95,
-                metadata: { createdAt: now - 2000, updatedAt: now - 1000 },
-              },
-              {
-                id: "pref-1",
-                text: "Prefer concise post-check summaries in final responses.",
-                category: "preference",
-                scope: "agent:main",
-                score: 0.945,
-                metadata: { createdAt: now - 2000, updatedAt: now - 1000 },
-              },
-            ];
-          },
-          sanitizeForContext: (text) => text,
-        }
-      );
-
-      const output = await planner.plan({
-        prompt: "Need the restart recovery checklist",
-        agentId: "main",
-        sessionId: "session-setwise",
-      });
-
-      assert.equal(recallCalls.length, 1);
-      assert.deepEqual(Object.keys(recallCalls[0]).sort(), [
-        "agentId",
-        "categories",
-        "excludeReflection",
-        "limit",
-        "maxAgeDays",
-        "maxEntriesPerKey",
-        "query",
-        "sessionId",
-        "sessionKey",
-        "userId",
-      ]);
-      assert.equal(recallCalls[0].limit, 12, "planner should request backend candidates, then trim locally");
-      assert.ok(output);
-      const lines = output.prependContext
-        .split("\n")
-        .filter((line) => line.trim().startsWith("- "));
-      assert.equal(lines.length, 3);
-      assert.equal(lines.filter((line) => /verify dns and mount health/i.test(line)).length, 1);
-      assert.ok(lines.some((line) => /rollback command/i.test(line)));
-      assert.ok(lines.some((line) => /concise post-check summaries/i.test(line)));
     });
 
     it("rejects missing remote recall dependency for generic auto-recall planner", () => {

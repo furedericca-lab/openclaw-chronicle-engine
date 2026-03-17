@@ -1,5 +1,4 @@
 import type { BackendRecallGenericRow } from "../backend-client/types.js";
-import { selectPromptLocalAutoRecallResults } from "../prompt-local-auto-recall-selection.js";
 import type { RecallResultRow } from "../memory-record-types.js";
 import {
   orchestrateDynamicRecall,
@@ -7,7 +6,7 @@ import {
   type DynamicRecallSessionState,
 } from "../recall-engine.js";
 
-export type AutoRecallSelectionMode = "mmr" | "setwise-v2";
+export type AutoRecallSelectionMode = "mmr";
 export type AutoRecallCategory = "preference" | "fact" | "decision" | "entity" | "other" | "reflection";
 
 export interface AutoRecallPlannerConfig {
@@ -65,9 +64,6 @@ export function createAutoRecallPlanner(
     const agentId = typeof params.agentId === "string" && params.agentId.trim() ? params.agentId.trim() : "main";
     const sessionId = typeof params.sessionId === "string" && params.sessionId.trim() ? params.sessionId.trim() : "default";
     const topK = Math.max(1, normalizePositiveInt(config.topK, 3));
-    const fetchLimit = config.selectionMode === "setwise-v2"
-      ? Math.min(20, Math.max(topK * 4, topK, 8))
-      : topK;
 
     return await orchestrateDynamicRecall({
       channelName: "auto-recall",
@@ -84,7 +80,7 @@ export function createAutoRecallPlanner(
       loadCandidates: async () => {
         const retrieved = mapBackendRowsToRecallResults(await deps.recallGeneric({
           query: String(params.prompt || ""),
-          limit: fetchLimit,
+          limit: topK,
           agentId,
           sessionId,
           sessionKey: params.sessionKey,
@@ -94,9 +90,6 @@ export function createAutoRecallPlanner(
           maxAgeDays: config.maxAgeDays,
           maxEntriesPerKey: config.maxEntriesPerKey,
         }));
-        if (config.selectionMode === "setwise-v2") {
-          return selectPromptLocalAutoRecallResults(retrieved, { topK });
-        }
         return retrieved.slice(0, topK);
       },
       formatLine: (row) =>

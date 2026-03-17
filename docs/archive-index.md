@@ -22,6 +22,8 @@ Interpretation:
 
 Archived scopes:
 
+- `setwise-v2-removal-2026-03-17/`: single-contract cleanup record for deleting the final prompt-local `setwise-v2` auto-recall selector, collapsing the active runtime to backend-owned `mmr` ranking plus direct truncation, and removing the corresponding schema/test/doc surface. Collected: `2026-03-17`. Reference value: `6/10`.
+  Why: useful as a narrow audit trail for the point where the repo stopped treating prompt-local auto-recall post-selection as a supported runtime seam and simplified the pre-release config surface before release.
 - `src-test-residual-cleanup-2026-03-17/`: single-contract cleanup record for removing final `src/` and `test/` old-architecture residue after the remote-backend cutover, including backend-owned recall filter forwarding, stale test naming cleanup, consolidation of test-only reflection helpers, and consolidation of self-improvement registration into the main self-improvement tool module. Collected: `2026-03-17`. Reference value: `7/10`.
   Why: useful as a focused audit trail for the final low-level structure cleanup after the major remote-authority migration settled, especially where several small residual files were collapsed without changing runtime ownership boundaries.
 - `recall-boundary-tightening-2026-03-17/`: single-contract cleanup record for removing dead runtime noise-filter residue, pushing backend-visible recall filter semantics fully into the backend contract/execution path, and separating self-improvement registration from the remote memory adapter surface. Collected: `2026-03-17`. Reference value: `7/10`.
