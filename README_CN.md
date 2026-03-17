@@ -115,10 +115,10 @@ Chronicle Engine 已经不是“插件内嵌一个本地记忆数据库”的形
 distill 请求
   -> 插件 / backend client
     -> POST /v1/distill/jobs
-      -> backend 校验 actor + source + mode
+        -> backend 校验 actor + source + mode
         -> backend 异步排队 distill job
-          -> worker 路径清洗 transcript / messages
-            -> backend 持久化 distill artifacts
+          -> backend 清洗 transcript / messages 并构建 deterministic span/window candidates
+            -> backend 持久化英文 distill artifacts
               -> 可选写入 memory rows
                 -> GET /v1/distill/jobs/{jobId} 查看状态和结果
 ```
@@ -140,7 +140,7 @@ distill 请求
 | Diversity / MMR | 历史 TS 能力 | Rust backend | 已具备 |
 | Reflection recall 权威 | 本地 TS + 本地持久化路径 | Rust backend recall 路径 | 已替换 |
 | Reflection async jobs | 本地 / 插件耦合执行 | Rust backend enqueue + job tracking | 已替换 |
-| Distill async jobs | 历史 sidecar / example 流水线 | Rust backend distill jobs | 已具备初版 backend-native 能力 |
+| Distill async jobs | 历史 sidecar / example 流水线 | Rust backend distill jobs | 已具备 backend-native deterministic slice |
 | Scope derivation / ACL | 历史上本地 TS 有参与 | 仅 Rust backend | 已替换 |
 | 可检查 retrieval trace | 历史 TS 有更厚 telemetry 对象 | Rust backend debug trace routes | 达到可接受 parity，但不是 1:1 复刻 |
 | Prompt 注入渲染 | 本地 TS | 本地 TS | 有意保留 |
@@ -236,6 +236,7 @@ distill 请求
 | distill job enqueue + 轮询 | 支持 | backend 权威异步 job 面 |
 | distill inline-messages 清洗 + artifact 持久化 | 支持 | backend 权威执行路径 |
 | distill `session-transcript` source | 支持 | backend 持久化 transcript + 异步 distill 执行 |
+| 每 N 个 user turn 自动 distill | 支持 | runtime cadence + backend-native `session-transcript` jobs |
 | `memory_store` / `memory_update` / `memory_forget` | 支持 | 远程后端工具 |
 | `memory_list` / `memory_stats` | 支持 | 可选管理工具 |
 | `memory_reflection_status` | 支持 | 可选管理工具，用于 caller-scoped 的 backend reflection job |
@@ -259,6 +260,8 @@ distill 请求
 - 旧 `jsonl_distill.py` / example-worker sidecar 路径已经从活动 repo 运行时中移除
 - 它不是当前受支持运行路径
 - 当前受支持方向是 backend-native distill jobs，并由 backend 自己持久化 session transcript
+- 当前 distill summary 刻意保持为英文 deterministic 输出
+- 可选 runtime cadence 会按 `distill.everyTurns` 自动 enqueue 一个 `session-transcript` distill job
 
 ## 10. 调试与可观测性
 

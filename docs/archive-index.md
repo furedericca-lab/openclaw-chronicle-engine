@@ -22,6 +22,8 @@ Interpretation:
 
 Archived scopes:
 
+- `distill-iteration-runtime-2026-03-18/`: phased implementation and closeout record for strengthening deterministic Rust distill quality with multi-message span aggregation, English-only rule-based summaries, stronger reduction heuristics, and cadence-based automatic `session-transcript` distill enqueue every configured user-turn interval. Collected: `2026-03-18`. Reference value: `8/10`.
+  Why: high implementation and audit value because it records the point where backend-native distill moved beyond message-level truncation, and where runtime gained a bounded automatic distill trigger without reintroducing any sidecar or local transcript authority.
 - `src-root-boundary-cleanup-2026-03-17/`: single-contract cleanup record for consolidating self-improvement support into one module, deleting the last thin local recall DTO shell, and moving prompt-time recall helpers fully under `src/context/` to match the context-engine split boundary. Collected: `2026-03-17`. Reference value: `7/10`.
   Why: useful as a focused audit trail for the point where the remaining `src/` root modules were reclassified more cleanly into adapter vs context ownership and the last low-value local recall DTO residue was removed.
 - `setwise-v2-removal-2026-03-17/`: single-contract cleanup record for deleting the final prompt-local `setwise-v2` auto-recall selector, collapsing the active runtime to backend-owned `mmr` ranking plus direct truncation, and removing the corresponding schema/test/doc surface. Collected: `2026-03-17`. Reference value: `6/10`.

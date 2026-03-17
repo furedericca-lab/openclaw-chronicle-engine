@@ -147,6 +147,64 @@
       "captureAssistant": {
         "type": "boolean"
       },
+      "distill": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Optional backend-native automatic distill cadence. Runtime only decides when to enqueue; backend remains source and persistence authority.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "session-lessons",
+              "governance-candidates"
+            ],
+            "default": "session-lessons"
+          },
+          "persistMode": {
+            "type": "string",
+            "enum": [
+              "artifacts-only",
+              "persist-memory-rows"
+            ],
+            "default": "artifacts-only"
+          },
+          "everyTurns": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 5,
+            "description": "Automatically enqueue one backend distill job every N completed user turns in the same session."
+          },
+          "maxMessages": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 400
+          },
+          "maxArtifacts": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 20
+          },
+          "chunkChars": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 24000,
+            "default": 12000
+          },
+          "chunkOverlapMessages": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32,
+            "default": 10
+          }
+        }
+      },
       "selfImprovement": {
         "type": "object",
         "additionalProperties": false,
@@ -354,6 +412,46 @@
     "captureAssistant": {
       "label": "Capture Assistant Messages",
       "help": "Also auto-capture assistant messages (default false to reduce memory pollution)",
+      "advanced": true
+    },
+    "distill.enabled": {
+      "label": "Automatic Distill",
+      "help": "Automatically enqueue backend-native session-transcript distill jobs on a turn cadence.",
+      "advanced": true
+    },
+    "distill.mode": {
+      "label": "Distill Mode",
+      "help": "Which backend distill output family to enqueue automatically.",
+      "advanced": true
+    },
+    "distill.persistMode": {
+      "label": "Distill Persist Mode",
+      "help": "Persist artifacts only, or persist distilled memory rows when mode=session-lessons.",
+      "advanced": true
+    },
+    "distill.everyTurns": {
+      "label": "Distill Every N Turns",
+      "help": "One user send counts as one turn. When the session reaches the configured cadence, runtime enqueues a backend distill job.",
+      "advanced": true
+    },
+    "distill.maxMessages": {
+      "label": "Distill Max Messages",
+      "help": "Optional cap on transcript rows included in the automatic distill source window.",
+      "advanced": true
+    },
+    "distill.maxArtifacts": {
+      "label": "Distill Max Artifacts",
+      "help": "Maximum number of final artifacts kept by backend distill reduction.",
+      "advanced": true
+    },
+    "distill.chunkChars": {
+      "label": "Distill Chunk Chars",
+      "help": "Character budget used by backend distill windowing.",
+      "advanced": true
+    },
+    "distill.chunkOverlapMessages": {
+      "label": "Distill Chunk Overlap Messages",
+      "help": "Message overlap retained between backend distill windows.",
       "advanced": true
     },
     "sessionStrategy": {

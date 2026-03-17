@@ -2856,7 +2856,7 @@ async fn distill_job_enqueue_and_status_follow_frozen_contract() {
     assert!(body["createdAt"].is_number());
     assert!(body["updatedAt"].is_number());
     assert_eq!(body["result"]["persistedMemoryCount"], 0);
-    assert_eq!(body["result"]["artifactCount"], 2);
+    assert_eq!(body["result"]["artifactCount"], 1);
     let conn = rusqlite::Connection::open(tmp.join("sqlite/jobs.db")).expect("sqlite should open");
     let mut stmt = conn
         .prepare("SELECT text, evidence_json FROM distill_artifacts WHERE job_id = ?1 ORDER BY created_at ASC")
@@ -2868,12 +2868,12 @@ async fn distill_job_enqueue_and_status_follow_frozen_contract() {
         .expect("artifact rows should query")
         .collect::<Result<Vec<_>, _>>()
         .expect("artifact rows should decode");
-    assert_eq!(rows.len(), 2);
-    assert!(rows.iter().any(|(text, _)| text.contains("restart mosdns")));
+    assert_eq!(rows.len(), 1);
+    assert!(rows.iter().any(|(text, _)| text.contains("Cause:") && text.contains("Fix:")));
     assert!(rows.iter().all(|(text, _)| !text.to_lowercase().contains("best practice")));
-    assert!(rows
-        .iter()
-        .all(|(_, evidence)| evidence.contains("\"messageIds\":[2]") || evidence.contains("\"messageIds\":[3]")));
+    assert!(rows.iter().all(|(_, evidence)| {
+        evidence.contains("\"messageIds\":[2]") && evidence.contains("\"messageIds\":[3]")
+    }));
 }
 
 #[tokio::test]
@@ -3139,6 +3139,72 @@ async fn distill_inline_messages_filters_slash_noise_to_zero_artifacts() {
             .as_str()
             .unwrap_or_default()
             .contains("filtered as noise")));
+}
+
+#[tokio::test]
+async fn distill_inline_messages_aggregates_multi_message_evidence_and_structured_summary() {
+    let tmp = std::env::temp_dir().join(format!(
+        "memory-lancedb-pro-backend-distill-aggregate-{}",
+        Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&tmp).expect("temp test path should be created");
+    let app = setup_app_at(&tmp);
+
+    let enqueue = json!({
+        "actor": actor("u1", "main", "sess-1", "session-key-1"),
+        "mode": "session-lessons",
+        "source": {
+            "kind": "inline-messages",
+            "messages": [
+                { "role": "user", "text": "DNS broke on openclaw after a risky resolver change." },
+                { "role": "assistant", "text": "Cause: systemd-resolved occupied port 53 and blocked mosdns." },
+                { "role": "assistant", "text": "Fix: disable systemd-resolved, restart mosdns, and verify DNS resolution." },
+                { "role": "assistant", "text": "Prevention: keep systemd-resolved disabled in this LXC baseline." }
+            ]
+        },
+        "options": {
+            "persistMode": "artifacts-only",
+            "maxArtifacts": 5
+        }
+    });
+
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/distill/jobs",
+        Some(enqueue),
+        Some("idem-distill-aggregate-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let job_id = body["jobId"].as_str().expect("jobId should exist");
+    let (status, body) = poll_distill_job(&app, job_id, ("u1", "main")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "completed");
+    assert!(body["result"]["artifactCount"].as_u64().unwrap_or(0) >= 1);
+
+    let conn = rusqlite::Connection::open(tmp.join("sqlite/jobs.db")).expect("sqlite should open");
+    let mut stmt = conn
+        .prepare("SELECT text, evidence_json FROM distill_artifacts WHERE job_id = ?1 ORDER BY created_at ASC")
+        .expect("distill artifact query should prepare");
+    let rows = stmt
+        .query_map(rusqlite::params![job_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .expect("artifact rows should query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("artifact rows should decode");
+
+    assert!(rows.iter().any(|(text, evidence)| {
+        text.starts_with("Lesson:")
+            && text.contains("Cause:")
+            && text.contains("Fix:")
+            && evidence.contains("\"messageIds\":[2]")
+            && evidence.contains("\"messageIds\":[3]")
+    }));
 }
 
 #[tokio::test]

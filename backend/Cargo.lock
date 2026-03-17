@@ -3610,7 +3610,7 @@ dependencies = [
 
 [[package]]
 name = "memory-lancedb-pro-backend"
-version = "0.1.0"
+version = "1.0.0-beta.0"
 dependencies = [
  "anyhow",
  "arrow-array",

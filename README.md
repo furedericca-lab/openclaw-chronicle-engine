@@ -115,10 +115,10 @@ User prompt
 distill request
   -> plugin/backend client
     -> POST /v1/distill/jobs
-      -> backend validates actor + source + mode
+        -> backend validates actor + source + mode
         -> backend enqueues async distill job
-          -> worker path cleans transcript/messages
-            -> backend persists distill artifacts
+          -> backend cleans transcript/messages and builds deterministic span/window candidates
+            -> backend persists English distill artifacts
               -> optional memory-row persistence
                 -> GET /v1/distill/jobs/{jobId} to inspect status/result
 ```
@@ -140,7 +140,7 @@ distill request
 | Diversity / MMR | Historical TS-side capability | Rust backend | Present |
 | Reflection recall authority | Local TS + local persistence path | Rust backend recall path | Replaced |
 | Reflection async jobs | Local/plugin-coupled execution | Rust backend enqueue + job tracking | Replaced |
-| Distill async jobs | Historical sidecar/example pipeline | Rust backend distill jobs | Present, initial backend-native slice |
+| Distill async jobs | Historical sidecar/example pipeline | Rust backend distill jobs | Present, backend-native deterministic slice |
 | Scope derivation / ACL | Local TS participation existed historically | Rust backend only | Replaced |
 | Inspectable retrieval trace | Historical TS had thicker telemetry objects | Rust backend debug trace routes | Acceptable parity, not 1:1 shape recreation |
 | Prompt injection rendering | Local TS | Local TS | Intentionally retained |
@@ -236,6 +236,8 @@ That means:
 | Distill job enqueue + polling | Yes | Backend-owned async job surface |
 | Distill inline-message cleaning + artifact persistence | Yes | Backend-owned execution path |
 | Distill `session-transcript` source | Yes | Backend-owned transcript persistence + async distill execution |
+| Automatic distill every N user turns | Yes | Runtime cadence over backend-native `session-transcript` jobs |
+| Automatic distill every N user turns | Yes | Runtime cadence over backend-native `session-transcript` jobs |
 | `memory_store` / `memory_update` / `memory_forget` | Yes | Remote-backed |
 | `memory_list` / `memory_stats` | Yes | Optional management tools |
 | `memory_reflection_status` | Yes | Optional management tool for caller-scoped backend reflection jobs |
@@ -250,6 +252,7 @@ That means:
 |---|---|---|
 | Job ownership | External script + worker | Rust backend job surface |
 | Source preprocessing | Script-local filtering/cleanup | Backend cleanup/filtering pipeline |
+| Reduction quality | Model-backed sidecar map/reduce | Deterministic Rust span/window reducer |
 | Persistence | External import back into storage | Backend-owned artifacts and optional memory persistence |
 | Status inspection | Queue files / external worker logs | `GET /v1/distill/jobs/{jobId}` |
 | Runtime authority | Not canonical anymore | Canonical direction |
@@ -259,6 +262,10 @@ Important boundary:
 - the old `jsonl_distill.py` / example-worker sidecar path has been removed from the active repo runtime
 - it is not the supported runtime path
 - the supported direction is backend-native distill jobs backed by persisted session transcript rows
+- distill summaries in the current runtime are intentionally English-only and deterministic
+- optional runtime cadence can enqueue one `session-transcript` distill job every configured `distill.everyTurns` user turns
+- distill summaries in the current runtime are intentionally English-only and deterministic
+- optional runtime cadence can enqueue one `session-transcript` distill job every configured `distill.everyTurns` user turns
 
 ## 10. Debuggability
 

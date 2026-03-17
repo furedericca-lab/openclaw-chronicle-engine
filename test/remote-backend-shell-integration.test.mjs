@@ -236,6 +236,37 @@ describe("remote backend shell integration", () => {
     );
   });
 
+  it("parses optional automatic distill cadence config", () => {
+    const parsed = parsePluginConfig({
+      remoteBackend: {
+        enabled: true,
+        baseURL: "http://backend.test",
+        authToken: "token-test",
+      },
+      distill: {
+        enabled: true,
+        mode: "session-lessons",
+        persistMode: "persist-memory-rows",
+        everyTurns: 5,
+        maxMessages: 300,
+        maxArtifacts: 12,
+        chunkChars: 8000,
+        chunkOverlapMessages: 6,
+      },
+    });
+
+    assert.deepEqual(parsed.distill, {
+      enabled: true,
+      mode: "session-lessons",
+      persistMode: "persist-memory-rows",
+      everyTurns: 5,
+      maxMessages: 300,
+      maxArtifacts: 12,
+      chunkChars: 8000,
+      chunkOverlapMessages: 6,
+    });
+  });
+
   it("rejects removed local reflection-generation fields during registration", () => {
     const root = makeTempRoot();
     assert.throws(
@@ -957,6 +988,118 @@ describe("remote backend shell integration", () => {
 
     assert.equal(fetchMock.calls.length, 1);
     assert.equal(fetchMock.calls[0].path, "/v1/session-transcripts/append");
+  });
+
+  it("automatically enqueues backend distill every configured user-turn cadence", async () => {
+    const root = makeTempRoot();
+
+    const fetchMock = installFetchMock([
+      {
+        method: "POST",
+        path: "/v1/session-transcripts/append",
+        reply: () => ({ appended: 2 }),
+      },
+      {
+        method: "POST",
+        path: "/v1/distill/jobs",
+        reply: (_call, attempt) => ({
+          jobId: `distill-auto-${attempt + 1}`,
+          status: "queued",
+        }),
+      },
+    ]);
+
+    const harness = createPluginApiHarness({
+      pluginConfig: makeRemoteConfig(root, {
+        sessionStrategy: "none",
+        autoCapture: false,
+        distill: {
+          enabled: true,
+          everyTurns: 5,
+          mode: "session-lessons",
+          persistMode: "artifacts-only",
+          maxMessages: 300,
+          maxArtifacts: 7,
+          chunkChars: 9000,
+          chunkOverlapMessages: 4,
+        },
+      }),
+      resolveRoot: root,
+    });
+    chronicleEnginePlugin.register(harness.api);
+
+    const handler = getLatestHandler(harness.eventHandlers, "agent_end");
+    const runtimeCtx = {
+      userId: "user-distill-auto",
+      agentId: "agent-distill-auto",
+      sessionId: "session-distill-auto",
+      sessionKey: "agent:agent-distill-auto:session:stable-auto",
+    };
+
+    await handler(
+      {
+        success: true,
+        messages: [
+          { role: "assistant", content: [{ type: "text", text: "assistant-only batch should not count as a user turn" }] },
+        ],
+      },
+      runtimeCtx
+    );
+    assert.equal(
+      fetchMock.calls.filter((call) => call.path === "/v1/distill/jobs").length,
+      0,
+      "assistant-only batches must not advance automatic distill cadence"
+    );
+
+    for (let turn = 0; turn < 4; turn += 1) {
+      await handler(
+        {
+          success: true,
+          messages: [
+            { role: "user", content: [{ type: "text", text: `turn ${turn + 1}: investigate dns failure` }] },
+            { role: "assistant", content: [{ type: "text", text: `turn ${turn + 1}: acknowledged` }] },
+          ],
+        },
+        runtimeCtx
+      );
+    }
+    assert.equal(
+      fetchMock.calls.filter((call) => call.path === "/v1/distill/jobs").length,
+      0,
+      "automatic distill should not enqueue before cadence threshold is crossed"
+    );
+
+    await handler(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: [{ type: "text", text: "turn 5: disable systemd-resolved and restart mosdns" }] },
+          { role: "assistant", content: [{ type: "text", text: "turn 5: completed" }] },
+        ],
+      },
+      runtimeCtx
+    );
+
+    const distillCalls = fetchMock.calls.filter((call) => call.path === "/v1/distill/jobs");
+    assert.equal(distillCalls.length, 1);
+    const distillCall = distillCalls[0];
+    assert.deepEqual(Object.keys(distillCall.body).sort(), ["actor", "mode", "options", "source"]);
+    assert.equal(distillCall.body.mode, "session-lessons");
+    assert.equal(distillCall.body.source.kind, "session-transcript");
+    assert.equal(distillCall.body.source.sessionKey, runtimeCtx.sessionKey);
+    assert.equal(distillCall.body.source.sessionId, runtimeCtx.sessionId);
+    assert.deepEqual(distillCall.body.options, {
+      persistMode: "artifacts-only",
+      maxMessages: 300,
+      maxArtifacts: 7,
+      chunkChars: 9000,
+      chunkOverlapMessages: 4,
+    });
+    assert.match(
+      distillCall.headers["idempotency-key"],
+      /^automatic-distill:/,
+      "automatic distill should use a stable idempotency key prefix"
+    );
   });
 
   it("keeps auto-recall fail-open when backend generic recall fails", async () => {

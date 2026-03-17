@@ -4394,8 +4394,8 @@ fn build_distill_candidates(
     let overlap_messages = options.chunk_overlap_messages.unwrap_or(10).min(32) as usize;
     let mut candidates = Vec::new();
     for window in build_distill_windows(prepared, chunk_chars, overlap_messages) {
-        for message in window {
-            if let Some(candidate) = build_distill_candidate(message, mode) {
+        for span in build_distill_spans(window) {
+            if let Some(candidate) = build_distill_candidate(span, mode) {
                 candidates.push(candidate);
             }
         }
@@ -4443,22 +4443,104 @@ fn distill_message_window_len(message: &DistillPreparedMessage) -> usize {
     message.text.chars().count() + 16
 }
 
+fn build_distill_spans(window: &[DistillPreparedMessage]) -> Vec<&[DistillPreparedMessage]> {
+    if window.is_empty() {
+        return Vec::new();
+    }
+
+    let mut spans = Vec::new();
+    let mut start = 0usize;
+    while start < window.len() {
+        let mut end = start + 1;
+        while end < window.len()
+            && end - start < 4
+            && should_extend_distill_span(&window[start..end], &window[end])
+        {
+            end += 1;
+        }
+        spans.push(&window[start..end]);
+        start = end;
+    }
+    let has_multi_message_span = spans.iter().any(|span| span.len() > 1);
+    let whole_window_text = window
+        .iter()
+        .map(|message| message.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if window.len() > 1
+        && (detect_distill_signal_count(&whole_window_text) >= 2
+            || (!has_multi_message_span && window_has_shared_distill_entities(window)))
+    {
+        spans.push(window);
+    }
+    spans
+}
+
+fn window_has_shared_distill_entities(window: &[DistillPreparedMessage]) -> bool {
+    let mut seen = HashSet::new();
+    for message in window {
+        for entity in select_distill_entities(&message.text, 4) {
+            if !seen.insert(entity) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn should_extend_distill_span(
+    current: &[DistillPreparedMessage],
+    next: &DistillPreparedMessage,
+) -> bool {
+    let current_text = current
+        .iter()
+        .map(|message| message.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let combined_len = current_text.chars().count() + next.text.chars().count();
+    if combined_len > 1_400 {
+        return false;
+    }
+    let current_tags = extract_distill_tags(&current_text);
+    let next_tags = extract_distill_tags(&next.text);
+    let shared_tags = current_tags
+        .iter()
+        .filter(|tag| next_tags.iter().any(|candidate| candidate == *tag))
+        .count();
+    let current_signals = detect_distill_signal_count(&current_text);
+    let next_signals = detect_distill_signal_count(&next.text);
+    let role_bridge = current
+        .last()
+        .map(|message| message.role != next.role)
+        .unwrap_or(false);
+    shared_tags > 0
+        || (role_bridge && (current_signals > 0 || next_signals > 0))
+        || (current_signals > 0 && next_signals > 0)
+}
+
 fn build_distill_candidate(
-    message: &DistillPreparedMessage,
+    span: &[DistillPreparedMessage],
     mode: DistillMode,
 ) -> Option<DistillCandidate> {
-    let summary = normalize_distill_candidate_text(&summarize_distill_text(&message.text, mode));
-    let evidence = normalize_distill_evidence(vec![DistillArtifactEvidence {
-        message_ids: vec![message.message_id],
-        quote: truncate_for_error(&message.text, DISTILL_MAX_QUOTE_LEN),
-    }]);
-    let tags = normalize_distill_tags(extract_distill_tags(&message.text));
+    let span_text = span
+        .iter()
+        .map(|message| message.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let summary = normalize_distill_candidate_text(&summarize_distill_text(&span_text, span, mode));
+    let evidence = normalize_distill_evidence(
+        span.iter()
+            .take(3)
+            .map(|message| DistillArtifactEvidence {
+                message_ids: vec![message.message_id],
+                quote: truncate_for_error(&message.text, DISTILL_MAX_QUOTE_LEN),
+            })
+            .collect(),
+    );
+    let tags = normalize_distill_tags(extract_distill_tags(&span_text));
     let mut candidate = DistillCandidate {
-        category: normalize_distill_category(infer_distill_category(&message.text, mode)),
-        importance: normalize_distill_importance(infer_distill_importance(
-            &message.text,
-            message.role,
-        )),
+        category: normalize_distill_category(infer_distill_category(&span_text, mode)),
+        importance: normalize_distill_importance(infer_distill_importance(&span_text, span)),
         dedupe_key: normalize_distill_candidate_key(&summary),
         text: summary,
         evidence,
@@ -4476,13 +4558,22 @@ fn reduce_distill_candidates(
     candidates: Vec<DistillCandidate>,
     max_artifacts: usize,
 ) -> Vec<DistillCandidate> {
-    let mut seen = HashSet::new();
-    let mut reduced = Vec::new();
+    let mut reduced: Vec<DistillCandidate> = Vec::new();
     for candidate in candidates {
-        if candidate.dedupe_key.is_empty() || !seen.insert(candidate.dedupe_key.clone()) {
+        if candidate.dedupe_key.is_empty() {
+            continue;
+        }
+        if let Some(existing) = reduced
+            .iter_mut()
+            .find(|existing| should_merge_distill_candidate(existing, &candidate))
+        {
+            merge_distill_candidate(existing, candidate);
             continue;
         }
         reduced.push(candidate);
+    }
+    for candidate in &mut reduced {
+        candidate.score = score_distill_candidate(candidate);
     }
     reduced.sort_by(|a, b| {
         b.score
@@ -4550,6 +4641,65 @@ fn normalize_distill_evidence(evidence: Vec<DistillArtifactEvidence>) -> Vec<Dis
         normalized.push(DistillArtifactEvidence { message_ids, quote });
     }
     normalized
+}
+
+fn should_merge_distill_candidate(existing: &DistillCandidate, incoming: &DistillCandidate) -> bool {
+    existing.dedupe_key == incoming.dedupe_key
+        || (existing.category == incoming.category
+            && distill_evidence_overlaps(&existing.evidence, &incoming.evidence)
+            && distill_tag_overlap(&existing.tags, &incoming.tags) > 0)
+}
+
+fn merge_distill_candidate(target: &mut DistillCandidate, incoming: DistillCandidate) {
+    target.importance = target.importance.max(incoming.importance);
+    target.text = select_preferred_distill_text(&target.text, &incoming.text);
+    target.tags = normalize_distill_tags(
+        target
+            .tags
+            .iter()
+            .cloned()
+            .chain(incoming.tags.iter().cloned())
+            .collect(),
+    );
+    target.evidence = normalize_distill_evidence(
+        target
+            .evidence
+            .iter()
+            .cloned()
+            .chain(incoming.evidence.iter().cloned())
+            .collect(),
+    );
+    target.dedupe_key = normalize_distill_candidate_key(&target.text);
+}
+
+fn select_preferred_distill_text(left: &str, right: &str) -> String {
+    let left_score = detect_distill_signal_count(left) * 10 + left.len().min(240);
+    let right_score = detect_distill_signal_count(right) * 10 + right.len().min(240);
+    if right_score > left_score {
+        right.to_string()
+    } else {
+        left.to_string()
+    }
+}
+
+fn distill_evidence_overlaps(
+    left: &[DistillArtifactEvidence],
+    right: &[DistillArtifactEvidence],
+) -> bool {
+    left.iter().any(|left_row| {
+        right.iter().any(|right_row| {
+            left_row
+                .message_ids
+                .iter()
+                .any(|message_id| right_row.message_ids.iter().any(|candidate| candidate == message_id))
+        })
+    })
+}
+
+fn distill_tag_overlap(left: &[String], right: &[String]) -> usize {
+    left.iter()
+        .filter(|tag| right.iter().any(|candidate| candidate == *tag))
+        .count()
 }
 
 fn should_keep_distill_candidate(candidate: &DistillCandidate) -> bool {
@@ -4644,12 +4794,59 @@ fn score_distill_candidate(candidate: &DistillCandidate) -> f64 {
     score
 }
 
-fn summarize_distill_text(text: &str, mode: DistillMode) -> String {
+fn summarize_distill_text(
+    text: &str,
+    span: &[DistillPreparedMessage],
+    mode: DistillMode,
+) -> String {
     let prefix = match mode {
-        DistillMode::SessionLessons => "Lesson: ",
-        DistillMode::GovernanceCandidates => "Governance candidate: ",
+        DistillMode::SessionLessons => "Lesson",
+        DistillMode::GovernanceCandidates => "Governance candidate",
     };
-    format!("{prefix}{}", truncate_for_error(text, 440))
+    let sentences = distill_sentences(text);
+    let primary = select_primary_distill_sentence(&sentences);
+    let cause = select_signal_sentence(&sentences, &["cause", "because", "root cause", "原因"]);
+    let fix = select_signal_sentence(
+        &sentences,
+        &["fix", "restart", "disable", "enable", "rollback", "migrate", "修复"],
+    );
+    let prevention = select_signal_sentence(
+        &sentences,
+        &["prevention", "avoid", "guard", "verify", "预防"],
+    );
+    let trigger = select_signal_sentence(
+        &sentences,
+        &["trigger", "action", "decision", "must", "动作", "触发"],
+    );
+
+    let mut parts = Vec::new();
+    if let Some(primary) = primary {
+        parts.push(compact_distill_sentence(&primary));
+    }
+    if let Some(cause) = cause {
+        parts.push(format!("Cause: {}", compact_distill_clause(&cause)));
+    }
+    if let Some(fix) = fix {
+        parts.push(format!("Fix: {}", compact_distill_clause(&fix)));
+    }
+    if let Some(prevention) = prevention {
+        parts.push(format!("Prevention: {}", compact_distill_clause(&prevention)));
+    }
+    if let Some(trigger) = trigger {
+        parts.push(format!("Action: {}", compact_distill_clause(&trigger)));
+    }
+    if parts.is_empty() {
+        parts.push(compact_distill_sentence(&truncate_for_error(text, 360)));
+    }
+
+    let mut summary = format!("{prefix}: {}", parts.join(" "));
+    if span.len() > 1 {
+        let entities = select_distill_entities(text, 2);
+        if !entities.is_empty() && !entities.iter().all(|entity| summary.to_lowercase().contains(entity)) {
+            summary.push_str(&format!(" Context: {}.", entities.join(", ")));
+        }
+    }
+    truncate_for_error(&summary, 440)
 }
 
 fn infer_distill_category(text: &str, mode: DistillMode) -> Category {
@@ -4682,7 +4879,7 @@ fn infer_distill_category(text: &str, mode: DistillMode) -> Category {
     }
 }
 
-fn infer_distill_importance(text: &str, role: MessageRole) -> f64 {
+fn infer_distill_importance(text: &str, span: &[DistillPreparedMessage]) -> f64 {
     let mut score: f64 = 0.55;
     let lowered = text.to_lowercase();
     if lowered.contains("error")
@@ -4698,7 +4895,16 @@ fn infer_distill_importance(text: &str, role: MessageRole) -> f64 {
     if lowered.contains("trigger") || lowered.contains("action") {
         score += 0.05;
     }
-    if matches!(role, MessageRole::Assistant) {
+    if span.iter().any(|message| matches!(message.role, MessageRole::Assistant)) {
+        score += 0.05;
+    }
+    if span.len() >= 2 {
+        score += 0.05;
+    }
+    if span.len() >= 3 {
+        score += 0.05;
+    }
+    if lowered.contains("rollback") || lowered.contains("migrate") || lowered.contains("verify") {
         score += 0.05;
     }
     if text.len() > 180 {
@@ -4710,6 +4916,11 @@ fn infer_distill_importance(text: &str, role: MessageRole) -> f64 {
 fn extract_distill_tags(text: &str) -> Vec<String> {
     let mut tags = Vec::new();
     let normalized = normalize_recall_text(text);
+    for entity in select_distill_entities(text, 4) {
+        if !tags.iter().any(|existing| existing == &entity) {
+            tags.push(entity);
+        }
+    }
     for token in lexical_tokens(&normalized) {
         if token.len() < 3 {
             continue;
@@ -4723,6 +4934,135 @@ fn extract_distill_tags(text: &str) -> Vec<String> {
         }
     }
     tags
+}
+
+fn distill_sentences(text: &str) -> Vec<String> {
+    text.replace('\n', ". ")
+        .split_terminator(&['.', '!', '?'][..])
+        .map(compact_distill_sentence)
+        .filter(|sentence| !sentence.is_empty())
+        .collect()
+}
+
+fn compact_distill_sentence(input: &str) -> String {
+    compact_distill_clause(input)
+        .trim_matches(|c: char| c == '.' || c == ',' || c == ';' || c.is_whitespace())
+        .to_string()
+}
+
+fn compact_distill_clause(input: &str) -> String {
+    let mut out = input.trim().to_string();
+    for prefix in [
+        "conversation info (untrusted metadata):",
+        "replied message (untrusted, for context):",
+        "i think ",
+        "we should ",
+        "please ",
+        "note that ",
+    ] {
+        if out.to_lowercase().starts_with(prefix) {
+            out = out[prefix.len()..].trim().to_string();
+        }
+    }
+    truncate_for_error(&out, 180)
+}
+
+fn select_primary_distill_sentence(sentences: &[String]) -> Option<String> {
+    sentences
+        .iter()
+        .max_by_key(|sentence| {
+            detect_distill_signal_count(sentence) * 10
+                + select_distill_entities(sentence, 3).len()
+                + sentence.len().min(160)
+        })
+        .cloned()
+}
+
+fn select_signal_sentence(sentences: &[String], patterns: &[&str]) -> Option<String> {
+    sentences
+        .iter()
+        .find(|sentence| {
+            let lowered = sentence.to_lowercase();
+            patterns.iter().any(|pattern| lowered.contains(pattern))
+        })
+        .cloned()
+}
+
+fn detect_distill_signal_count(text: &str) -> usize {
+    let lowered = text.to_lowercase();
+    [
+        "pitfall",
+        "cause",
+        "because",
+        "fix",
+        "prevention",
+        "decision principle",
+        "trigger",
+        "action",
+        "rollback",
+        "migrate",
+        "restart",
+        "disable",
+        "verify",
+        "原因",
+        "修复",
+        "预防",
+        "触发",
+        "动作",
+    ]
+    .iter()
+    .filter(|pattern| lowered.contains(**pattern))
+    .count()
+}
+
+fn select_distill_entities(text: &str, limit: usize) -> Vec<String> {
+    let mut selected = Vec::new();
+    for token in lexical_tokens(&normalize_recall_text(text)) {
+        if token.len() < 3 {
+            continue;
+        }
+        if !is_distill_entity_token(&token) {
+            continue;
+        }
+        if selected.iter().any(|existing| existing == &token) {
+            continue;
+        }
+        selected.push(token);
+        if selected.len() >= limit {
+            break;
+        }
+    }
+    selected
+}
+
+fn is_distill_entity_token(token: &str) -> bool {
+    matches!(
+        token,
+        "openclaw"
+            | "docker"
+            | "systemd"
+            | "mosdns"
+            | "rclone"
+            | "proxy"
+            | "config"
+            | "json"
+            | "yaml"
+            | "sqlite"
+            | "lancedb"
+            | "backend"
+            | "session"
+            | "transcript"
+            | "api"
+            | "http"
+            | "https"
+            | "ssh"
+            | "git"
+            | "timeout"
+            | "dns"
+            | "fuse"
+            | "azure"
+            | "token"
+    )
 }
 
 fn parse_status(raw: &str) -> AppResult<ReflectionJobStatus> {

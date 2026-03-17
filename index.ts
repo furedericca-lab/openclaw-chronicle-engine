@@ -26,6 +26,8 @@ import {
 import type {
   BackendCaptureItem,
   MemoryBackendClient,
+  DistillMode as BackendDistillMode,
+  DistillPersistMode as BackendDistillPersistMode,
   ReflectionTrigger as BackendReflectionTrigger,
   ReflectionRecallMode as BackendReflectionRecallMode,
 } from "./src/backend-client/types.js";
@@ -53,6 +55,16 @@ interface PluginConfig {
     beforeResetNote?: boolean;
     skipSubagentBootstrap?: boolean;
     ensureLearningFiles?: boolean;
+  };
+  distill?: {
+    enabled?: boolean;
+    mode?: BackendDistillMode;
+    persistMode?: BackendDistillPersistMode;
+    everyTurns?: number;
+    maxMessages?: number;
+    maxArtifacts?: number;
+    chunkChars?: number;
+    chunkOverlapMessages?: number;
   };
   memoryReflection?: {
     enabled?: boolean;
@@ -212,7 +224,30 @@ const DEFAULT_REFLECTION_RECALL_MAX_ENTRIES_PER_KEY = 10;
 const DEFAULT_REFLECTION_RECALL_MIN_REPEATED = 2;
 const DEFAULT_REFLECTION_RECALL_MIN_SCORE = 0.18;
 const DEFAULT_REFLECTION_RECALL_MIN_PROMPT_LENGTH = 8;
+const DEFAULT_DISTILL_MODE: BackendDistillMode = "session-lessons";
+const DEFAULT_DISTILL_PERSIST_MODE: BackendDistillPersistMode = "artifacts-only";
+const DEFAULT_DISTILL_EVERY_TURNS = 5;
+const DEFAULT_DISTILL_MAX_MESSAGES = 400;
+const DEFAULT_DISTILL_MAX_ARTIFACTS = 20;
+const DEFAULT_DISTILL_CHUNK_CHARS = 12_000;
+const DEFAULT_DISTILL_CHUNK_OVERLAP_MESSAGES = 10;
 const DIAG_BUILD_TAG = "openclaw-chronicle-engine-diag-20260308-0058";
+
+interface DistillRuntimeConfig {
+  enabled: boolean;
+  mode: BackendDistillMode;
+  persistMode: BackendDistillPersistMode;
+  everyTurns: number;
+  maxMessages: number;
+  maxArtifacts: number;
+  chunkChars: number;
+  chunkOverlapMessages: number;
+}
+
+interface DistillCadenceSessionState {
+  completedUserTurns: number;
+  lastEnqueuedBucket: number;
+}
 
 function buildSelfImprovementResetNote(params?: { openLoopsBlock?: string; derivedFocusBlock?: string }): string {
   const openLoopsBlock = typeof params?.openLoopsBlock === "string" ? params.openLoopsBlock : "";
@@ -326,6 +361,82 @@ function buildSessionTranscriptAppendIdempotencyKey(
     })
   );
   return `session-transcript-append:${digest.slice(0, 48)}`;
+}
+
+function normalizeDistillMode(value: unknown): BackendDistillMode {
+  return value === "governance-candidates" ? "governance-candidates" : DEFAULT_DISTILL_MODE;
+}
+
+function normalizeDistillPersistMode(value: unknown): BackendDistillPersistMode {
+  return value === "persist-memory-rows" ? "persist-memory-rows" : DEFAULT_DISTILL_PERSIST_MODE;
+}
+
+function countUserTurns(items: BackendCaptureItem[]): number {
+  return items.reduce((count, item) => count + (item.role === "user" ? 1 : 0), 0);
+}
+
+function buildAutomaticDistillIdempotencyKey(
+  actor: { userId: string; agentId: string; sessionId: string; sessionKey: string },
+  bucket: number,
+  config: DistillRuntimeConfig
+): string {
+  const digest = sha256Hex(
+    JSON.stringify({
+      kind: "automatic-distill",
+      userId: actor.userId,
+      agentId: actor.agentId,
+      sessionId: actor.sessionId,
+      sessionKey: actor.sessionKey,
+      bucket,
+      mode: config.mode,
+      persistMode: config.persistMode,
+      maxMessages: config.maxMessages,
+      maxArtifacts: config.maxArtifacts,
+      chunkChars: config.chunkChars,
+      chunkOverlapMessages: config.chunkOverlapMessages,
+    })
+  );
+  return `automatic-distill:${digest.slice(0, 48)}`;
+}
+
+function createDistillCadenceState(maxSessions = DEFAULT_SESSION_EXPOSURE_MAX_TRACKED_SESSIONS) {
+  const sessions = new Map<string, DistillCadenceSessionState>();
+
+  function touch(sessionKey: string, next: DistillCadenceSessionState) {
+    sessions.delete(sessionKey);
+    sessions.set(sessionKey, next);
+    while (sessions.size > maxSessions) {
+      const oldest = sessions.keys().next().value;
+      if (!oldest) break;
+      sessions.delete(oldest);
+    }
+  }
+
+  return {
+    advance(sessionKey: string, userTurnCount: number, everyTurns: number) {
+      const normalizedSessionKey = asNonEmptyString(sessionKey);
+      if (!normalizedSessionKey || userTurnCount <= 0 || everyTurns <= 0) {
+        return { bucket: 0, crossedBoundary: false, completedUserTurns: 0 };
+      }
+      const current = sessions.get(normalizedSessionKey) ?? {
+        completedUserTurns: 0,
+        lastEnqueuedBucket: 0,
+      };
+      const completedUserTurns = current.completedUserTurns + userTurnCount;
+      const bucket = Math.floor(completedUserTurns / everyTurns);
+      const crossedBoundary = bucket > current.lastEnqueuedBucket;
+      touch(normalizedSessionKey, {
+        completedUserTurns,
+        lastEnqueuedBucket: crossedBoundary ? bucket : current.lastEnqueuedBucket,
+      });
+      return { bucket, crossedBoundary, completedUserTurns };
+    },
+    clear(sessionKey?: string) {
+      const normalizedSessionKey = asNonEmptyString(sessionKey);
+      if (!normalizedSessionKey) return;
+      sessions.delete(normalizedSessionKey);
+    },
+  };
 }
 
 // ============================================================================
@@ -571,8 +682,11 @@ const chronicleEnginePlugin = {
     // Lifecycle Hooks
     // ========================================================================
 
+    const distillCadenceState = createDistillCadenceState();
+
     api.on("session_end", (_event, ctx) => {
       sessionExposureState.clearDynamicRecallForContext(ctx || {});
+      distillCadenceState.clear(typeof ctx?.sessionKey === "string" ? ctx.sessionKey : undefined);
     }, { priority: 20 });
 
     const autoRecallPlanner = createAutoRecallPlanner(
@@ -681,6 +795,44 @@ const chronicleEnginePlugin = {
         );
       } catch (err) {
         api.logger.warn(`openclaw-chronicle-engine: session transcript append failed: ${String(err)}`);
+      }
+
+      if (config.distill?.enabled === true) {
+        const userTurnCount = countUserTurns(transcriptItems);
+        const cadence = distillCadenceState.advance(
+          resolvedBackendCtx.context.actor.sessionKey,
+          userTurnCount,
+          config.distill.everyTurns
+        );
+        if (userTurnCount > 0 && cadence.crossedBoundary) {
+          try {
+            const job = await memoryBackendClient.enqueueDistillJob(resolvedBackendCtx.context, {
+              mode: config.distill.mode,
+              source: {
+                kind: "session-transcript",
+                sessionKey: resolvedBackendCtx.context.actor.sessionKey,
+                sessionId: resolvedBackendCtx.context.actor.sessionId,
+              },
+              options: {
+                persistMode: config.distill.persistMode,
+                maxMessages: config.distill.maxMessages,
+                maxArtifacts: config.distill.maxArtifacts,
+                chunkChars: config.distill.chunkChars,
+                chunkOverlapMessages: config.distill.chunkOverlapMessages,
+              },
+              idempotencyKey: buildAutomaticDistillIdempotencyKey(
+                resolvedBackendCtx.context.actor,
+                cadence.bucket,
+                config.distill
+              ),
+            });
+            api.logger.info(
+              `openclaw-chronicle-engine: automatic distill enqueued (${job.jobId}, everyTurns=${config.distill.everyTurns}, completedUserTurns=${cadence.completedUserTurns})`
+            );
+          } catch (err) {
+            api.logger.warn(`openclaw-chronicle-engine: automatic distill enqueue failed: ${String(err)}`);
+          }
+        }
       }
 
       if (config.autoCapture === false) {
@@ -1208,6 +1360,9 @@ export function parsePluginConfig(value: unknown): PluginConfig {
   const memoryReflectionRaw = typeof cfg.memoryReflection === "object" && cfg.memoryReflection !== null
     ? cfg.memoryReflection as Record<string, unknown>
     : null;
+  const distillRaw = typeof cfg.distill === "object" && cfg.distill !== null
+    ? cfg.distill as Record<string, unknown>
+    : null;
   if (hasOwnKey(cfg as Record<string, unknown>, "sessionMemory")) {
     rejectRemovedConfigField("sessionMemory", "sessionStrategy and memoryReflection.messageCount");
   }
@@ -1251,6 +1406,7 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     cfg.autoRecallSelectionMode === "mmr"
       ? "mmr"
       : DEFAULT_AUTO_RECALL_SELECTION_MODE;
+  const distillEveryTurns = parsePositiveInt(distillRaw?.everyTurns) ?? DEFAULT_DISTILL_EVERY_TURNS;
 
   return {
     autoCapture: cfg.autoCapture !== false,
@@ -1269,6 +1425,27 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     captureAssistant: cfg.captureAssistant === true,
     enableManagementTools: cfg.enableManagementTools === true,
     sessionStrategy,
+    distill: distillRaw
+      ? {
+        enabled: distillRaw.enabled === true,
+        mode: normalizeDistillMode(distillRaw.mode),
+        persistMode: normalizeDistillPersistMode(distillRaw.persistMode),
+        everyTurns: distillEveryTurns,
+        maxMessages: parsePositiveInt(distillRaw.maxMessages) ?? DEFAULT_DISTILL_MAX_MESSAGES,
+        maxArtifacts: parsePositiveInt(distillRaw.maxArtifacts) ?? DEFAULT_DISTILL_MAX_ARTIFACTS,
+        chunkChars: parsePositiveInt(distillRaw.chunkChars) ?? DEFAULT_DISTILL_CHUNK_CHARS,
+        chunkOverlapMessages: parsePositiveInt(distillRaw.chunkOverlapMessages) ?? DEFAULT_DISTILL_CHUNK_OVERLAP_MESSAGES,
+      }
+      : {
+        enabled: false,
+        mode: DEFAULT_DISTILL_MODE,
+        persistMode: DEFAULT_DISTILL_PERSIST_MODE,
+        everyTurns: DEFAULT_DISTILL_EVERY_TURNS,
+        maxMessages: DEFAULT_DISTILL_MAX_MESSAGES,
+        maxArtifacts: DEFAULT_DISTILL_MAX_ARTIFACTS,
+        chunkChars: DEFAULT_DISTILL_CHUNK_CHARS,
+        chunkOverlapMessages: DEFAULT_DISTILL_CHUNK_OVERLAP_MESSAGES,
+      },
     selfImprovement: typeof cfg.selfImprovement === "object" && cfg.selfImprovement !== null
       ? {
         enabled: (cfg.selfImprovement as Record<string, unknown>).enabled !== false,
