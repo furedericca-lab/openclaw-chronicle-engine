@@ -236,30 +236,22 @@ describe("remote backend shell integration", () => {
     );
   });
 
-  it("warns when deprecated local reflection-generation fields are still configured", () => {
+  it("rejects removed local reflection-generation fields during registration", () => {
     const root = makeTempRoot();
-    const harness = createPluginApiHarness({
-      pluginConfig: makeRemoteConfig(root, {
-        sessionStrategy: "memoryReflection",
-        memoryReflection: {
-          agentId: "memory-distiller",
-          maxInputChars: 16000,
-          timeoutMs: 15000,
-          thinkLevel: "high",
-        },
-      }),
-      resolveRoot: root,
-    });
-
-    memoryLanceDBProPlugin.register(harness.api);
-
-    assert.ok(
-      harness.logs.some(
-        (entry) =>
-          entry.level === "warn" &&
-          entry.message.includes("memoryReflection deprecated/ignored fields")
-      ),
-      "register should emit one warning for deprecated local reflection-generation fields"
+    assert.throws(
+      () =>
+        memoryLanceDBProPlugin.register(
+          createPluginApiHarness({
+            pluginConfig: makeRemoteConfig(root, {
+              sessionStrategy: "memoryReflection",
+              memoryReflection: {
+                agentId: "memory-distiller",
+              },
+            }),
+            resolveRoot: root,
+          }).api
+        ),
+      /memoryReflection\.agentId is no longer supported in 1\.0\.0-beta\.0/
     );
   });
 

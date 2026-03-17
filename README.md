@@ -184,8 +184,8 @@ No, but the answer needs precision:
 | `src/adaptive-retrieval.ts` | prompt-side retrieval trigger heuristic |
 | `src/prompt-local-auto-recall-selection.ts` | prompt-local post-selection over backend rows |
 | `src/prompt-local-topk-setwise-selection.ts` | prompt-local utility used by retained local selection seams |
-| `src/query-expander.ts` | retained test/reference lexical helper; not imported by the supported runtime |
-| `src/reflection-store.ts` | retained test/reference reflection-shaping helper; not imported by the supported runtime |
+| `test/helpers/query-expander-reference.ts` | retained test/reference lexical helper; not imported by the supported runtime |
+| `test/helpers/reflection-store-reference.ts` | retained test/reference reflection-shaping helper; not imported by the supported runtime |
 | `test/helpers/reflection-recall-reference.ts` | retained test/reference helper, not active backend authority |
 | `test/helpers/reflection-recall-selection-reference.ts` | retained downstream test/reference selection helper |
 
@@ -347,16 +347,11 @@ Required fields:
 | `maxRetries` | No | Transport retry count |
 | `retryBackoffMs` | No | Retry backoff |
 
-Compatibility note:
+Cutover note:
 
-- `sessionMemory.enabled` still maps to `sessionStrategy`
-- `sessionMemory.messageCount` still maps to `memoryReflection.messageCount`
-- `memoryReflection.agentId`
-- `memoryReflection.maxInputChars`
-- `memoryReflection.timeoutMs`
-- `memoryReflection.thinkLevel`
-
-The `sessionMemory.*` mappings remain for migration compatibility. The listed `memoryReflection.*` fields remain parseable for compatibility, emit a startup warning when configured, and are ignored in the remote-backend runtime.
+- `1.0.0-beta.0` removes migration-only config aliases.
+- Use `sessionStrategy` directly instead of `sessionMemory.*`.
+- Supported `memoryReflection.*` fields are the active prompt-planning knobs documented in the schema and examples.
 
 ## 13. Tools
 
@@ -401,8 +396,8 @@ docs/archive/             historical plans and closed scopes
 src/backend-client/*      transport + DTO adapter
 src/backend-tools.ts      tool bridge
 src/context/*             prompt-time orchestration
-src/query-expander.ts     retained test/reference lexical helper only
-src/reflection-store.ts   retained test/reference reflection helper only
+test/helpers/query-expander-reference.ts     retained test/reference lexical helper only
+test/helpers/reflection-store-reference.ts   retained test/reference reflection helper only
 test/*                    plugin-side tests
 ```
 
@@ -440,11 +435,11 @@ It is not backend ownership.
 
 No. It is a prompt-local lexical/coverage selector over ordinary backend-returned rows. It only shapes prompt injection and does not recreate backend retrieval, rerank, or embedding authority.
 
-### “Do `memoryReflection.agentId` / `maxInputChars` / `timeoutMs` / `thinkLevel` still control reflection execution?”
+### “Do old `sessionMemory.*` or removed `memoryReflection.*` compatibility fields still work?”
 
-No. They are parseable compatibility fields only. The supported runtime path is backend reflection enqueue, and those fields are ignored.
+No. `1.0.0-beta.0` removes those migration-only aliases. Use the active schema fields only.
 
-### “Are `src/query-expander.ts` and `src/reflection-store.ts` still runtime authority modules?”
+### “Are `test/helpers/query-expander-reference.ts` and `test/helpers/reflection-store-reference.ts` still runtime authority modules?”
 
 No. They remain only as test/reference helpers. The supported runtime does not import them.
 

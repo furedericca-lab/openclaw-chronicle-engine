@@ -48,7 +48,6 @@ interface PluginConfig {
   captureAssistant?: boolean;
   enableManagementTools?: boolean;
   sessionStrategy?: SessionStrategy;
-  sessionMemory?: { enabled?: boolean; messageCount?: number };
   selfImprovement?: {
     enabled?: boolean;
     beforeResetNote?: boolean;
@@ -58,12 +57,7 @@ interface PluginConfig {
   memoryReflection?: {
     enabled?: boolean;
     injectMode?: ReflectionInjectMode;
-    agentId?: string;
     messageCount?: number;
-    maxInputChars?: number;
-    timeoutMs?: number;
-    thinkLevel?: ReflectionThinkLevel;
-    deprecatedIgnoredFields?: string[];
     errorReminderMaxEntries?: number;
     dedupeErrorSignals?: boolean;
     recall?: {
@@ -86,8 +80,6 @@ interface PluginConfig {
     retryBackoffMs?: number;
   };
 }
-
-type ReflectionThinkLevel = "off" | "minimal" | "low" | "medium" | "high";
 type SessionStrategy = "memoryReflection" | "systemSessionMemory" | "none";
 type ReflectionInjectMode = "inheritance-only" | "inheritance+derived";
 type ReflectionRecallMode = "fixed" | "dynamic";
@@ -117,6 +109,18 @@ function resolveEnvVars(value: string): string {
     }
     return envValue;
   });
+}
+
+function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(target, key);
+}
+
+function rejectRemovedConfigField(fieldPath: string, replacement?: string): never {
+  throw new Error(
+    replacement
+      ? `${fieldPath} is no longer supported in 1.0.0-beta.0; use ${replacement}`
+      : `${fieldPath} is no longer supported in 1.0.0-beta.0`
+  );
 }
 
 function parsePositiveInt(value: unknown): number | undefined {
@@ -543,14 +547,6 @@ const chronicleEnginePlugin = {
     api.logger.info(
       `openclaw-chronicle-engine: remote backend enabled (${config.remoteBackend?.baseURL || "(missing baseURL)"})`
     );
-    if (Array.isArray(config.memoryReflection?.deprecatedIgnoredFields) && config.memoryReflection.deprecatedIgnoredFields.length > 0) {
-      api.logger.warn(
-        `openclaw-chronicle-engine: memoryReflection deprecated/ignored fields configured: ` +
-        `${config.memoryReflection.deprecatedIgnoredFields.join(", ")}; ` +
-        `remote runtime only enqueues backend reflection jobs`
-      );
-    }
-
     // ========================================================================
     // Register Tools
     // ========================================================================
@@ -1203,30 +1199,27 @@ export function parsePluginConfig(value: unknown): PluginConfig {
   const memoryReflectionRaw = typeof cfg.memoryReflection === "object" && cfg.memoryReflection !== null
     ? cfg.memoryReflection as Record<string, unknown>
     : null;
-  const sessionMemoryRaw = typeof cfg.sessionMemory === "object" && cfg.sessionMemory !== null
-    ? cfg.sessionMemory as Record<string, unknown>
-    : null;
+  if (hasOwnKey(cfg as Record<string, unknown>, "sessionMemory")) {
+    rejectRemovedConfigField("sessionMemory", "sessionStrategy and memoryReflection.messageCount");
+  }
+  if (memoryReflectionRaw) {
+    for (const field of ["agentId", "maxInputChars", "timeoutMs", "thinkLevel"]) {
+      if (hasOwnKey(memoryReflectionRaw, field)) {
+        rejectRemovedConfigField(`memoryReflection.${field}`);
+      }
+    }
+  }
   const sessionStrategyRaw = cfg.sessionStrategy;
-  const legacySessionMemoryEnabled = typeof sessionMemoryRaw?.enabled === "boolean"
-    ? sessionMemoryRaw.enabled
-    : undefined;
   const sessionStrategy: SessionStrategy =
     sessionStrategyRaw === "systemSessionMemory" || sessionStrategyRaw === "memoryReflection" || sessionStrategyRaw === "none"
       ? sessionStrategyRaw
-      : legacySessionMemoryEnabled === true
-        ? "systemSessionMemory"
-        : legacySessionMemoryEnabled === false
-          ? "none"
-          : "systemSessionMemory";
-  const reflectionMessageCount = parsePositiveInt(memoryReflectionRaw?.messageCount ?? sessionMemoryRaw?.messageCount) ?? DEFAULT_REFLECTION_MESSAGE_COUNT;
+      : "systemSessionMemory";
+  const reflectionMessageCount = parsePositiveInt(memoryReflectionRaw?.messageCount) ?? DEFAULT_REFLECTION_MESSAGE_COUNT;
   const injectModeRaw = memoryReflectionRaw?.injectMode;
   const reflectionInjectMode: ReflectionInjectMode =
     injectModeRaw === "inheritance-only" || injectModeRaw === "inheritance+derived"
       ? injectModeRaw
       : "inheritance+derived";
-  const deprecatedIgnoredReflectionFields = memoryReflectionRaw
-    ? ["agentId", "maxInputChars", "timeoutMs", "thinkLevel"].filter((field) => memoryReflectionRaw[field] !== undefined)
-    : [];
   const memoryReflectionRecallRaw = typeof memoryReflectionRaw?.recall === "object" && memoryReflectionRaw.recall !== null
     ? memoryReflectionRaw.recall as Record<string, unknown>
     : null;
@@ -1283,16 +1276,7 @@ export function parsePluginConfig(value: unknown): PluginConfig {
       ? {
         enabled: sessionStrategy === "memoryReflection",
         injectMode: reflectionInjectMode,
-        agentId: asNonEmptyString(memoryReflectionRaw.agentId),
         messageCount: reflectionMessageCount,
-        maxInputChars: parsePositiveInt(memoryReflectionRaw.maxInputChars),
-        timeoutMs: parsePositiveInt(memoryReflectionRaw.timeoutMs),
-        thinkLevel: (() => {
-          const raw = memoryReflectionRaw.thinkLevel;
-          if (raw === "off" || raw === "minimal" || raw === "low" || raw === "medium" || raw === "high") return raw;
-          return undefined;
-        })(),
-        deprecatedIgnoredFields: deprecatedIgnoredReflectionFields,
         errorReminderMaxEntries: parsePositiveInt(memoryReflectionRaw.errorReminderMaxEntries) ?? DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES,
         dedupeErrorSignals: memoryReflectionRaw.dedupeErrorSignals !== false,
         recall: {
@@ -1309,12 +1293,7 @@ export function parsePluginConfig(value: unknown): PluginConfig {
       : {
         enabled: sessionStrategy === "memoryReflection",
         injectMode: "inheritance+derived",
-        agentId: undefined,
         messageCount: reflectionMessageCount,
-        maxInputChars: undefined,
-        timeoutMs: undefined,
-        thinkLevel: undefined,
-        deprecatedIgnoredFields: [],
         errorReminderMaxEntries: DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES,
         dedupeErrorSignals: DEFAULT_REFLECTION_DEDUPE_ERROR_SIGNALS,
         recall: {
@@ -1328,19 +1307,6 @@ export function parsePluginConfig(value: unknown): PluginConfig {
           minPromptLength: DEFAULT_REFLECTION_RECALL_MIN_PROMPT_LENGTH,
         },
       },
-    sessionMemory:
-      typeof cfg.sessionMemory === "object" && cfg.sessionMemory !== null
-        ? {
-          enabled:
-            (cfg.sessionMemory as Record<string, unknown>).enabled !== false,
-          messageCount:
-            typeof (cfg.sessionMemory as Record<string, unknown>)
-              .messageCount === "number"
-              ? ((cfg.sessionMemory as Record<string, unknown>)
-                .messageCount as number)
-              : undefined,
-        }
-        : undefined,
     remoteBackend: {
       enabled: true,
       baseURL: remoteBackendBaseURL,

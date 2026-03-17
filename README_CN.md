@@ -184,8 +184,8 @@ distill 请求
 | `src/adaptive-retrieval.ts` | prompt 侧 recall 触发启发式 |
 | `src/prompt-local-auto-recall-selection.ts` | 对 backend rows 做 prompt-local post-selection |
 | `src/prompt-local-topk-setwise-selection.ts` | 服务于保留本地选择 seam 的 prompt-local 工具函数 |
-| `src/query-expander.ts` | 保留的 test/reference 词汇扩展 helper；当前受支持运行时不会导入 |
-| `src/reflection-store.ts` | 保留的 test/reference reflection 组装 helper；当前受支持运行时不会导入 |
+| `test/helpers/query-expander-reference.ts` | 保留的 test/reference 词汇扩展 helper；当前受支持运行时不会导入 |
+| `test/helpers/reflection-store-reference.ts` | 保留的 test/reference reflection 组装 helper；当前受支持运行时不会导入 |
 | `test/helpers/reflection-recall-reference.ts` | 保留的 test/reference helper，不是 active backend authority |
 | `test/helpers/reflection-recall-selection-reference.ts` | 保留的下游 test/reference 选择 helper |
 
@@ -347,16 +347,11 @@ openclaw config get plugins.slots.memory
 | `maxRetries` | 否 | 传输层重试次数 |
 | `retryBackoffMs` | 否 | 重试回退时间 |
 
-兼容性说明：
+cutover 说明：
 
-- `sessionMemory.enabled` 仍映射到 `sessionStrategy`
-- `sessionMemory.messageCount` 仍映射到 `memoryReflection.messageCount`
-- `memoryReflection.agentId`
-- `memoryReflection.maxInputChars`
-- `memoryReflection.timeoutMs`
-- `memoryReflection.thinkLevel`
-
-`sessionMemory.*` 映射仍然只用于迁移兼容。上面列出的 `memoryReflection.*` 字段则是“可解析但忽略”的兼容字段：配置时会触发启动告警，在 remote-backend runtime 下不会改变 reflection 执行行为。
+- `1.0.0-beta.0` 已移除只为迁移保留的 config alias。
+- 请直接使用 `sessionStrategy`，不要再使用 `sessionMemory.*`。
+- `memoryReflection.*` 只保留当前 schema 里仍然列出的有效 prompt-planning 字段。
 
 ## 13. 工具
 
@@ -401,8 +396,8 @@ docs/archive/             历史计划与已关闭 scope
 src/backend-client/*      传输 + DTO 适配
 src/backend-tools.ts      tool bridge
 src/context/*             prompt-time orchestration
-src/query-expander.ts     仅保留为 test/reference 词汇 helper
-src/reflection-store.ts   仅保留为 test/reference reflection helper
+test/helpers/query-expander-reference.ts     仅保留为 test/reference 词汇 helper
+test/helpers/reflection-store-reference.ts   仅保留为 test/reference reflection helper
 test/*                    插件侧测试
 ```
 
@@ -444,11 +439,11 @@ cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -
 - 不改变 backend authority
 - 不重建 backend retrieval / rerank / embedding authority
 
-### “`memoryReflection.agentId` / `maxInputChars` / `timeoutMs` / `thinkLevel` 现在还会控制 reflection 执行吗？”
+### “旧的 `sessionMemory.*` 或被移除的 `memoryReflection.*` 兼容字段现在还能用吗？”
 
-不会。它们现在只是兼容字段，仍可解析，但在当前受支持运行时里会被忽略。真正生效的路径只有 backend reflection enqueue。
+不能。`1.0.0-beta.0` 已删除这些只用于迁移的 alias。请只使用当前 schema 中仍然保留的有效字段。
 
-### “`src/query-expander.ts` 和 `src/reflection-store.ts` 还是运行时权威模块吗？”
+### “`test/helpers/query-expander-reference.ts` 和 `test/helpers/reflection-store-reference.ts` 还是运行时权威模块吗？”
 
 不是。它们现在只保留为 test/reference helper，当前受支持运行时不会导入它们。
 

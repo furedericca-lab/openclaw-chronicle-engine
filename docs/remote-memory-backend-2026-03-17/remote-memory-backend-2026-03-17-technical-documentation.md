@@ -40,6 +40,11 @@ Constraints:
 - `/new` and `/reset` must not block on reflection completion.
 - transcript distill is fully shipped in this snapshot for both `inline-messages` and backend-owned `session-transcript` execution.
 
+Snapshot-boundary note:
+
+- this document freezes the backend-authority architecture and backend `/v1` transport surface as of the 2026-03-17 snapshot;
+- it does not freeze later plugin/package release-line semantics, plugin config compatibility policy, or the exact location of test-only helper files.
+
 Non-goals:
 
 - multi-node coordination;
@@ -145,6 +150,10 @@ Capability boundary note:
   - embedding/rerank/reflection provider config
   - LanceDB path
   - SQLite job DB path
+
+Later-scope clarification:
+
+- later active scopes may intentionally remove plugin-layer legacy config aliases or reset plugin/package versioning without changing the backend startup or backend `/v1` transport model documented here.
 
 ### Runtime modes
 
@@ -283,6 +292,8 @@ Reflection job ownership and visibility rules:
 - `/v1` permits backward-compatible additive changes only.
 - Existing request/response fields and semantics must remain stable within `/v1`.
 - Breaking schema or semantic changes require a new major API version.
+- this rule applies to backend HTTP contracts only.
+- plugin/package config-schema or release-version resets outside backend DTOs are out of scope for this policy and may be handled by later active scopes.
 
 ## MVP runtime parity boundary
 

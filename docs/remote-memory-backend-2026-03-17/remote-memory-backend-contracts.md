@@ -157,6 +157,11 @@ Response `200`:
 }
 ```
 
+Scope-boundary clarification:
+
+- the `version` field above is the backend service version in this snapshot contract, not the plugin/package release line;
+- later plugin/package release scopes may reset plugin-facing versioning or config policy without changing the `/v1` backend API contract.
+
 ### `POST /v1/recall/generic`
 
 Purpose:
@@ -862,6 +867,7 @@ Compatibility policy:
 - no dual-authority fallback path is allowed during migration;
 - local `src/context/*` remains local even after backend migration.
 - transcript distill follow-up execution must continue following the same backend-owned authority model rather than reviving sidecar import pipelines.
+- the additive-only rule applies to backend `/v1` HTTP contracts only; later plugin/package config-schema or release-version resets are outside this compatibility policy.
 
 ## Security-sensitive fields and redaction / masking requirements
 

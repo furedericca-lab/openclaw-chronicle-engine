@@ -2,7 +2,7 @@
   "id": "openclaw-chronicle-engine",
   "name": "Chronicle Engine",
   "description": "Historical-memory engine for OpenClaw with remote backend authority and local context orchestration.",
-  "version": "1.1.0-beta.6",
+  "version": "1.0.0-beta.0",
   "kind": "memory",
   "configSchema": {
     "type": "object",
@@ -148,24 +148,6 @@
       "captureAssistant": {
         "type": "boolean"
       },
-      "sessionMemory": {
-        "type": "object",
-        "additionalProperties": false,
-        "description": "Deprecated legacy switch. Kept for compatibility and mapped to sessionStrategy.",
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "description": "Deprecated. true -> sessionStrategy=systemSessionMemory, false -> sessionStrategy=none."
-          },
-          "messageCount": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 100,
-            "default": 15,
-            "description": "Legacy compatibility field. Mapped to memoryReflection.messageCount."
-          }
-        }
-      },
       "selfImprovement": {
         "type": "object",
         "additionalProperties": false,
@@ -191,7 +173,7 @@
       "memoryReflection": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Prompt-local reflection planning knobs. messageCount, injectMode, and recall.* affect active runtime behavior; agentId/maxInputChars/timeoutMs/thinkLevel remain parseable compatibility fields but are ignored and emit startup warnings when configured.",
+        "description": "Prompt-local reflection planning knobs. messageCount, injectMode, and recall.* affect active runtime behavior in the backend-owned runtime.",
         "properties": {
           "injectMode": {
             "type": "string",
@@ -201,42 +183,12 @@
             ],
             "default": "inheritance+derived"
           },
-          "agentId": {
-            "type": "string",
-            "description": "Deprecated compatibility field. Parsed for migration compatibility, ignored in remote-backend runtime, and reported in a startup warning when configured."
-          },
           "messageCount": {
             "type": "integer",
             "minimum": 1,
             "maximum": 500,
             "default": 120,
             "description": "Recent messages included in plugin-side reflection enqueue input."
-          },
-          "maxInputChars": {
-            "type": "integer",
-            "minimum": 1000,
-            "maximum": 200000,
-            "default": 24000,
-            "description": "Deprecated compatibility field. Parsed for migration compatibility, ignored in remote-backend runtime, and reported in a startup warning when configured."
-          },
-          "timeoutMs": {
-            "type": "integer",
-            "minimum": 1000,
-            "maximum": 120000,
-            "default": 20000,
-            "description": "Deprecated compatibility field. Parsed for migration compatibility, ignored in remote-backend runtime, and reported in a startup warning when configured."
-          },
-          "thinkLevel": {
-            "type": "string",
-            "enum": [
-              "off",
-              "minimal",
-              "low",
-              "medium",
-              "high"
-            ],
-            "default": "medium",
-            "description": "Deprecated compatibility field. Parsed for migration compatibility, ignored in remote-backend runtime, and reported in a startup warning when configured."
           },
           "errorReminderMaxEntries": {
             "type": "integer",
@@ -405,16 +357,6 @@
       "help": "Also auto-capture assistant messages (default false to reduce memory pollution)",
       "advanced": true
     },
-    "sessionMemory.enabled": {
-      "label": "Session Memory (Deprecated)",
-      "help": "Legacy compatibility: true maps to systemSessionMemory, false maps to none.",
-      "advanced": true
-    },
-    "sessionMemory.messageCount": {
-      "label": "Session Message Count (Legacy)",
-      "help": "Legacy compatibility field; mapped to memoryReflection.messageCount.",
-      "advanced": true
-    },
     "sessionStrategy": {
       "label": "Session Strategy",
       "help": "memoryReflection / systemSessionMemory / none. memoryReflection keeps plugin-side prompt planning while backend remains recall/enqueue authority.",
@@ -444,29 +386,9 @@
       "help": "inheritance-only or inheritance+derived",
       "advanced": true
     },
-    "memoryReflection.agentId": {
-      "label": "Reflection Agent Id",
-      "help": "Deprecated compatibility field. Parsed for migration compatibility, ignored at runtime, and included in the startup warning when configured.",
-      "advanced": true
-    },
     "memoryReflection.messageCount": {
       "label": "Reflection Message Count",
       "help": "Recent messages included in plugin-side reflection enqueue input.",
-      "advanced": true
-    },
-    "memoryReflection.maxInputChars": {
-      "label": "Reflection Max Input Chars",
-      "help": "Deprecated compatibility field. Parsed for migration compatibility, ignored at runtime, and included in the startup warning when configured.",
-      "advanced": true
-    },
-    "memoryReflection.timeoutMs": {
-      "label": "Reflection Timeout (ms)",
-      "help": "Deprecated compatibility field. Parsed for migration compatibility, ignored at runtime, and included in the startup warning when configured.",
-      "advanced": true
-    },
-    "memoryReflection.thinkLevel": {
-      "label": "Reflection Think Level",
-      "help": "Deprecated compatibility field. Parsed for migration compatibility, ignored at runtime, and included in the startup warning when configured.",
       "advanced": true
     },
     "memoryReflection.errorReminderMaxEntries": {

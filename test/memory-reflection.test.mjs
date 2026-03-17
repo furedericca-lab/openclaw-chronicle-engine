@@ -32,7 +32,7 @@ const {
   loadAgentDerivedRowsWithScoresFromEntries,
   loadAgentDerivedFocusRowsForHandoffFromEntries,
   loadReflectionMappedRowsFromEntries,
-} = jiti("../src/reflection-store.ts");
+} = jiti("./helpers/reflection-store-reference.ts");
 const { normalizeReflectionSoftKey } = jiti("../src/reflection-normalize.ts");
 const { rankDynamicReflectionRecallFromEntries } = jiti("./helpers/reflection-recall-reference.ts");
 const { selectPromptLocalAutoRecallResults } = jiti("../src/prompt-local-auto-recall-selection.ts");
@@ -1768,30 +1768,16 @@ describe("memory reflection", () => {
     });
   });
 
-  describe("sessionStrategy legacy compatibility mapping", () => {
-    it("maps legacy sessionMemory.enabled=true to systemSessionMemory", () => {
-      const parsed = parsePluginConfig({
-        ...baseConfig(),
-        sessionMemory: { enabled: true },
-      });
-      assert.equal(parsed.sessionStrategy, "systemSessionMemory");
-    });
-
-    it("maps legacy sessionMemory.enabled=false to none", () => {
-      const parsed = parsePluginConfig({
-        ...baseConfig(),
-        sessionMemory: { enabled: false },
-      });
-      assert.equal(parsed.sessionStrategy, "none");
-    });
-
-    it("prefers explicit sessionStrategy over legacy sessionMemory.enabled", () => {
-      const parsed = parsePluginConfig({
-        ...baseConfig(),
-        sessionStrategy: "memoryReflection",
-        sessionMemory: { enabled: false },
-      });
-      assert.equal(parsed.sessionStrategy, "memoryReflection");
+  describe("sessionStrategy cutover contract", () => {
+    it("rejects removed sessionMemory compatibility fields", () => {
+      assert.throws(
+        () =>
+          parsePluginConfig({
+            ...baseConfig(),
+            sessionMemory: { enabled: true },
+          }),
+        /sessionMemory is no longer supported in 1\.0\.0-beta\.0/
+      );
     });
 
     it("defaults to systemSessionMemory when neither field is set", () => {

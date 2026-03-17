@@ -26,6 +26,11 @@ Current runtime entrypoint:
 
 - `index.ts` still constructs backend objects locally and wires them into OpenClaw hooks/tools.
 
+Snapshot-boundary note:
+
+- the module inventory in this section is a 2026-03-17 migration snapshot, not a perpetual promise about active file layout;
+- later cleanup scopes may relocate or delete test-only residues such as `src/reflection-store.ts` without changing the backend-authority conclusions recorded here.
+
 ## Gap analysis with evidence
 
 1. **Backend authority is still local.**
@@ -113,6 +118,11 @@ Selected design:
 - admin capabilities remain a separate control plane and are not part of the ordinary shell/context/tool contract;
 - the initial frozen admin surface is limited to read-only health and job inspection endpoints, with optional read-only global stats;
 - `/v1` runtime contracts follow additive-only backward compatibility; breaking changes require a new major version.
+
+Compatibility-boundary clarification:
+
+- the additive-only statement above applies to backend `/v1` transport contracts;
+- it does not freeze plugin/package version numbering or plugin-side migration-compatibility config policy.
 
 Frozen contract decisions added by this research pass:
 

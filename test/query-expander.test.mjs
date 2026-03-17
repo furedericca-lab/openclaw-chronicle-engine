@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import jitiFactory from "jiti";
 
 const jiti = jitiFactory(import.meta.url, { interopDefault: true });
-const { expandQuery } = jiti("../src/query-expander.ts");
+const { expandQuery } = jiti("./helpers/query-expander-reference.ts");
 
 async function run() {
   // --- True positives: should expand ---

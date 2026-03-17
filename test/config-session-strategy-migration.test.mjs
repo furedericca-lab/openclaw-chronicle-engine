@@ -24,35 +24,21 @@ function baseConfig() {
   };
 }
 
-describe("sessionStrategy legacy compatibility mapping", () => {
-  it("maps legacy sessionMemory.enabled=true to systemSessionMemory", () => {
-    const parsed = parsePluginConfig({
-      ...baseConfig(),
-      sessionMemory: { enabled: true },
-    });
-    assert.equal(parsed.sessionStrategy, "systemSessionMemory");
-  });
-
-  it("maps legacy sessionMemory.enabled=false to none", () => {
-    const parsed = parsePluginConfig({
-      ...baseConfig(),
-      sessionMemory: { enabled: false },
-    });
-    assert.equal(parsed.sessionStrategy, "none");
-  });
-
-  it("prefers explicit sessionStrategy over legacy sessionMemory.enabled", () => {
-    const parsed = parsePluginConfig({
-      ...baseConfig(),
-      sessionStrategy: "memoryReflection",
-      sessionMemory: { enabled: false },
-    });
-    assert.equal(parsed.sessionStrategy, "memoryReflection");
-  });
-
+describe("sessionStrategy cutover contract", () => {
   it("defaults to systemSessionMemory when neither field is set", () => {
     const parsed = parsePluginConfig(baseConfig());
     assert.equal(parsed.sessionStrategy, "systemSessionMemory");
+  });
+
+  it("rejects removed sessionMemory compatibility fields", () => {
+    assert.throws(
+      () =>
+        parsePluginConfig({
+          ...baseConfig(),
+          sessionMemory: { enabled: true },
+        }),
+      /sessionMemory is no longer supported in 1\.0\.0-beta\.0/
+    );
   });
 
   it("defaults generic auto-recall selection mode to mmr", () => {
@@ -76,27 +62,17 @@ describe("sessionStrategy legacy compatibility mapping", () => {
     assert.equal(parsed.autoRecallSelectionMode, "setwise-v2");
   });
 
-  it("keeps deprecated local reflection-generation fields parseable but marks them ignored", () => {
-    const parsed = parsePluginConfig({
-      ...baseConfig(),
-      sessionStrategy: "memoryReflection",
-      memoryReflection: {
-        agentId: "memory-distiller",
-        maxInputChars: 16000,
-        timeoutMs: 15000,
-        thinkLevel: "high",
-      },
-    });
-
-    assert.equal(parsed.memoryReflection.agentId, "memory-distiller");
-    assert.equal(parsed.memoryReflection.maxInputChars, 16000);
-    assert.equal(parsed.memoryReflection.timeoutMs, 15000);
-    assert.equal(parsed.memoryReflection.thinkLevel, "high");
-    assert.deepEqual(parsed.memoryReflection.deprecatedIgnoredFields, [
-      "agentId",
-      "maxInputChars",
-      "timeoutMs",
-      "thinkLevel",
-    ]);
+  it("rejects removed local reflection-generation fields", () => {
+    assert.throws(
+      () =>
+        parsePluginConfig({
+          ...baseConfig(),
+          sessionStrategy: "memoryReflection",
+          memoryReflection: {
+            agentId: "memory-distiller",
+          },
+        }),
+      /memoryReflection\.agentId is no longer supported in 1\.0\.0-beta\.0/
+    );
   });
 });

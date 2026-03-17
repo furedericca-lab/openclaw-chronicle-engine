@@ -1,12 +1,12 @@
-import type { MemoryEntry } from "./memory-record-types.js";
+import type { MemoryEntry } from "../../src/memory-record-types.js";
 import {
   extractReflectionSliceItems,
   extractReflectionSlices,
   sanitizeReflectionSliceLines,
   type ReflectionSlices,
-} from "./reflection-slices.js";
-import { parseReflectionMetadata } from "./reflection-metadata.js";
-import { buildReflectionEventPayload, createReflectionEventId } from "./reflection-event-store.js";
+} from "../../src/reflection-slices.js";
+import { parseReflectionMetadata } from "../../src/reflection-metadata.js";
+import { buildReflectionEventPayload, createReflectionEventId } from "../../src/reflection-event-store.js";
 import {
   buildReflectionItemPayloads,
   getReflectionItemDecayDefaults,
@@ -14,16 +14,16 @@ import {
   REFLECTION_DERIVED_DECAY_MIDPOINT_DAYS,
   REFLECTION_INVARIANT_DECAY_K,
   REFLECTION_INVARIANT_DECAY_MIDPOINT_DAYS,
-} from "./reflection-item-store.js";
-import { getReflectionMappedDecayDefaults, type ReflectionMappedKind } from "./reflection-mapped-metadata.js";
-import { computeReflectionScore, normalizeReflectionLineForAggregation } from "./reflection-ranking.js";
-import { aggregateReflectionGroups, type ReflectionScoredItem } from "./reflection-aggregation.js";
-import { normalizeReflectionSoftKey, normalizeReflectionStrictKey } from "./reflection-normalize.js";
+} from "../../src/reflection-item-store.js";
+import { getReflectionMappedDecayDefaults, type ReflectionMappedKind } from "../../src/reflection-mapped-metadata.js";
+import { computeReflectionScore, normalizeReflectionLineForAggregation } from "../../src/reflection-ranking.js";
+import { aggregateReflectionGroups, type ReflectionScoredItem } from "../../src/reflection-aggregation.js";
+import { normalizeReflectionSoftKey, normalizeReflectionStrictKey } from "../../src/reflection-normalize.js";
 import {
   DERIVED_FOCUS_V2_FINAL_TARGET,
   DERIVED_FOCUS_V2_SHORTLIST_TARGET,
   selectDiversityAwareReflectionGroups,
-} from "./reflection-selection.js";
+} from "../../src/reflection-selection.js";
 
 export const DEFAULT_REFLECTION_DERIVED_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 export const DEFAULT_REFLECTION_MAPPED_MAX_AGE_MS = 60 * 24 * 60 * 60 * 1000;

@@ -1,6 +1,6 @@
 {
   "name": "openclaw-chronicle-engine",
-  "version": "1.1.0-beta.6",
+  "version": "1.0.0-beta.0",
   "description": "Chronicle Engine for OpenClaw: remote-authority memory, retrieval, and local context orchestration",
   "type": "module",
   "main": "index.ts",
