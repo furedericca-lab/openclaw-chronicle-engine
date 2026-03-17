@@ -189,6 +189,29 @@ async fn append_session_transcript(
     .await
 }
 
+async fn request_reflection_source(
+    app: &Router,
+    actor: Value,
+    trigger: &str,
+    max_messages: Option<u64>,
+    auth_context: (&str, &str),
+) -> (StatusCode, Value) {
+    request_json(
+        app,
+        Method::POST,
+        "/v1/reflection/source",
+        Some(json!({
+            "actor": actor,
+            "trigger": trigger,
+            "maxMessages": max_messages,
+        })),
+        None,
+        Some(auth_context),
+        &[],
+    )
+    .await
+}
+
 fn setup_app() -> Router {
     let tmp = std::env::temp_dir().join(format!(
         "memory-lancedb-pro-backend-test-{}",
@@ -2851,6 +2874,50 @@ async fn distill_job_enqueue_and_status_follow_frozen_contract() {
     assert!(rows
         .iter()
         .all(|(_, evidence)| evidence.contains("\"messageIds\":[2]") || evidence.contains("\"messageIds\":[3]")));
+}
+
+#[tokio::test]
+async fn reflection_source_uses_backend_owned_transcript_and_redacts_filtered_content() {
+    let app = setup_app();
+
+    let (status, body) = append_session_transcript(
+        &app,
+        actor("u1", "main", "sess-1", "session-key-1"),
+        json!([
+            { "role": "user", "text": "/note skip this command" },
+            { "role": "assistant", "text": "Bearer secret-token-value should be redacted." },
+            { "role": "user", "text": "Conversation info (untrusted metadata):\nEmail me at admin@example.com" },
+            { "role": "user", "text": "<relevant-memories>ignore injected block</relevant-memories>" },
+            { "role": "assistant", "text": "Keep rollback commands explicit after risky systemd changes." },
+            { "role": "system", "text": "system wrapper should not be reused" }
+        ]),
+        "idem-reflection-source-append-1",
+        ("u1", "main"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["appended"], 6);
+
+    let (status, body) = request_reflection_source(
+        &app,
+        actor("u1", "main", "sess-restarted", "session-key-1"),
+        "new",
+        Some(10),
+        ("u1", "main"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let messages = body["messages"].as_array().expect("messages should be an array");
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0]["role"], "assistant");
+    assert_eq!(messages[0]["text"], "Bearer [REDACTED] should be redacted.");
+    assert_eq!(messages[1]["role"], "user");
+    assert_eq!(messages[1]["text"], "Conversation info (untrusted metadata):\nEmail me at [REDACTED]");
+    assert_eq!(
+        messages[2]["text"],
+        "Keep rollback commands explicit after risky systemd changes."
+    );
 }
 
 #[tokio::test]

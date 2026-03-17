@@ -3621,6 +3621,7 @@ dependencies = [
  "http",
  "lancedb",
  "parking_lot",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",

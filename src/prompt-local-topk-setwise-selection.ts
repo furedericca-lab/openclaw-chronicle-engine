@@ -10,6 +10,7 @@ export interface PromptLocalSetwiseCandidate<TRaw = unknown> {
   scope?: string;
   sourceType?: string;
   entityTags?: string[];
+  // Optional generic input only; ordinary backend recall rows do not populate embeddings.
   embedding?: number[];
 }
 

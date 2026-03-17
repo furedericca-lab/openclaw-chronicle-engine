@@ -2,18 +2,18 @@ use crate::{
     config::AppConfig,
     error::{AppError, AppResult},
     models::{
-        clamped_limit, validate_non_empty, Actor, Category, DeleteRequest, DistillArtifact,
-        DistillArtifactEvidence, DistillArtifactKind, DistillArtifactPersistence,
+        clamped_limit, validate_non_empty, Actor, CaptureItem, Category, DeleteRequest,
+        DistillArtifact, DistillArtifactEvidence, DistillArtifactKind, DistillArtifactPersistence,
         DistillJobResultSummary, DistillJobStatus, DistillJobStatusResponse, DistillMode,
         DistillPersistMode, DistillSource, DistillSourceKind, EnqueueDistillJobRequest,
         EnqueueDistillJobResponse, EnqueueReflectionJobResponse, ListRequest, ListResponse,
         ListRow, MemoryAction, MemoryMutationResult, MessageRole, Principal, RecallGenericRequest,
         RecallGenericResponse, RecallGenericRow, RecallReflectionRequest, RecallReflectionResponse,
         ReflectionJobStatus, ReflectionJobStatusResponse, ReflectionKind, ReflectionMetadata,
-        ReflectionRecallMode, ReflectionTrigger, RetrievalTrace, RetrievalTraceKind,
-        RetrievalTraceQuery, RetrievalTraceStage, RetrievalTraceStageStatus, RowMetadata,
-        StatsResponse, StoreRequest, StoreResponse, ToolStoreMemory, UpdateRequest, UpdateResponse,
-        DEFAULT_IMPORTANCE,
+        ReflectionRecallMode, ReflectionSourceRequest, ReflectionSourceResponse, ReflectionTrigger,
+        RetrievalTrace, RetrievalTraceKind, RetrievalTraceQuery, RetrievalTraceStage,
+        RetrievalTraceStageStatus, RowMetadata, StatsResponse, StoreRequest, StoreResponse,
+        ToolStoreMemory, UpdateRequest, UpdateResponse, DEFAULT_IMPORTANCE,
     },
 };
 use arrow_array::{
@@ -29,13 +29,14 @@ use lancedb::{
     Connection as LanceConnection, DistanceType, Error as LanceError, Table as LanceTable,
 };
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+use regex::Regex;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     fs,
     path::PathBuf,
-    sync::{
+    sync::{OnceLock,
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
@@ -53,6 +54,7 @@ const ACCESS_DECAY_HALF_LIFE_DAYS: f64 = 30.0;
 const MAX_ACCESS_COUNT: i64 = 10_000;
 const ACCESS_UPDATE_MAX_ROWS: usize = 64;
 const DISTILL_MAX_QUOTE_LEN: usize = 160;
+const REFLECTION_SOURCE_DEFAULT_MAX_MESSAGES: u64 = 120;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -3391,6 +3393,45 @@ impl JobStore {
         Ok(rows)
     }
 
+    pub fn load_reflection_source(
+        &self,
+        req: &ReflectionSourceRequest,
+    ) -> AppResult<ReflectionSourceResponse> {
+        let principal = req.actor.principal();
+        let requested_limit = req
+            .max_messages
+            .unwrap_or(REFLECTION_SOURCE_DEFAULT_MAX_MESSAGES);
+        let max_messages = Some(clamped_limit(requested_limit));
+
+        let rows = match self.load_session_transcript(
+            &principal,
+            &req.actor.session_key,
+            Some(req.actor.session_id.as_str()),
+            max_messages,
+        ) {
+            Ok(rows) => rows,
+            Err(_) => self.load_session_transcript(
+                &principal,
+                &req.actor.session_key,
+                None,
+                max_messages,
+            )?,
+        };
+
+        let messages = rows
+            .into_iter()
+            .filter_map(|row| session_transcript_row_to_reflection_item(&row))
+            .collect::<Vec<_>>();
+
+        if messages.is_empty() {
+            return Err(AppError::invalid_request(
+                "reflection source has no usable persisted messages for the requested session",
+            ));
+        }
+
+        Ok(ReflectionSourceResponse { messages })
+    }
+
     pub fn get_scoped(
         &self,
         job_id: &str,
@@ -4684,6 +4725,60 @@ fn parse_message_role(raw: &str) -> AppResult<MessageRole> {
             "unknown session transcript message role persisted: {raw}"
         ))),
     }
+}
+
+fn session_transcript_row_to_reflection_item(
+    row: &SessionTranscriptStoredMessage,
+) -> Option<CaptureItem> {
+    match row.role {
+        MessageRole::User | MessageRole::Assistant => {}
+        MessageRole::System => return None,
+    }
+
+    let trimmed = row.text.trim();
+    if trimmed.is_empty() || trimmed.starts_with('/') {
+        return None;
+    }
+    if matches!(row.role, MessageRole::User)
+        && (trimmed.contains("<relevant-memories>")
+            || trimmed.contains("UNTRUSTED DATA")
+            || trimmed.contains("END UNTRUSTED DATA"))
+    {
+        return None;
+    }
+
+    Some(CaptureItem {
+        role: row.role,
+        text: redact_reflection_source_secrets(trimmed),
+    })
+}
+
+fn redact_reflection_source_secrets(text: &str) -> String {
+    static REDACTION_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
+    let patterns = REDACTION_PATTERNS.get_or_init(|| {
+        vec![
+            Regex::new(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*").expect("valid bearer regex"),
+            Regex::new(r#"\b(?:token|api[_-]?key|secret|password)\s*[:=]\s*["']?[^\s"',;)}\]]{6,}["']?"#)
+                .expect("valid key-value secret regex"),
+            Regex::new(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+                .expect("valid email regex"),
+        ]
+    });
+
+    let mut out = text.to_string();
+    for re in patterns {
+        out = re
+            .replace_all(&out, |caps: &regex::Captures| {
+                let matched = caps.get(0).map(|m| m.as_str()).unwrap_or_default();
+                if matched.starts_with("Bearer ") {
+                    "Bearer [REDACTED]".to_string()
+                } else {
+                    "[REDACTED]".to_string()
+                }
+            })
+            .into_owned();
+    }
+    out
 }
 
 fn message_role_to_str(role: MessageRole) -> &'static str {

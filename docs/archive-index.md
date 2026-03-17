@@ -22,6 +22,10 @@ Interpretation:
 
 Archived scopes:
 
+- `memory-backend-gap-closeout-2026-03-17/`: phased implementation and closeout record for the final reflection-source authority transfer, reflection status surface exposure, and compatibility residue cleanup after the backend migration. Collected: `2026-03-17`. Reference value: `8/10`.
+  Why: high implementation and audit value because it records the final removal of plugin-local reflection source recovery, the shipped `POST /v1/reflection/source` contract, and the disposition of the remaining compatibility-only memory configuration surface.
+- `adapter-surface-closeout-2026-03-17/`: phased closeout record for finishing the plugin/adapter-facing management/debug surfaces and demoting misleading residual TS/runtime artifacts after the remote-authority cutover. Collected: `2026-03-17`. Reference value: `7/10`.
+  Why: useful for understanding what the repo considered “adapter-complete” at closeout time, especially the shipped `memory_distill_*` and `memory_recall_debug` surfaces plus the compatibility/debt disposition around residual TS helpers.
 - `distill-backend-scope/`: phased planning, contract freeze, remote-backend alignment, and initial runtime implementation closeout for backend-native distill jobs. Collected: `2026-03-17`. Reference value: `8/10`.
   Why: high implementation and audit value because it records the transition from sidecar distill residue to the canonical backend-native distill contract, including the first shipped `inline-messages` executor slice. Remaining transcript-source and reducer parity work moved to `docs/archive/distill-parity-migration-2026-03-17/`.
 - `distill-parity-migration-2026-03-17/`: phased parity-closeout record for backend-owned transcript persistence, `session-transcript` execution, deterministic reducer alignment, and removal of final JSONL/worker residue. Collected: `2026-03-17`. Reference value: `8/10`.

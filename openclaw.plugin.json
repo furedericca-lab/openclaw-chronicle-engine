@@ -55,7 +55,7 @@
       "enableManagementTools": {
         "type": "boolean",
         "default": false,
-        "description": "Enable management/debug tools such as memory_list, memory_stats, and governance-oriented self-improvement review/extract actions"
+        "description": "Enable caller-scoped management/debug tools such as memory_list, memory_stats, memory_reflection_status, memory_distill_enqueue, memory_distill_status, memory_recall_debug, and governance-oriented self-improvement review/extract actions."
       },
       "sessionStrategy": {
         "type": "string",
@@ -65,7 +65,7 @@
           "none"
         ],
         "default": "systemSessionMemory",
-        "description": "Choose session pipeline: plugin memory-reflection, built-in session-memory, or none"
+        "description": "Choose session pipeline: plugin memory-reflection prompt planning, built-in session-memory, or none."
       },
       "autoCapture": {
         "type": "boolean"
@@ -102,7 +102,7 @@
           "setwise-v2"
         ],
         "default": "mmr",
-        "description": "Generic Auto-Recall final top-k mode. mmr keeps direct truncation after post-processing as the canonical mode; setwise-v2 enables set-wise final selection with higher diversity/coverage but potentially lower average per-item relevance."
+        "description": "Generic Auto-Recall final top-k mode over ordinary backend-returned rows. mmr keeps direct truncation after prompt-local post-processing as the canonical mode; setwise-v2 applies a prompt-local lexical/coverage selector without recreating backend retrieval, rerank, or embedding authority."
       },
       "autoRecallCategories": {
         "type": "array",
@@ -191,6 +191,7 @@
       "memoryReflection": {
         "type": "object",
         "additionalProperties": false,
+        "description": "Prompt-local reflection planning knobs. messageCount, injectMode, and recall.* affect active runtime behavior; agentId/maxInputChars/timeoutMs/thinkLevel remain parseable compatibility fields but are ignored and emit startup warnings when configured.",
         "properties": {
           "injectMode": {
             "type": "string",
@@ -202,25 +203,28 @@
           },
           "agentId": {
             "type": "string",
-            "description": "Optional dedicated agent id used to run reflection generation (for example: memory-distiller)."
+            "description": "Deprecated compatibility field. Parsed for migration compatibility, ignored in remote-backend runtime, and reported in a startup warning when configured."
           },
           "messageCount": {
             "type": "integer",
             "minimum": 1,
             "maximum": 500,
-            "default": 120
+            "default": 120,
+            "description": "Recent messages included in plugin-side reflection enqueue input."
           },
           "maxInputChars": {
             "type": "integer",
             "minimum": 1000,
             "maximum": 200000,
-            "default": 24000
+            "default": 24000,
+            "description": "Deprecated compatibility field. Parsed for migration compatibility, ignored in remote-backend runtime, and reported in a startup warning when configured."
           },
           "timeoutMs": {
             "type": "integer",
             "minimum": 1000,
             "maximum": 120000,
-            "default": 20000
+            "default": 20000,
+            "description": "Deprecated compatibility field. Parsed for migration compatibility, ignored in remote-backend runtime, and reported in a startup warning when configured."
           },
           "thinkLevel": {
             "type": "string",
@@ -231,7 +235,8 @@
               "medium",
               "high"
             ],
-            "default": "medium"
+            "default": "medium",
+            "description": "Deprecated compatibility field. Parsed for migration compatibility, ignored in remote-backend runtime, and reported in a startup warning when configured."
           },
           "errorReminderMaxEntries": {
             "type": "integer",
@@ -372,7 +377,7 @@
     },
     "autoRecallSelectionMode": {
       "label": "Auto-Recall Selection Mode",
-      "help": "Generic final top-k mode: mmr is the canonical direct-truncation mode; setwise-v2 enables a more diverse final selector with possible average relevance tradeoffs.",
+      "help": "Generic final top-k mode over ordinary backend rows: mmr is the canonical direct-truncation mode; setwise-v2 applies a prompt-local lexical/coverage selector without recreating backend retrieval, rerank, or embedding authority.",
       "advanced": true
     },
     "autoRecallCategories": {
@@ -412,7 +417,7 @@
     },
     "sessionStrategy": {
       "label": "Session Strategy",
-      "help": "memoryReflection / systemSessionMemory / none",
+      "help": "memoryReflection / systemSessionMemory / none. memoryReflection keeps plugin-side prompt planning while backend remains recall/enqueue authority.",
       "advanced": true
     },
     "selfImprovement.enabled": {
@@ -441,27 +446,27 @@
     },
     "memoryReflection.agentId": {
       "label": "Reflection Agent Id",
-      "help": "Optional dedicated agent id used for reflection generation (e.g. memory-distiller)",
+      "help": "Deprecated compatibility field. Parsed for migration compatibility, ignored at runtime, and included in the startup warning when configured.",
       "advanced": true
     },
     "memoryReflection.messageCount": {
       "label": "Reflection Message Count",
-      "help": "Recent messages included in reflection input",
+      "help": "Recent messages included in plugin-side reflection enqueue input.",
       "advanced": true
     },
     "memoryReflection.maxInputChars": {
       "label": "Reflection Max Input Chars",
-      "help": "Max prompt chars sent to reflection run",
+      "help": "Deprecated compatibility field. Parsed for migration compatibility, ignored at runtime, and included in the startup warning when configured.",
       "advanced": true
     },
     "memoryReflection.timeoutMs": {
       "label": "Reflection Timeout (ms)",
-      "help": "Timeout for reflection run",
+      "help": "Deprecated compatibility field. Parsed for migration compatibility, ignored at runtime, and included in the startup warning when configured.",
       "advanced": true
     },
     "memoryReflection.thinkLevel": {
       "label": "Reflection Think Level",
-      "help": "off/minimal/low/medium/high",
+      "help": "Deprecated compatibility field. Parsed for migration compatibility, ignored at runtime, and included in the startup warning when configured.",
       "advanced": true
     },
     "memoryReflection.errorReminderMaxEntries": {
@@ -516,7 +521,7 @@
     },
     "enableManagementTools": {
       "label": "Management Tools",
-      "help": "Enable management/debug tools such as memory_list, memory_stats, and governance-oriented self-improvement review/extract actions.",
+      "help": "Enable caller-scoped management/debug tools such as memory_list, memory_stats, memory_reflection_status, memory_distill_enqueue, memory_distill_status, memory_recall_debug, and governance-oriented self-improvement review/extract actions.",
       "advanced": true
     }
   }

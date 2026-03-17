@@ -236,6 +236,33 @@ describe("remote backend shell integration", () => {
     );
   });
 
+  it("warns when deprecated local reflection-generation fields are still configured", () => {
+    const root = makeTempRoot();
+    const harness = createPluginApiHarness({
+      pluginConfig: makeRemoteConfig(root, {
+        sessionStrategy: "memoryReflection",
+        memoryReflection: {
+          agentId: "memory-distiller",
+          maxInputChars: 16000,
+          timeoutMs: 15000,
+          thinkLevel: "high",
+        },
+      }),
+      resolveRoot: root,
+    });
+
+    memoryLanceDBProPlugin.register(harness.api);
+
+    assert.ok(
+      harness.logs.some(
+        (entry) =>
+          entry.level === "warn" &&
+          entry.message.includes("memoryReflection deprecated/ignored fields")
+      ),
+      "register should emit one warning for deprecated local reflection-generation fields"
+    );
+  });
+
   it("builds backend runtime context from real principal identity and blocks synthesized principals", () => {
     const defaults = {
       sessionIdPrefix: "memory-backend",
@@ -358,6 +385,9 @@ describe("remote backend shell integration", () => {
     for (const toolName of ["memory_recall", "memory_store", "memory_forget", "memory_update"]) {
       assert.ok(harness.toolFactories.has(toolName), `expected tool registration: ${toolName}`);
     }
+    for (const toolName of ["memory_reflection_status", "memory_distill_enqueue", "memory_distill_status", "memory_recall_debug"]) {
+      assert.equal(harness.toolFactories.has(toolName), false, `management tool should stay gated: ${toolName}`);
+    }
 
     const toolCtx = {
       userId: "user-7",
@@ -428,6 +458,216 @@ describe("remote backend shell integration", () => {
     }
   });
 
+  it("registers management-gated distill/debug tools and forwards existing backend contracts", async () => {
+    const root = makeTempRoot();
+    const now = Date.now();
+    const fetchMock = installFetchMock([
+      {
+        method: "POST",
+        path: "/v1/distill/jobs",
+        reply: () => jsonResponse({
+          jobId: "distill-job-1",
+          status: "queued",
+        }),
+      },
+      {
+        method: "GET",
+        path: /\/v1\/reflection\/jobs\/.+$/,
+        reply: () => jsonResponse({
+          jobId: "reflection-job-1",
+          status: "completed",
+          persisted: true,
+          memoryCount: 2,
+        }),
+      },
+      {
+        method: "GET",
+        path: /\/v1\/distill\/jobs\/.+$/,
+        reply: () => jsonResponse({
+          jobId: "distill-job-1",
+          status: "completed",
+          mode: "session-lessons",
+          sourceKind: "inline-messages",
+          createdAt: now - 1000,
+          updatedAt: now,
+          result: {
+            artifactCount: 2,
+            persistedMemoryCount: 1,
+            warnings: [],
+          },
+        }),
+      },
+      {
+        method: "POST",
+        path: "/v1/debug/recall/generic",
+        reply: () => ({
+          rows: [
+            {
+              id: "mem-debug-1",
+              text: "Keep rollback commands explicit before systemd edits.",
+              category: "decision",
+              scope: "agent:agent-management",
+              score: 0.93,
+              metadata: { createdAt: now - 2000, updatedAt: now },
+            },
+          ],
+          trace: {
+            kind: "generic",
+            query: {
+              preview: "rollback commands",
+              rawLen: 17,
+              lexicalPreview: "rollback commands",
+              lexicalLen: 17,
+            },
+            stages: [
+              { name: "seed.merge", status: "ok" },
+              { name: "rank.finalize", status: "ok" },
+            ],
+            finalRowIds: ["mem-debug-1"],
+          },
+        }),
+      },
+      {
+        method: "POST",
+        path: "/v1/debug/recall/reflection",
+        reply: () => ({
+          rows: [
+            {
+              id: "refl-debug-1",
+              text: "Always verify service and DNS health after restart.",
+              kind: "invariant",
+              strictKey: "post-checks",
+              scope: "agent:agent-management",
+              score: 0.91,
+              metadata: { timestamp: now },
+            },
+          ],
+          trace: {
+            kind: "reflection",
+            mode: "invariant-only",
+            query: {
+              preview: "restart checks",
+              rawLen: 14,
+              lexicalPreview: "restart checks",
+              lexicalLen: 14,
+            },
+            stages: [
+              { name: "seed.merge", status: "ok" },
+              { name: "rank.finalize", status: "ok" },
+            ],
+            finalRowIds: ["refl-debug-1"],
+          },
+        }),
+      },
+    ]);
+
+    const harness = createPluginApiHarness({
+      pluginConfig: makeRemoteConfig(root, {
+        sessionStrategy: "none",
+        autoCapture: false,
+        enableManagementTools: true,
+      }),
+      resolveRoot: root,
+    });
+    memoryLanceDBProPlugin.register(harness.api);
+
+    for (const toolName of ["memory_reflection_status", "memory_distill_enqueue", "memory_distill_status", "memory_recall_debug", "memory_list", "memory_stats"]) {
+      assert.ok(harness.toolFactories.has(toolName), `expected management tool registration: ${toolName}`);
+    }
+
+    const toolCtx = {
+      userId: "user-management",
+      agentId: "agent-management",
+      sessionId: "session-management",
+      sessionKey: "agent:agent-management:session:stable-management",
+    };
+
+    const reflectionStatusTool = harness.instantiateTool("memory_reflection_status", toolCtx);
+    const reflectionStatusResult = await reflectionStatusTool.execute("call-reflection-status", {
+      jobId: "reflection-job-1",
+    });
+    assert.equal(reflectionStatusResult.details.jobId, "reflection-job-1");
+    assert.equal(reflectionStatusResult.details.status, "completed");
+    assert.equal(reflectionStatusResult.details.persisted, true);
+    assert.equal(reflectionStatusResult.details.memoryCount, 2);
+
+    const enqueue = harness.instantiateTool("memory_distill_enqueue", toolCtx);
+    const enqueueResult = await enqueue.execute("call-distill-enqueue", {
+      mode: "session-lessons",
+      sourceKind: "inline-messages",
+      persistMode: "artifacts-only",
+      messages: [
+        { role: "user", text: "Always capture rollback evidence before editing systemd units." },
+        { role: "assistant", text: "Acknowledged." },
+      ],
+      maxArtifacts: 4,
+    });
+    assert.equal(enqueueResult.details.jobId, "distill-job-1");
+    assert.equal(enqueueResult.details.status, "queued");
+
+    const statusTool = harness.instantiateTool("memory_distill_status", toolCtx);
+    const statusResult = await statusTool.execute("call-distill-status", {
+      jobId: "distill-job-1",
+    });
+    assert.equal(statusResult.details.jobId, "distill-job-1");
+    assert.equal(statusResult.details.status, "completed");
+    assert.equal(statusResult.details.result.artifactCount, 2);
+
+    const debugTool = harness.instantiateTool("memory_recall_debug", toolCtx);
+    const genericDebugResult = await debugTool.execute("call-debug-generic", {
+      channel: "generic",
+      query: "rollback commands",
+      limit: 4,
+    });
+    assert.equal(genericDebugResult.details.channel, "generic");
+    assert.equal(genericDebugResult.details.count, 1);
+    assert.equal(genericDebugResult.details.trace.kind, "generic");
+    assert.match(genericDebugResult.content[0].text, /Debug recall trace \(generic\): 1 row\(s\)/);
+
+    const reflectionDebugResult = await debugTool.execute("call-debug-reflection", {
+      channel: "reflection",
+      query: "restart checks",
+      limit: 3,
+      reflectionMode: "invariant-only",
+    });
+    assert.equal(reflectionDebugResult.details.channel, "reflection");
+    assert.equal(reflectionDebugResult.details.trace.kind, "reflection");
+    assert.equal(reflectionDebugResult.details.trace.mode, "invariant-only");
+
+    assert.equal(fetchMock.calls.length, 5);
+    const reflectionStatusCall = fetchMock.calls[0];
+    assert.match(reflectionStatusCall.path, /\/v1\/reflection\/jobs\/reflection-job-1$/);
+    assert.equal(reflectionStatusCall.headers["idempotency-key"], undefined);
+
+    const distillEnqueueCall = fetchMock.calls[1];
+    assert.equal(distillEnqueueCall.path, "/v1/distill/jobs");
+    assert.deepEqual(Object.keys(distillEnqueueCall.body).sort(), ["actor", "mode", "options", "source"]);
+    assert.equal(distillEnqueueCall.body.source.kind, "inline-messages");
+    assert.equal(distillEnqueueCall.body.options.persistMode, "artifacts-only");
+    assert.ok(typeof distillEnqueueCall.headers["idempotency-key"] === "string");
+
+    const distillStatusCall = fetchMock.calls[2];
+    assert.match(distillStatusCall.path, /\/v1\/distill\/jobs\/distill-job-1$/);
+    assert.equal(distillStatusCall.headers["idempotency-key"], undefined);
+
+    const genericDebugCall = fetchMock.calls[3];
+    assert.equal(genericDebugCall.path, "/v1/debug/recall/generic");
+    assert.deepEqual(Object.keys(genericDebugCall.body).sort(), ["actor", "limit", "query"]);
+    assert.equal(genericDebugCall.headers["idempotency-key"], undefined);
+
+    const reflectionDebugCall = fetchMock.calls[4];
+    assert.equal(reflectionDebugCall.path, "/v1/debug/recall/reflection");
+    assert.deepEqual(Object.keys(reflectionDebugCall.body).sort(), ["actor", "limit", "mode", "query"]);
+    assert.equal(reflectionDebugCall.body.mode, "invariant-only");
+
+    for (const call of fetchMock.calls) {
+      if (call.body) {
+        assert.equal("scope" in call.body, false);
+        assert.equal("scopeFilter" in call.body, false);
+      }
+    }
+  });
+
   it("keeps remote recall fail-open when runtime principal identity is unavailable", async () => {
     const root = makeTempRoot();
     const fetchMock = installFetchMock([]);
@@ -484,6 +724,120 @@ describe("remote backend shell integration", () => {
     assert.equal(result.details.error, "missing_runtime_principal");
     assert.deepEqual(result.details.missingPrincipalFields, ["userId", "agentId"]);
     assert.match(result.content[0].text, /blocked because runtime principal identity is unavailable/);
+  });
+
+  it("fails distill/debug management tools closed when runtime principal identity is unavailable", async () => {
+    const root = makeTempRoot();
+    const fetchMock = installFetchMock([]);
+
+    const harness = createPluginApiHarness({
+      pluginConfig: makeRemoteConfig(root, {
+        sessionStrategy: "none",
+        autoCapture: false,
+        enableManagementTools: true,
+      }),
+      resolveRoot: root,
+    });
+    memoryLanceDBProPlugin.register(harness.api);
+
+    const enqueue = harness.instantiateTool("memory_distill_enqueue", {
+      sessionKey: "agent:agent-missing:session:stable-missing",
+    });
+    const enqueueResult = await enqueue.execute("call-missing-principal-distill", {
+      mode: "session-lessons",
+      sourceKind: "session-transcript",
+      persistMode: "artifacts-only",
+      sessionKey: "agent:agent-missing:session:stable-missing",
+    });
+    assert.equal(enqueueResult.details.error, "missing_runtime_principal");
+    assert.deepEqual(enqueueResult.details.missingPrincipalFields, ["userId", "agentId"]);
+
+    const debug = harness.instantiateTool("memory_recall_debug", {
+      sessionKey: "agent:agent-missing:session:stable-missing",
+    });
+    const debugResult = await debug.execute("call-missing-principal-debug", {
+      channel: "generic",
+      query: "should be blocked",
+    });
+    assert.equal(debugResult.details.error, "missing_runtime_principal");
+    assert.deepEqual(debugResult.details.missingPrincipalFields, ["userId", "agentId"]);
+    assert.equal(fetchMock.calls.length, 0);
+  });
+
+  it("surfaces backend distill/debug failures through the existing remote backend error path", async () => {
+    const root = makeTempRoot();
+
+    const fetchMock = installFetchMock([
+      {
+        method: "POST",
+        path: "/v1/distill/jobs",
+        reply: () => ({
+          status: 503,
+          body: {
+            error: {
+              code: "DISTILL_BACKEND_DOWN",
+              message: "distill queue unavailable",
+              retryable: true,
+            },
+          },
+        }),
+      },
+      {
+        method: "POST",
+        path: "/v1/debug/recall/generic",
+        reply: () => ({
+          status: 500,
+          body: {
+            error: {
+              code: "DEBUG_RECALL_DOWN",
+              message: "debug recall unavailable",
+              retryable: false,
+            },
+          },
+        }),
+      },
+    ]);
+
+    const harness = createPluginApiHarness({
+      pluginConfig: makeRemoteConfig(root, {
+        sessionStrategy: "none",
+        autoCapture: false,
+        enableManagementTools: true,
+        remoteBackend: {
+          maxRetries: 0,
+        },
+      }),
+      resolveRoot: root,
+    });
+    memoryLanceDBProPlugin.register(harness.api);
+
+    const toolCtx = {
+      userId: "user-error",
+      agentId: "agent-error",
+      sessionId: "session-error",
+      sessionKey: "agent:agent-error:session:stable-error",
+    };
+
+    const enqueue = harness.instantiateTool("memory_distill_enqueue", toolCtx);
+    const enqueueResult = await enqueue.execute("call-distill-error", {
+      mode: "session-lessons",
+      sourceKind: "session-transcript",
+      persistMode: "artifacts-only",
+      sessionKey: "agent:agent-error:session:stable-error",
+    });
+    assert.equal(enqueueResult.details.error, "remote_backend_error");
+    assert.equal(enqueueResult.details.code, "DISTILL_BACKEND_DOWN");
+    assert.equal(enqueueResult.details.status, 503);
+
+    const debug = harness.instantiateTool("memory_recall_debug", toolCtx);
+    const debugResult = await debug.execute("call-debug-error", {
+      channel: "generic",
+      query: "debug failure path",
+    });
+    assert.equal(debugResult.details.error, "remote_backend_error");
+    assert.equal(debugResult.details.code, "DEBUG_RECALL_DOWN");
+    assert.equal(debugResult.details.status, 500);
+    assert.equal(fetchMock.calls.length, 2);
   });
 
   it("forwards auto-capture through backend mode=auto-capture with actor context", async () => {
@@ -1053,6 +1407,15 @@ describe("remote backend shell integration", () => {
     const fetchMock = installFetchMock([
       {
         method: "POST",
+        path: "/v1/reflection/source",
+        reply: () => ({
+          messages: [
+            { role: "user", text: "Keep reflection enqueue non-blocking." },
+          ],
+        }),
+      },
+      {
+        method: "POST",
         path: "/v1/reflection/jobs",
         reply: async () => await pending.promise,
       },
@@ -1089,8 +1452,14 @@ describe("remote backend shell integration", () => {
     ]);
     assert.equal(race, "resolved", "command:new hook should return before enqueue job completion");
 
-    assert.equal(fetchMock.calls.length, 1);
-    const call = fetchMock.calls[0];
+    assert.equal(fetchMock.calls.length, 2);
+    const sourceCall = fetchMock.calls[0];
+    assert.equal(sourceCall.path, "/v1/reflection/source");
+    assert.deepEqual(Object.keys(sourceCall.body).sort(), ["actor", "maxMessages", "trigger"]);
+    assert.equal(sourceCall.body.trigger, "new");
+    assert.equal(sourceCall.body.actor.sessionId, "context-session-id");
+
+    const call = fetchMock.calls[1];
     assert.equal(call.path, "/v1/reflection/jobs");
     assert.deepEqual(Object.keys(call.body).sort(), ["actor", "messages", "trigger"]);
     assert.equal(call.body.trigger, "new");
@@ -1109,6 +1478,15 @@ describe("remote backend shell integration", () => {
 
     const pending = deferred();
     const fetchMock = installFetchMock([
+      {
+        method: "POST",
+        path: "/v1/reflection/source",
+        reply: () => ({
+          messages: [
+            { role: "user", text: "force async failure path" },
+          ],
+        }),
+      },
       {
         method: "POST",
         path: "/v1/reflection/jobs",
@@ -1144,7 +1522,7 @@ describe("remote backend shell integration", () => {
     pending.reject(new Error("simulated enqueue transport failure"));
     await sleep(20);
 
-    assert.equal(fetchMock.calls.length, 1);
+    assert.equal(fetchMock.calls.length, 2);
     assert.ok(
       harness.logs.some(
         (entry) =>
@@ -1159,6 +1537,15 @@ describe("remote backend shell integration", () => {
     const root = makeTempRoot();
 
     const fetchMock = installFetchMock([
+      {
+        method: "POST",
+        path: "/v1/reflection/source",
+        reply: () => ({
+          messages: [
+            { role: "user", text: "Reset the session and keep lessons." },
+          ],
+        }),
+      },
       {
         method: "POST",
         path: "/v1/reflection/jobs",
@@ -1188,8 +1575,12 @@ describe("remote backend shell integration", () => {
       },
     });
 
-    assert.equal(fetchMock.calls.length, 1);
-    const call = fetchMock.calls[0];
+    assert.equal(fetchMock.calls.length, 2);
+    const sourceCall = fetchMock.calls[0];
+    assert.equal(sourceCall.path, "/v1/reflection/source");
+    assert.equal(sourceCall.body.trigger, "reset");
+
+    const call = fetchMock.calls[1];
     assert.equal(call.path, "/v1/reflection/jobs");
     assert.equal(call.body.trigger, "reset");
     assert.equal(call.body.actor.userId, "user-reset");

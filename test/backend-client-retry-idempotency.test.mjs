@@ -265,4 +265,90 @@ describe("memory backend client retry/idempotency", () => {
     assert.ok(keyB);
     assert.notEqual(keyA, keyB);
   });
+
+  it("retries distill enqueue failures and keeps the idempotency key stable", async () => {
+    const fetchMock = installFetchMock((_call, attempt) => {
+      if (attempt === 0) {
+        return {
+          status: 503,
+          body: {
+            error: {
+              code: "BACKEND_UNAVAILABLE",
+              message: "distill queue unavailable",
+              retryable: true,
+            },
+          },
+        };
+      }
+      return jsonResponse({
+        jobId: "distill-job-1",
+        status: "queued",
+      });
+    });
+
+    const client = createClient({ maxRetries: 1 });
+    const response = await client.enqueueDistillJob(baseContext("req-distill-503"), {
+      mode: "session-lessons",
+      source: {
+        kind: "inline-messages",
+        messages: [{ role: "user", text: "Capture durable rollout lessons." }],
+      },
+      options: {
+        persistMode: "artifacts-only",
+        maxArtifacts: 4,
+      },
+    });
+
+    assert.equal(response.jobId, "distill-job-1");
+    assert.equal(fetchMock.calls.length, 2);
+    assert.equal(fetchMock.calls[0].method, "POST");
+    assert.equal(new URL(fetchMock.calls[0].url).pathname, "/v1/distill/jobs");
+    const firstKey = fetchMock.calls[0].headers["idempotency-key"];
+    assert.ok(firstKey);
+    assert.equal(fetchMock.calls[1].headers["idempotency-key"], firstKey);
+    assert.equal(fetchMock.calls[0].headers["x-request-id"], "req-distill-503");
+    assert.equal(fetchMock.calls[1].headers["x-request-id"], "req-distill-503");
+  });
+
+  it("calls debug recall routes without idempotency headers and returns trace payloads", async () => {
+    const fetchMock = installFetchMock(() => ({
+      rows: [
+        {
+          id: "mem-debug-1",
+          text: "Keep rollback evidence compact and explicit.",
+          category: "decision",
+          scope: "agent:agent-test",
+          score: 0.91,
+          metadata: { createdAt: Date.now(), updatedAt: Date.now() },
+        },
+      ],
+      trace: {
+        kind: "generic",
+        query: {
+          preview: "rollback evidence",
+          rawLen: 17,
+          lexicalPreview: "rollback evidence",
+          lexicalLen: 17,
+        },
+        stages: [
+          { name: "seed.merge", status: "ok" },
+          { name: "rank.finalize", status: "ok" },
+        ],
+        finalRowIds: ["mem-debug-1"],
+      },
+    }));
+
+    const client = createClient();
+    const response = await client.recallGenericDebug(baseContext("req-debug-recall"), {
+      query: "rollback evidence",
+      limit: 3,
+    });
+
+    assert.equal(response.rows.length, 1);
+    assert.equal(response.trace.kind, "generic");
+    assert.equal(fetchMock.calls.length, 1);
+    assert.equal(new URL(fetchMock.calls[0].url).pathname, "/v1/debug/recall/generic");
+    assert.equal(fetchMock.calls[0].headers["idempotency-key"], undefined);
+    assert.deepEqual(Object.keys(fetchMock.calls[0].body).sort(), ["actor", "limit", "query"]);
+  });
 });

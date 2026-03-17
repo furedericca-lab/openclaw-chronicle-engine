@@ -94,6 +94,44 @@ export interface BackendRecallReflectionRow {
   };
 }
 
+export type BackendRetrievalTraceKind = "generic" | "reflection";
+export type BackendRetrievalTraceStageStatus = "ok" | "fallback" | "skipped" | "failed";
+
+export interface BackendRetrievalTraceQuery {
+  preview: string;
+  rawLen: number;
+  lexicalPreview: string;
+  lexicalLen: number;
+}
+
+export interface BackendRetrievalTraceStage {
+  name: string;
+  status: BackendRetrievalTraceStageStatus;
+  inputCount?: number;
+  outputCount?: number;
+  fallbackTo?: string;
+  reason?: string;
+  metrics?: Record<string, unknown>;
+}
+
+export interface BackendRetrievalTrace {
+  kind: BackendRetrievalTraceKind;
+  query: BackendRetrievalTraceQuery;
+  mode?: string;
+  stages: BackendRetrievalTraceStage[];
+  finalRowIds: string[];
+}
+
+export interface BackendRecallGenericDebugResponse {
+  rows: BackendRecallGenericRow[];
+  trace: BackendRetrievalTrace;
+}
+
+export interface BackendRecallReflectionDebugResponse {
+  rows: BackendRecallReflectionRow[];
+  trace: BackendRetrievalTrace;
+}
+
 export interface BackendListRow {
   id: string;
   text: string;
@@ -114,6 +152,10 @@ export interface BackendStatsResponse {
 export interface BackendReflectionJobResponse {
   jobId: string;
   status: "queued" | "running" | "completed" | "failed";
+}
+
+export interface BackendReflectionSourceResponse {
+  messages: BackendCaptureItem[];
 }
 
 export interface BackendSessionTranscriptAppendResponse {
@@ -174,10 +216,18 @@ export interface MemoryBackendClient {
     ctx: BackendCallContext,
     input: { query: string; limit: number }
   ) => Promise<BackendRecallGenericRow[]>;
+  recallGenericDebug: (
+    ctx: BackendCallContext,
+    input: { query: string; limit: number }
+  ) => Promise<BackendRecallGenericDebugResponse>;
   recallReflection: (
     ctx: BackendCallContext,
     input: { query: string; mode: ReflectionRecallMode; limit: number }
   ) => Promise<BackendRecallReflectionRow[]>;
+  recallReflectionDebug: (
+    ctx: BackendCallContext,
+    input: { query: string; mode: ReflectionRecallMode; limit: number }
+  ) => Promise<BackendRecallReflectionDebugResponse>;
   storeToolMemory: (
     ctx: BackendCallContext,
     input: BackendStoreToolInput
@@ -207,6 +257,10 @@ export interface MemoryBackendClient {
     ctx: BackendCallContext,
     input: { trigger: ReflectionTrigger; messages: BackendCaptureItem[]; idempotencyKey?: string }
   ) => Promise<BackendReflectionJobResponse>;
+  loadReflectionSource: (
+    ctx: BackendCallContext,
+    input: { trigger: ReflectionTrigger; maxMessages?: number }
+  ) => Promise<BackendReflectionSourceResponse>;
   getReflectionJobStatus: (
     ctx: BackendCallContext,
     input: { jobId: string }

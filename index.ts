@@ -4,23 +4,17 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { homedir, tmpdir } from "node:os";
-import { join, dirname, basename } from "node:path";
-import { readFile, readdir, writeFile, mkdir, appendFile, unlink, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { pathToFileURL } from "node:url";
-import { createRequire } from "node:module";
-import { spawn } from "node:child_process";
 
 import { registerRemoteMemoryTools } from "./src/backend-tools.js";
 import { ensureSelfImprovementLearningFiles } from "./src/self-improvement-files.js";
-import { runWithReflectionTransientRetryOnce } from "./src/reflection-retry.js";
-import { resolveReflectionSessionSearchDirs, stripResetSuffix } from "./src/session-recovery.js";
 import {
   createSessionExposureState,
   DEFAULT_SESSION_EXPOSURE_MAX_TRACKED_SESSIONS,
-  type ReflectionErrorSignal,
 } from "./src/context/session-exposure-state.js";
 import { createAutoRecallPlanner } from "./src/context/auto-recall-orchestrator.js";
 import { createReflectionPromptPlanner } from "./src/context/reflection-prompt-planner.js";
@@ -69,6 +63,7 @@ interface PluginConfig {
     maxInputChars?: number;
     timeoutMs?: number;
     thinkLevel?: ReflectionThinkLevel;
+    deprecatedIgnoredFields?: string[];
     errorReminderMaxEntries?: number;
     dedupeErrorSignals?: boolean;
     recall?: {
@@ -196,9 +191,6 @@ Keep entries simple: date, title, what happened, what to do differently.`;
 
 const SELF_IMPROVEMENT_NOTE_PREFIX = "/note self-improvement (before reset):";
 const DEFAULT_REFLECTION_MESSAGE_COUNT = 120;
-const DEFAULT_REFLECTION_MAX_INPUT_CHARS = 24_000;
-const DEFAULT_REFLECTION_TIMEOUT_MS = 20_000;
-const DEFAULT_REFLECTION_THINK_LEVEL: ReflectionThinkLevel = "medium";
 const DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES = 3;
 const DEFAULT_REFLECTION_DEDUPE_ERROR_SIGNALS = true;
 const DEFAULT_REFLECTION_ERROR_SCAN_MAX_CHARS = 8_000;
@@ -216,7 +208,6 @@ const DEFAULT_REFLECTION_RECALL_MAX_ENTRIES_PER_KEY = 10;
 const DEFAULT_REFLECTION_RECALL_MIN_REPEATED = 2;
 const DEFAULT_REFLECTION_RECALL_MIN_SCORE = 0.18;
 const DEFAULT_REFLECTION_RECALL_MIN_PROMPT_LENGTH = 8;
-const REFLECTION_FALLBACK_MARKER = "(fallback) Reflection generation failed; storing minimal pointer only.";
 const DIAG_BUILD_TAG = "openclaw-chronicle-engine-diag-20260308-0058";
 
 function buildSelfImprovementResetNote(params?: { openLoopsBlock?: string; derivedFocusBlock?: string }): string {
@@ -242,233 +233,6 @@ function buildSelfImprovementResetNote(params?: { openLoopsBlock?: string; deriv
   return base.join("\n");
 }
 
-type EmbeddedPiRunner = (params: Record<string, unknown>) => Promise<unknown>;
-
-const requireFromHere = createRequire(import.meta.url);
-let embeddedPiRunnerPromise: Promise<EmbeddedPiRunner> | null = null;
-
-function toImportSpecifier(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  if (trimmed.startsWith("file://")) return trimmed;
-  if (trimmed.startsWith("/")) return pathToFileURL(trimmed).href;
-  return trimmed;
-}
-
-function getExtensionApiImportSpecifiers(): string[] {
-  const envPath = process.env.OPENCLAW_EXTENSION_API_PATH?.trim();
-  const specifiers: string[] = [];
-
-  if (envPath) specifiers.push(toImportSpecifier(envPath));
-  specifiers.push("openclaw/dist/extensionAPI.js");
-
-  try {
-    specifiers.push(toImportSpecifier(requireFromHere.resolve("openclaw/dist/extensionAPI.js")));
-  } catch {
-    // ignore resolve failures and continue fallback probing
-  }
-
-  specifiers.push(toImportSpecifier("/usr/lib/node_modules/openclaw/dist/extensionAPI.js"));
-  specifiers.push(toImportSpecifier("/usr/local/lib/node_modules/openclaw/dist/extensionAPI.js"));
-
-  return [...new Set(specifiers.filter(Boolean))];
-}
-
-async function loadEmbeddedPiRunner(): Promise<EmbeddedPiRunner> {
-  if (!embeddedPiRunnerPromise) {
-    embeddedPiRunnerPromise = (async () => {
-      const importErrors: string[] = [];
-      for (const specifier of getExtensionApiImportSpecifiers()) {
-        try {
-          const mod = await import(specifier);
-          const runner = (mod as Record<string, unknown>).runEmbeddedPiAgent;
-          if (typeof runner === "function") return runner as EmbeddedPiRunner;
-          importErrors.push(`${specifier}: runEmbeddedPiAgent export not found`);
-        } catch (err) {
-          importErrors.push(`${specifier}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-      throw new Error(
-        `Unable to load OpenClaw embedded runtime API. ` +
-        `Set OPENCLAW_EXTENSION_API_PATH if runtime layout differs. ` +
-        `Attempts: ${importErrors.join(" | ")}`
-      );
-    })();
-  }
-
-  try {
-    return await embeddedPiRunnerPromise;
-  } catch (err) {
-    embeddedPiRunnerPromise = null;
-    throw err;
-  }
-}
-
-function clipDiagnostic(text: string, maxLen = 400): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  if (oneLine.length <= maxLen) return oneLine;
-  return `${oneLine.slice(0, maxLen - 3)}...`;
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      }
-    );
-  });
-}
-
-function tryParseJsonObject(raw: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-function extractJsonObjectFromOutput(stdout: string): Record<string, unknown> {
-  const trimmed = stdout.trim();
-  if (!trimmed) throw new Error("empty stdout");
-
-  const direct = tryParseJsonObject(trimmed);
-  if (direct) return direct;
-
-  const lines = trimmed.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    if (!lines[i].trim().startsWith("{")) continue;
-    const candidate = lines.slice(i).join("\n");
-    const parsed = tryParseJsonObject(candidate);
-    if (parsed) return parsed;
-  }
-
-  throw new Error(`unable to parse JSON from CLI output: ${clipDiagnostic(trimmed, 280)}`);
-}
-
-function extractReflectionTextFromCliResult(resultObj: Record<string, unknown>): string | null {
-  const result = resultObj.result as Record<string, unknown> | undefined;
-  const payloads = Array.isArray(resultObj.payloads)
-    ? resultObj.payloads
-    : Array.isArray(result?.payloads)
-      ? result.payloads
-      : [];
-  const firstWithText = payloads.find(
-    (p) => p && typeof p === "object" && typeof (p as Record<string, unknown>).text === "string" && ((p as Record<string, unknown>).text as string).trim().length
-  ) as Record<string, unknown> | undefined;
-  const text = typeof firstWithText?.text === "string" ? firstWithText.text.trim() : "";
-  return text || null;
-}
-
-async function runReflectionViaCli(params: {
-  prompt: string;
-  agentId: string;
-  workspaceDir: string;
-  timeoutMs: number;
-  thinkLevel: ReflectionThinkLevel;
-}): Promise<string> {
-  const cliBin = process.env.OPENCLAW_CLI_BIN?.trim() || "openclaw";
-  const outerTimeoutMs = Math.max(params.timeoutMs + 5000, 15000);
-  const agentTimeoutSec = Math.max(1, Math.ceil(params.timeoutMs / 1000));
-  const sessionId = `memory-reflection-cli-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-  const args = [
-    "agent",
-    "--local",
-    "--agent",
-    params.agentId,
-    "--message",
-    params.prompt,
-    "--json",
-    "--thinking",
-    params.thinkLevel,
-    "--timeout",
-    String(agentTimeoutSec),
-    "--session-id",
-    sessionId,
-  ];
-
-  return await new Promise<string>((resolve, reject) => {
-    const child = spawn(cliBin, args, {
-      cwd: params.workspaceDir,
-      env: { ...process.env, NO_COLOR: "1" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let timedOut = false;
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 1500).unref();
-    }, outerTimeoutMs);
-
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-
-    child.once("error", (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new Error(`spawn ${cliBin} failed: ${err.message}`));
-    });
-
-    child.once("close", (code, signal) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-
-      if (timedOut) {
-        reject(new Error(`${cliBin} timed out after ${outerTimeoutMs}ms`));
-        return;
-      }
-      if (signal) {
-        reject(new Error(`${cliBin} exited by signal ${signal}. stderr=${clipDiagnostic(stderr)}`));
-        return;
-      }
-      if (code !== 0) {
-        reject(new Error(`${cliBin} exited with code ${code}. stderr=${clipDiagnostic(stderr)}`));
-        return;
-      }
-
-      try {
-        const parsed = extractJsonObjectFromOutput(stdout);
-        const text = extractReflectionTextFromCliResult(parsed);
-        if (!text) {
-          reject(new Error(`CLI JSON returned no text payload. stdout=${clipDiagnostic(stdout)}`));
-          return;
-        }
-        resolve(text);
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
-      }
-    });
-  });
-}
-
 async function loadSelfImprovementReminderContent(workspaceDir?: string): Promise<string> {
   const baseDir = typeof workspaceDir === "string" && workspaceDir.trim().length ? workspaceDir.trim() : "";
   if (!baseDir) return DEFAULT_SELF_IMPROVEMENT_REMINDER;
@@ -481,44 +245,6 @@ async function loadSelfImprovementReminderContent(workspaceDir?: string): Promis
   } catch {
     return DEFAULT_SELF_IMPROVEMENT_REMINDER;
   }
-}
-
-function resolveAgentPrimaryModelRef(cfg: unknown, agentId: string): string | undefined {
-  try {
-    const root = cfg as Record<string, unknown>;
-    const agents = root.agents as Record<string, unknown> | undefined;
-    const list = agents?.list as unknown;
-
-    if (Array.isArray(list)) {
-      const found = list.find((x) => {
-        if (!x || typeof x !== "object") return false;
-        return (x as Record<string, unknown>).id === agentId;
-      }) as Record<string, unknown> | undefined;
-      const model = found?.model as Record<string, unknown> | undefined;
-      const primary = model?.primary;
-      if (typeof primary === "string" && primary.trim()) return primary.trim();
-    }
-
-    const defaults = agents?.defaults as Record<string, unknown> | undefined;
-    const defModel = defaults?.model as Record<string, unknown> | undefined;
-    const defPrimary = defModel?.primary;
-    if (typeof defPrimary === "string" && defPrimary.trim()) return defPrimary.trim();
-  } catch {
-    // ignore
-  }
-  return undefined;
-}
-
-function splitProviderModel(modelRef: string): { provider?: string; model?: string } {
-  const s = modelRef.trim();
-  if (!s) return {};
-  const idx = s.indexOf("/");
-  if (idx > 0) {
-    const provider = s.slice(0, idx).trim();
-    const model = s.slice(idx + 1).trim();
-    return { provider: provider || undefined, model: model || undefined };
-  }
-  return { model: s };
 }
 
 function asNonEmptyString(value: unknown): string | undefined {
@@ -545,27 +271,6 @@ function mergeContextSources(...sources: unknown[]): Record<string, unknown> {
     Object.assign(merged, source as Record<string, unknown>);
   }
   return merged;
-}
-
-function parseConversationToCaptureItems(conversation: string): BackendCaptureItem[] {
-  const rows: BackendCaptureItem[] = [];
-  const lines = conversation
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-
-  for (const line of lines) {
-    const match = line.match(/^(user|assistant)\s*:\s*(.+)$/i);
-    if (!match) continue;
-    const roleRaw = match[1].toLowerCase();
-    const text = match[2].trim();
-    if (!text) continue;
-    rows.push({
-      role: roleRaw === "assistant" ? "assistant" : "user",
-      text,
-    });
-  }
-  return rows;
 }
 
 function parseEventMessagesToCaptureItems(messages: unknown[]): BackendCaptureItem[] {
@@ -601,55 +306,6 @@ function extractTextContent(content: unknown): string | null {
   return null;
 }
 
-function shouldSkipReflectionMessage(role: string, text: string): boolean {
-  const trimmed = text.trim();
-  if (!trimmed) return true;
-  if (trimmed.startsWith("/")) return true;
-
-  if (role === "user") {
-    if (
-      trimmed.includes("<relevant-memories>") ||
-      trimmed.includes("UNTRUSTED DATA") ||
-      trimmed.includes("END UNTRUSTED DATA")
-    ) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function redactSecrets(text: string): string {
-  const patterns: RegExp[] = [
-    /Bearer\s+[A-Za-z0-9\-._~+/]+=*/g,
-    /\bsk-[A-Za-z0-9]{20,}\b/g,
-    /\bsk-proj-[A-Za-z0-9\-_]{20,}\b/g,
-    /\bsk-ant-[A-Za-z0-9\-_]{20,}\b/g,
-    /\bghp_[A-Za-z0-9]{36,}\b/g,
-    /\bgho_[A-Za-z0-9]{36,}\b/g,
-    /\bghu_[A-Za-z0-9]{36,}\b/g,
-    /\bghs_[A-Za-z0-9]{36,}\b/g,
-    /\bgithub_pat_[A-Za-z0-9_]{22,}\b/g,
-    /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
-    /\bAIza[0-9A-Za-z_-]{20,}\b/g,
-    /\bAKIA[0-9A-Z]{16}\b/g,
-    /\bnpm_[A-Za-z0-9]{36,}\b/g,
-    /\b(?:token|api[_-]?key|secret|password)\s*[:=]\s*["']?[^\s"',;)}\]]{6,}["']?\b/gi,
-    /-----BEGIN\s+(?:RSA\s+|EC\s+|DSA\s+|OPENSSH\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+|EC\s+|DSA\s+|OPENSSH\s+)?PRIVATE\s+KEY-----/g,
-    /(?<=:\/\/)[^@\s]+:[^@\s]+(?=@)/g,
-    /\/home\/[^\s"',;)}\]]+/g,
-    /\/Users\/[^\s"',;)}\]]+/g,
-    /[A-Z]:\\[^\s"',;)}\]]+/g,
-    /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
-  ];
-
-  let out = text;
-  for (const re of patterns) {
-    out = out.replace(re, (m) => (m.startsWith("Bearer") || m.startsWith("bearer") ? "Bearer [REDACTED]" : "[REDACTED]"));
-  }
-  return out;
-}
-
 function sha256Hex(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
@@ -666,356 +322,6 @@ function buildSessionTranscriptAppendIdempotencyKey(
     })
   );
   return `session-transcript-append:${digest.slice(0, 48)}`;
-}
-
-async function readSessionConversationForReflection(filePath: string, messageCount: number): Promise<string | null> {
-  try {
-    const lines = (await readFile(filePath, "utf-8")).trim().split("\n");
-    const messages: string[] = [];
-
-    for (const line of lines) {
-      try {
-        const entry = JSON.parse(line);
-        if (entry?.type !== "message" || !entry?.message) continue;
-
-        const msg = entry.message as Record<string, unknown>;
-        const role = typeof msg.role === "string" ? msg.role : "";
-        if (role !== "user" && role !== "assistant") continue;
-
-        const text = extractTextContent(msg.content);
-        if (!text || shouldSkipReflectionMessage(role, text)) continue;
-
-        messages.push(`${role}: ${redactSecrets(text)}`);
-      } catch {
-        // ignore JSON parse errors
-      }
-    }
-
-    if (messages.length === 0) return null;
-    return messages.slice(-messageCount).join("\n");
-  } catch {
-    return null;
-  }
-}
-
-export async function readSessionConversationWithResetFallback(sessionFilePath: string, messageCount: number): Promise<string | null> {
-  const primary = await readSessionConversationForReflection(sessionFilePath, messageCount);
-  if (primary) return primary;
-
-  try {
-    const dir = dirname(sessionFilePath);
-    const resetPrefix = `${basename(sessionFilePath)}.reset.`;
-    const files = await readdir(dir);
-    const resetCandidates = await sortFileNamesByMtimeDesc(
-      dir,
-      files.filter((name) => name.startsWith(resetPrefix))
-    );
-    if (resetCandidates.length > 0) {
-      const latestResetPath = join(dir, resetCandidates[0]);
-      return await readSessionConversationForReflection(latestResetPath, messageCount);
-    }
-  } catch {
-    // ignore
-  }
-
-  return primary;
-}
-
-async function ensureDailyLogFile(dailyPath: string, dateStr: string): Promise<void> {
-  try {
-    await readFile(dailyPath, "utf-8");
-  } catch {
-    await writeFile(dailyPath, `# ${dateStr}\n\n`, "utf-8");
-  }
-}
-
-function buildReflectionPrompt(
-  conversation: string,
-  maxInputChars: number,
-  toolErrorSignals: ReflectionErrorSignal[] = []
-): string {
-  const clipped = conversation.slice(-maxInputChars);
-  const errorHints = toolErrorSignals.length > 0
-    ? toolErrorSignals
-      .map((e, i) => `${i + 1}. [${e.toolName}] ${e.summary} (sig:${e.signatureHash.slice(0, 8)})`)
-      .join("\n")
-    : "- (none)";
-  return [
-    "You are generating a durable MEMORY REFLECTION entry for an AI assistant system.",
-    "",
-    "Output Markdown only. No intro text. No outro text. No extra headings.",
-    "",
-    "Use these headings exactly once, in this exact order, with exact spelling:",
-    "## Context (session background)",
-    "## Decisions (durable)",
-    "## User model deltas (about the human)",
-    "## Agent model deltas (about the assistant/system)",
-    "## Lessons & pitfalls (symptom / cause / fix / prevention)",
-    "## Learning governance candidates (.learnings / promotion / skill extraction)",
-    "## Open loops / next actions",
-    "## Retrieval tags / keywords",
-    "## Invariants",
-    "## Derived",
-    "",
-    "Hard rules:",
-    "- Do not rename, translate, merge, reorder, or omit headings.",
-    "- Every section must appear exactly once.",
-    "- For bullet sections, use one item per line, starting with '- '.",
-    "- Do not wrap one bullet across multiple lines.",
-    "- If a bullet section is empty, write exactly: '- (none captured)'",
-    "- Do not paste raw transcript.",
-    "- Do not invent Logged timestamps, ids, file paths, commit hashes, session ids, or storage metadata unless they already appear in the input.",
-    "- If secrets/tokens/passwords appear, keep them as [REDACTED].",
-    "",
-    "Section rules:",
-    "- Context / Decisions / User model / Agent model / Open loops / Retrieval tags / Invariants / Derived = bullet lists only.",
-    "- Lessons & pitfalls = bullet list only; each bullet must be one single line in this shape:",
-    "  - Symptom: ... Cause: ... Fix: ... Prevention: ...",
-    "- Invariants = stable cross-session rules only; prefer bullets starting with Always / Never / When / If / Before / After / Prefer / Avoid / Require.",
-    "- Derived = recent-run distilled learnings, adjustments, and follow-up heuristics that may help the next several runs, but should decay over time.",
-    "- Keep Invariants stable and long-lived; keep Derived recent, reusable across near-term runs, and decayable.",
-    "- Start Derived bullets with varied lead-ins (for example: Next run..., When..., If..., To avoid...) instead of repeating one opening phrase.",
-    "- Keep Derived phrasing non-redundant; do not start every bullet with the same words.",
-    "- Do not restate long-term rules in Derived.",
-    "",
-    "Governance section rules:",
-    "- If empty, write exactly:",
-    "  - (none captured)",
-    "- Otherwise, do NOT use bullet lists there.",
-    "- Use one or more entries in exactly this format:",
-    "",
-    "### Entry 1",
-    "**Priority**: low|medium|high|critical",
-    "**Status**: pending|triage|promoted_to_skill|done",
-    "**Area**: frontend|backend|infra|tests|docs|config|<custom area>",
-    "### Summary",
-    "<one concise candidate>",
-    "### Details",
-    "<short supporting details>",
-    "### Suggested Action",
-    "<one concrete next action>",
-    "",
-    "Notes:",
-    "- Keep writer-owned metadata out of the output. The writer generates Logged and IDs.",
-    "- Prefer structured, machine-parseable output over elegant prose.",
-    "",
-    "OUTPUT TEMPLATE (copy this structure exactly):",
-    "## Context (session background)",
-    "- ...",
-    "",
-    "## Decisions (durable)",
-    "- ...",
-    "",
-    "## User model deltas (about the human)",
-    "- ...",
-    "",
-    "## Agent model deltas (about the assistant/system)",
-    "- ...",
-    "",
-    "## Lessons & pitfalls (symptom / cause / fix / prevention)",
-    "- Symptom: ... Cause: ... Fix: ... Prevention: ...",
-    "",
-    "## Learning governance candidates (.learnings / promotion / skill extraction)",
-    "### Entry 1",
-    "**Priority**: medium",
-    "**Status**: pending",
-    "**Area**: config",
-    "### Summary",
-    "...",
-    "### Details",
-    "...",
-    "### Suggested Action",
-    "...",
-    "",
-    "## Open loops / next actions",
-    "- ...",
-    "",
-    "## Retrieval tags / keywords",
-    "- ...",
-    "",
-    "## Invariants",
-    "- Always ...",
-    "",
-    "## Derived",
-    "- Next run, ...",
-    "",
-    "Recent tool error signals:",
-    errorHints,
-    "",
-    "INPUT:",
-    "```",
-    clipped,
-    "```",
-  ].join("\n");
-}
-
-function buildReflectionFallbackText(): string {
-  return [
-    "## Context (session background)",
-    `- ${REFLECTION_FALLBACK_MARKER}`,
-    "",
-    "## Decisions (durable)",
-    "- (none captured)",
-    "",
-    "## User model deltas (about the human)",
-    "- (none captured)",
-    "",
-    "## Agent model deltas (about the assistant/system)",
-    "- (none captured)",
-    "",
-    "## Lessons & pitfalls (symptom / cause / fix / prevention)",
-    "- (none captured)",
-    "",
-    "## Learning governance candidates (.learnings / promotion / skill extraction)",
-    "### Entry 1",
-    "**Priority**: medium",
-    "**Status**: triage",
-    "**Area**: config",
-    "### Summary",
-    "Investigate last failed tool execution and decide whether it belongs in .learnings/ERRORS.md.",
-    "### Details",
-    "The reflection pipeline fell back; confirm the failure is reproducible before treating it as a durable error record.",
-    "### Suggested Action",
-    "Reproduce the latest failed tool execution, classify it as triage or error, and then log it with the appropriate tool/file path evidence.",
-    "",
-    "## Open loops / next actions",
-    "- Investigate why embedded reflection generation failed.",
-    "",
-    "## Retrieval tags / keywords",
-    "- memory-reflection",
-    "",
-    "## Invariants",
-    "- (none captured)",
-    "",
-    "## Derived",
-    "- If embedded reflection generation fails again, investigate root cause before trusting any next-run delta.",
-  ].join("\n");
-}
-
-async function generateReflectionText(params: {
-  conversation: string;
-  maxInputChars: number;
-  cfg: unknown;
-  agentId: string;
-  workspaceDir: string;
-  timeoutMs: number;
-  thinkLevel: ReflectionThinkLevel;
-  toolErrorSignals?: ReflectionErrorSignal[];
-  logger?: { info?: (message: string) => void; warn?: (message: string) => void };
-}): Promise<{ text: string; usedFallback: boolean; promptHash: string; error?: string; runner: "embedded" | "cli" | "fallback" }> {
-  const prompt = buildReflectionPrompt(
-    params.conversation,
-    params.maxInputChars,
-    params.toolErrorSignals ?? []
-  );
-  const promptHash = sha256Hex(prompt);
-  const tempSessionFile = join(
-    tmpdir(),
-    `memory-reflection-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`
-  );
-  let reflectionText: string | null = null;
-  const errors: string[] = [];
-  const retryState = { count: 0 };
-  const onRetryLog = (level: "info" | "warn", message: string) => {
-    if (level === "warn") params.logger?.warn?.(message);
-    else params.logger?.info?.(message);
-  };
-
-  try {
-    const result: unknown = await runWithReflectionTransientRetryOnce({
-      scope: "reflection",
-      runner: "embedded",
-      retryState,
-      onLog: onRetryLog,
-      execute: async () => {
-        const runEmbeddedPiAgent = await loadEmbeddedPiRunner();
-        const modelRef = resolveAgentPrimaryModelRef(params.cfg, params.agentId);
-        const { provider, model } = modelRef ? splitProviderModel(modelRef) : {};
-        const embeddedTimeoutMs = Math.max(params.timeoutMs + 5000, 15000);
-
-        return await withTimeout(
-          runEmbeddedPiAgent({
-            sessionId: `reflection-${Date.now()}`,
-            sessionKey: "temp:memory-reflection",
-            agentId: params.agentId,
-            sessionFile: tempSessionFile,
-            workspaceDir: params.workspaceDir,
-            config: params.cfg,
-            prompt,
-            disableTools: true,
-            disableMessageTool: true,
-            timeoutMs: params.timeoutMs,
-            runId: `memory-reflection-${Date.now()}`,
-            bootstrapContextMode: "lightweight",
-            thinkLevel: params.thinkLevel,
-            provider,
-            model,
-          }),
-          embeddedTimeoutMs,
-          "embedded reflection run"
-        );
-      },
-    });
-
-    const payloads = (() => {
-      if (!result || typeof result !== "object") return [];
-      const maybePayloads = (result as Record<string, unknown>).payloads;
-      return Array.isArray(maybePayloads) ? maybePayloads : [];
-    })();
-
-    if (payloads.length > 0) {
-      const firstWithText = payloads.find((p) => {
-        if (!p || typeof p !== "object") return false;
-        const text = (p as Record<string, unknown>).text;
-        return typeof text === "string" && text.trim().length > 0;
-      }) as Record<string, unknown> | undefined;
-      reflectionText = typeof firstWithText?.text === "string" ? firstWithText.text.trim() : null;
-    }
-  } catch (err) {
-    errors.push(`embedded: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
-  } finally {
-    await unlink(tempSessionFile).catch(() => { });
-  }
-
-  if (reflectionText) {
-    return { text: reflectionText, usedFallback: false, promptHash, error: errors[0], runner: "embedded" };
-  }
-
-  try {
-    reflectionText = await runWithReflectionTransientRetryOnce({
-      scope: "reflection",
-      runner: "cli",
-      retryState,
-      onLog: onRetryLog,
-      execute: async () => await runReflectionViaCli({
-        prompt,
-        agentId: params.agentId,
-        workspaceDir: params.workspaceDir,
-        timeoutMs: params.timeoutMs,
-        thinkLevel: params.thinkLevel,
-      }),
-    });
-  } catch (err) {
-    errors.push(`cli: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  if (reflectionText) {
-    return {
-      text: reflectionText,
-      usedFallback: false,
-      promptHash,
-      error: errors.length > 0 ? errors.join(" | ") : undefined,
-      runner: "cli",
-    };
-  }
-
-  return {
-    text: buildReflectionFallbackText(),
-    usedFallback: true,
-    promptHash,
-    error: errors.length > 0 ? errors.join(" | ") : undefined,
-    runner: "fallback",
-  };
 }
 
 // ============================================================================
@@ -1138,84 +444,6 @@ function sanitizeForContext(text: string): string {
 }
 
 // ============================================================================
-// Session Path Helpers
-// ============================================================================
-
-async function sortFileNamesByMtimeDesc(dir: string, fileNames: string[]): Promise<string[]> {
-  const candidates = await Promise.all(
-    fileNames.map(async (name) => {
-      try {
-        const st = await stat(join(dir, name));
-        return { name, mtimeMs: st.mtimeMs };
-      } catch {
-        return null;
-      }
-    })
-  );
-
-  return candidates
-    .filter((x): x is { name: string; mtimeMs: number } => x !== null)
-    .sort((a, b) => (b.mtimeMs - a.mtimeMs) || b.name.localeCompare(a.name))
-    .map((x) => x.name);
-}
-
-function sanitizeFileToken(value: string, fallback: string): string {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 32);
-  return normalized || fallback;
-}
-
-async function findPreviousSessionFile(
-  sessionsDir: string,
-  currentSessionFile?: string,
-  sessionId?: string,
-): Promise<string | undefined> {
-  try {
-    const files = await readdir(sessionsDir);
-    const fileSet = new Set(files);
-
-    // Try recovering the non-reset base file
-    const baseFromReset = currentSessionFile
-      ? stripResetSuffix(basename(currentSessionFile))
-      : undefined;
-    if (baseFromReset && fileSet.has(baseFromReset))
-      return join(sessionsDir, baseFromReset);
-
-    // Try canonical session ID file
-    const trimmedId = sessionId?.trim();
-    if (trimmedId) {
-      const canonicalFile = `${trimmedId}.jsonl`;
-      if (fileSet.has(canonicalFile)) return join(sessionsDir, canonicalFile);
-
-      // Try topic variants
-      const topicVariants = await sortFileNamesByMtimeDesc(
-        sessionsDir,
-        files.filter(
-          (name) =>
-            name.startsWith(`${trimmedId}-topic-`) &&
-            name.endsWith(".jsonl") &&
-            !name.includes(".reset."),
-        )
-      );
-      if (topicVariants.length > 0) return join(sessionsDir, topicVariants[0]);
-    }
-
-    // Fallback to most recent non-reset JSONL
-    if (currentSessionFile) {
-      const nonReset = await sortFileNamesByMtimeDesc(
-        sessionsDir,
-        files.filter((name) => name.endsWith(".jsonl") && !name.includes(".reset."))
-      );
-      if (nonReset.length > 0) return join(sessionsDir, nonReset[0]);
-    }
-  } catch { }
-}
-
-// ============================================================================
 // Markdown Mirror (dual-write)
 // ============================================================================
 
@@ -1315,6 +543,13 @@ const chronicleEnginePlugin = {
     api.logger.info(
       `openclaw-chronicle-engine: remote backend enabled (${config.remoteBackend?.baseURL || "(missing baseURL)"})`
     );
+    if (Array.isArray(config.memoryReflection?.deprecatedIgnoredFields) && config.memoryReflection.deprecatedIgnoredFields.length > 0) {
+      api.logger.warn(
+        `openclaw-chronicle-engine: memoryReflection deprecated/ignored fields configured: ` +
+        `${config.memoryReflection.deprecatedIgnoredFields.join(", ")}; ` +
+        `remote runtime only enqueues backend reflection jobs`
+      );
+    }
 
     // ========================================================================
     // Register Tools
@@ -1686,14 +921,6 @@ const chronicleEnginePlugin = {
       const toReflectionCommandName = (trigger: BackendReflectionTrigger): string =>
         `command:${trigger}`;
 
-      const parseSessionIdFromSessionFile = (sessionFile: string | undefined): string | undefined => {
-        if (!sessionFile) return undefined;
-        const fileName = basename(sessionFile);
-        const stripped = fileName.replace(/\.jsonl(?:\.reset\..+)?$/i, "");
-        if (!stripped || stripped === fileName) return undefined;
-        return stripped;
-      };
-
       const reflectionPromptPlanner = createReflectionPromptPlanner(
         {
           injectMode: reflectionInjectMode,
@@ -1789,63 +1016,18 @@ const chronicleEnginePlugin = {
             ? sessionEntry.sessionId
             : (typeof event?.sessionId === "string" ? event.sessionId : "unknown");
           clearSessionId = currentSessionId;
-          let currentSessionFile = typeof sessionEntry.sessionFile === "string" ? sessionEntry.sessionFile : undefined;
           const runtimeAgentId =
             asNonEmptyString(typeof event?.agentId === "string" ? event.agentId : undefined) ??
             asNonEmptyString(typeof context.agentId === "string" ? context.agentId : undefined);
-          const sourceWorkspaceDir = runtimeAgentId
-            ? (agentWorkspaceMap[runtimeAgentId] || workspaceDir)
-            : workspaceDir;
           const commandSource = typeof context.commandSource === "string" ? context.commandSource : "";
-          const triggerKey = `${trigger}|${sessionKey || "(none)"}|${currentSessionFile || currentSessionId || "unknown"}`;
+          const triggerKey = `${trigger}|${sessionKey || "(none)"}|${currentSessionId || "unknown"}`;
           if (isDuplicateReflectionTrigger(triggerKey)) {
             api.logger.info(`memory-reflection: duplicate trigger skipped; key=${triggerKey}`);
             return;
           }
           api.logger.info(
-            `memory-reflection: ${commandName} enqueue start; sessionKey=${sessionKey || "(none)"}; source=${commandSource || "(unknown)"}; sessionId=${currentSessionId}; sessionFile=${currentSessionFile || "(none)"}`
+            `memory-reflection: ${commandName} enqueue start; sessionKey=${sessionKey || "(none)"}; source=${commandSource || "(unknown)"}; sessionId=${currentSessionId}`
           );
-
-          if ((!currentSessionFile || currentSessionFile.includes(".reset.")) && cfg) {
-            const searchDirs = resolveReflectionSessionSearchDirs({
-              context,
-              cfg,
-              workspaceDir: sourceWorkspaceDir,
-              currentSessionFile,
-              sourceAgentId: runtimeAgentId,
-            });
-            for (const sessionsDir of searchDirs) {
-              const recovered = await findPreviousSessionFile(sessionsDir, currentSessionFile, currentSessionId);
-              if (recovered) {
-                currentSessionFile = recovered;
-                break;
-              }
-            }
-          }
-
-          let captureItems: BackendCaptureItem[] = [];
-          if (currentSessionFile) {
-            const conversation = await readSessionConversationWithResetFallback(currentSessionFile, reflectionMessageCount);
-            if (conversation) {
-              captureItems = parseConversationToCaptureItems(conversation);
-            }
-          }
-          if (captureItems.length === 0 && Array.isArray(event.messages)) {
-            captureItems = parseEventMessagesToCaptureItems(event.messages);
-          }
-          if (captureItems.length === 0) {
-            api.logger.warn(`memory-reflection: ${commandName} no capture payload found; skip enqueue`);
-            return;
-          }
-
-          if (config.selfImprovement?.enabled !== false && config.selfImprovement?.beforeResetNote !== false) {
-            if (Array.isArray(event.messages)) {
-              const exists = event.messages.some((m: unknown) => typeof m === "string" && m.includes(SELF_IMPROVEMENT_NOTE_PREFIX));
-              if (!exists) {
-                event.messages.push(buildSelfImprovementResetNote());
-              }
-            }
-          }
 
           const resolvedBackendCtx = resolveBackendCallContext(
             mergeContextSources(event, context, {
@@ -1866,6 +1048,39 @@ const chronicleEnginePlugin = {
             );
             return;
           }
+
+          let captureItems: BackendCaptureItem[] = [];
+          try {
+            const reflectionSource = await memoryBackendClient.loadReflectionSource(
+              resolvedBackendCtx.context,
+              {
+                trigger,
+                maxMessages: reflectionMessageCount,
+              }
+            );
+            if (Array.isArray(reflectionSource.messages) && reflectionSource.messages.length > 0) {
+              captureItems = reflectionSource.messages;
+            }
+          } catch (err) {
+            api.logger.warn(`memory-reflection: ${commandName} source load failed: ${String(err)}`);
+          }
+          if (captureItems.length === 0 && Array.isArray(event.messages)) {
+            captureItems = parseEventMessagesToCaptureItems(event.messages);
+          }
+          if (captureItems.length === 0) {
+            api.logger.warn(`memory-reflection: ${commandName} no capture payload found; skip enqueue`);
+            return;
+          }
+
+          if (config.selfImprovement?.enabled !== false && config.selfImprovement?.beforeResetNote !== false) {
+            if (Array.isArray(event.messages)) {
+              const exists = event.messages.some((m: unknown) => typeof m === "string" && m.includes(SELF_IMPROVEMENT_NOTE_PREFIX));
+              if (!exists) {
+                event.messages.push(buildSelfImprovementResetNote());
+              }
+            }
+          }
+
           const enqueueInput = {
             trigger,
             messages: captureItems.slice(0, 256),
@@ -1912,11 +1127,10 @@ const chronicleEnginePlugin = {
       api.on("before_reset", async (event, ctx) => {
         try {
           const trigger = normalizeReflectionTrigger(event.reason);
-          const sessionFile = typeof event.sessionFile === "string" ? event.sessionFile : undefined;
-          const sessionId = parseSessionIdFromSessionFile(sessionFile) ?? "unknown";
           await runMemoryReflection({
             action: trigger,
             sessionKey: typeof ctx.sessionKey === "string" ? ctx.sessionKey : "",
+            sessionId: typeof ctx.sessionId === "string" ? ctx.sessionId : "unknown",
             timestamp: Date.now(),
             messages: Array.isArray(event.messages) ? event.messages : [],
             context: {
@@ -1924,8 +1138,7 @@ const chronicleEnginePlugin = {
               workspaceDir: ctx.workspaceDir,
               commandSource: `lifecycle:before_reset:${trigger}`,
               sessionEntry: {
-                sessionId,
-                sessionFile,
+                sessionId: typeof ctx.sessionId === "string" ? ctx.sessionId : "unknown",
               },
             },
           });
@@ -2011,6 +1224,9 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     injectModeRaw === "inheritance-only" || injectModeRaw === "inheritance+derived"
       ? injectModeRaw
       : "inheritance+derived";
+  const deprecatedIgnoredReflectionFields = memoryReflectionRaw
+    ? ["agentId", "maxInputChars", "timeoutMs", "thinkLevel"].filter((field) => memoryReflectionRaw[field] !== undefined)
+    : [];
   const memoryReflectionRecallRaw = typeof memoryReflectionRaw?.recall === "object" && memoryReflectionRaw.recall !== null
     ? memoryReflectionRaw.recall as Record<string, unknown>
     : null;
@@ -2069,13 +1285,14 @@ export function parsePluginConfig(value: unknown): PluginConfig {
         injectMode: reflectionInjectMode,
         agentId: asNonEmptyString(memoryReflectionRaw.agentId),
         messageCount: reflectionMessageCount,
-        maxInputChars: parsePositiveInt(memoryReflectionRaw.maxInputChars) ?? DEFAULT_REFLECTION_MAX_INPUT_CHARS,
-        timeoutMs: parsePositiveInt(memoryReflectionRaw.timeoutMs) ?? DEFAULT_REFLECTION_TIMEOUT_MS,
+        maxInputChars: parsePositiveInt(memoryReflectionRaw.maxInputChars),
+        timeoutMs: parsePositiveInt(memoryReflectionRaw.timeoutMs),
         thinkLevel: (() => {
           const raw = memoryReflectionRaw.thinkLevel;
           if (raw === "off" || raw === "minimal" || raw === "low" || raw === "medium" || raw === "high") return raw;
-          return DEFAULT_REFLECTION_THINK_LEVEL;
+          return undefined;
         })(),
+        deprecatedIgnoredFields: deprecatedIgnoredReflectionFields,
         errorReminderMaxEntries: parsePositiveInt(memoryReflectionRaw.errorReminderMaxEntries) ?? DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES,
         dedupeErrorSignals: memoryReflectionRaw.dedupeErrorSignals !== false,
         recall: {
@@ -2094,9 +1311,10 @@ export function parsePluginConfig(value: unknown): PluginConfig {
         injectMode: "inheritance+derived",
         agentId: undefined,
         messageCount: reflectionMessageCount,
-        maxInputChars: DEFAULT_REFLECTION_MAX_INPUT_CHARS,
-        timeoutMs: DEFAULT_REFLECTION_TIMEOUT_MS,
-        thinkLevel: DEFAULT_REFLECTION_THINK_LEVEL,
+        maxInputChars: undefined,
+        timeoutMs: undefined,
+        thinkLevel: undefined,
+        deprecatedIgnoredFields: [],
         errorReminderMaxEntries: DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES,
         dedupeErrorSignals: DEFAULT_REFLECTION_DEDUPE_ERROR_SIGNALS,
         recall: {

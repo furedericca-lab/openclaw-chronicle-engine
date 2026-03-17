@@ -8,15 +8,12 @@
     "openclaw",
     "openclaw-plugin",
     "memory",
-    "lancedb",
-    "vector-search",
-    "bm25",
-    "hybrid-retrieval",
-    "rerank",
     "ai-memory",
     "long-term-memory",
-    "chunking",
-    "long-context"
+    "long-context",
+    "remote-memory",
+    "context-orchestration",
+    "distill"
   ],
   "repository": {
     "type": "git",
@@ -25,9 +22,7 @@
   "author": "win4r",
   "license": "MIT",
   "dependencies": {
-    "@lancedb/lancedb": "^0.26.2",
-    "@sinclair/typebox": "0.34.48",
-    "openai": "^6.21.0"
+    "@sinclair/typebox": "0.34.48"
   },
   "openclaw": {
     "extensions": [
@@ -35,7 +30,7 @@
     ]
   },
   "scripts": {
-    "test": "node --test --test-name-pattern='.' test/backend-client-retry-idempotency.test.mjs test/config-session-strategy-migration.test.mjs test/memory-reflection.test.mjs test/query-expander.test.mjs test/remote-backend-shell-integration.test.mjs test/self-improvement.test.mjs test/session-recovery-paths.test.mjs"
+    "test": "node --test --test-name-pattern='.' test/backend-client-retry-idempotency.test.mjs test/config-session-strategy-migration.test.mjs test/memory-reflection.test.mjs test/query-expander.test.mjs test/remote-backend-shell-integration.test.mjs test/self-improvement.test.mjs"
   },
   "devDependencies": {
     "commander": "^14.0.0",

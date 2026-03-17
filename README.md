@@ -168,6 +168,7 @@ No, but the answer needs precision:
 | `src/store.ts` | local persistence authority removed |
 | `src/retriever.ts` | local retrieval authority removed |
 | `src/embedder.ts` | local embedding authority removed |
+| `src/chunker.ts` | unused local chunking helper removed after import-proof showed no active runtime or test dependency |
 | `src/tools.ts` | old local-authority tool path removed |
 | `src/migrate.ts` | old local migration path removed |
 | `src/scopes.ts` | local scope authority removed |
@@ -183,6 +184,8 @@ No, but the answer needs precision:
 | `src/adaptive-retrieval.ts` | prompt-side retrieval trigger heuristic |
 | `src/prompt-local-auto-recall-selection.ts` | prompt-local post-selection over backend rows |
 | `src/prompt-local-topk-setwise-selection.ts` | prompt-local utility used by retained local selection seams |
+| `src/query-expander.ts` | retained test/reference lexical helper; not imported by the supported runtime |
+| `src/reflection-store.ts` | retained test/reference reflection-shaping helper; not imported by the supported runtime |
 | `test/helpers/reflection-recall-reference.ts` | retained test/reference helper, not active backend authority |
 | `test/helpers/reflection-recall-selection-reference.ts` | retained downstream test/reference selection helper |
 
@@ -234,11 +237,15 @@ That means:
 | Diversity / MMR | Yes | Backend-owned |
 | Auto-recall prompt injection | Yes | Local orchestration over backend recall |
 | Reflection recall + enqueue | Yes | Backend-owned recall/jobs, local prompt planning |
+| Reflection enqueue source | Yes | Backend-owned transcript-backed source resolution |
 | Distill job enqueue + polling | Yes | Backend-owned async job surface |
 | Distill inline-message cleaning + artifact persistence | Yes | Backend-owned execution path |
 | Distill `session-transcript` source | Yes | Backend-owned transcript persistence + async distill execution |
 | `memory_store` / `memory_update` / `memory_forget` | Yes | Remote-backed |
 | `memory_list` / `memory_stats` | Yes | Optional management tools |
+| `memory_reflection_status` | Yes | Optional management tool for caller-scoped backend reflection jobs |
+| `memory_distill_enqueue` / `memory_distill_status` | Yes | Optional management tools for caller-scoped backend distill jobs |
+| `memory_recall_debug` | Yes | Optional management/debug tool for explicit recall trace inspection |
 | Local `memory-pro` CLI | No | Removed |
 | Supported local-authority runtime | No | Removed |
 
@@ -271,6 +278,7 @@ Important boundary:
 
 - ordinary recall DTOs do **not** expose raw score-breakdown internals
 - debug trace routes exist so debugging gets richer visibility without bloating runtime contracts
+- `memory_recall_debug` is the management-gated tool surface for those debug routes
 
 ## 11. Install
 
@@ -339,6 +347,17 @@ Required fields:
 | `maxRetries` | No | Transport retry count |
 | `retryBackoffMs` | No | Retry backoff |
 
+Compatibility note:
+
+- `sessionMemory.enabled` still maps to `sessionStrategy`
+- `sessionMemory.messageCount` still maps to `memoryReflection.messageCount`
+- `memoryReflection.agentId`
+- `memoryReflection.maxInputChars`
+- `memoryReflection.timeoutMs`
+- `memoryReflection.thinkLevel`
+
+The `sessionMemory.*` mappings remain for migration compatibility. The listed `memoryReflection.*` fields remain parseable for compatibility, emit a startup warning when configured, and are ignored in the remote-backend runtime.
+
 ## 13. Tools
 
 ### Core tools
@@ -355,15 +374,23 @@ Enable `enableManagementTools: true` to expose:
 
 - `memory_list`
 - `memory_stats`
+- `memory_reflection_status`
+- `memory_distill_enqueue`
+- `memory_distill_status`
+- `memory_recall_debug`
 - `self_improvement_review`
 - `self_improvement_extract_skill`
 
-### Backend client job surfaces
+Management/debug tools stay caller-scoped and require runtime principal identity. They are not available as anonymous local fallbacks.
+
+### Backend client management/debug surfaces
 
 The plugin client also has backend job adapters for:
 
+- reflection source loading
 - reflection jobs
 - distill jobs
+- recall debug traces
 
 ## 14. Repository Layout
 
@@ -374,6 +401,8 @@ docs/archive/             historical plans and closed scopes
 src/backend-client/*      transport + DTO adapter
 src/backend-tools.ts      tool bridge
 src/context/*             prompt-time orchestration
+src/query-expander.ts     retained test/reference lexical helper only
+src/reflection-store.ts   retained test/reference reflection helper only
 test/*                    plugin-side tests
 ```
 
@@ -409,7 +438,15 @@ It is not backend ownership.
 
 ### “Is `setwise-v2` a leftover backend implementation in TS?”
 
-No. It is treated as a prompt-local seam because it only shapes already-returned rows for prompt injection. It does not redefine backend authority or API contracts.
+No. It is a prompt-local lexical/coverage selector over ordinary backend-returned rows. It only shapes prompt injection and does not recreate backend retrieval, rerank, or embedding authority.
+
+### “Do `memoryReflection.agentId` / `maxInputChars` / `timeoutMs` / `thinkLevel` still control reflection execution?”
+
+No. They are parseable compatibility fields only. The supported runtime path is backend reflection enqueue, and those fields are ignored.
+
+### “Are `src/query-expander.ts` and `src/reflection-store.ts` still runtime authority modules?”
+
+No. They remain only as test/reference helpers. The supported runtime does not import them.
 
 ### “Does distill still mean running the old `jsonl_distill.py` sidecar?”
 

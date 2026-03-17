@@ -168,6 +168,7 @@ distill 请求
 | `src/store.ts` | 删除本地持久化权威 |
 | `src/retriever.ts` | 删除本地 retrieval 权威 |
 | `src/embedder.ts` | 删除本地 embedding 权威 |
+| `src/chunker.ts` | 经 import-proof 确认后删除；它已不再被活动运行时或测试依赖 |
 | `src/tools.ts` | 删除旧本地权威工具路径 |
 | `src/migrate.ts` | 删除旧本地迁移路径 |
 | `src/scopes.ts` | 删除本地 scope 权威 |
@@ -183,6 +184,8 @@ distill 请求
 | `src/adaptive-retrieval.ts` | prompt 侧 recall 触发启发式 |
 | `src/prompt-local-auto-recall-selection.ts` | 对 backend rows 做 prompt-local post-selection |
 | `src/prompt-local-topk-setwise-selection.ts` | 服务于保留本地选择 seam 的 prompt-local 工具函数 |
+| `src/query-expander.ts` | 保留的 test/reference 词汇扩展 helper；当前受支持运行时不会导入 |
+| `src/reflection-store.ts` | 保留的 test/reference reflection 组装 helper；当前受支持运行时不会导入 |
 | `test/helpers/reflection-recall-reference.ts` | 保留的 test/reference helper，不是 active backend authority |
 | `test/helpers/reflection-recall-selection-reference.ts` | 保留的下游 test/reference 选择 helper |
 
@@ -234,11 +237,15 @@ distill 请求
 | diversity / MMR | 支持 | backend 权威 |
 | auto-recall prompt 注入 | 支持 | 本地编排 + backend recall |
 | reflection recall + enqueue | 支持 | backend recall/jobs + 本地 prompt 规划 |
+| reflection enqueue source | 支持 | backend 持有的 transcript-backed source resolution |
 | distill job enqueue + 轮询 | 支持 | backend 权威异步 job 面 |
 | distill inline-messages 清洗 + artifact 持久化 | 支持 | backend 权威执行路径 |
 | distill `session-transcript` source | 支持 | backend 持久化 transcript + 异步 distill 执行 |
 | `memory_store` / `memory_update` / `memory_forget` | 支持 | 远程后端工具 |
 | `memory_list` / `memory_stats` | 支持 | 可选管理工具 |
+| `memory_reflection_status` | 支持 | 可选管理工具，用于 caller-scoped 的 backend reflection job |
+| `memory_distill_enqueue` / `memory_distill_status` | 支持 | 可选管理工具，用于 caller-scoped 的 backend distill job |
+| `memory_recall_debug` | 支持 | 可选管理/debug 工具，用于显式 recall trace 检查 |
 | 本地 `memory-pro` CLI | 不支持 | 已移除 |
 | 受支持的本地权威运行时 | 不支持 | 已移除 |
 
@@ -271,6 +278,7 @@ distill 请求
 
 - 普通 recall DTO 不暴露厚重 score-breakdown 内部字段
 - debug trace route 的存在，是为了在不污染运行时契约的前提下补足调试能力
+- `memory_recall_debug` 是这些 debug route 对应的 management-gated tool 面
 
 ## 11. 安装
 
@@ -339,6 +347,17 @@ openclaw config get plugins.slots.memory
 | `maxRetries` | 否 | 传输层重试次数 |
 | `retryBackoffMs` | 否 | 重试回退时间 |
 
+兼容性说明：
+
+- `sessionMemory.enabled` 仍映射到 `sessionStrategy`
+- `sessionMemory.messageCount` 仍映射到 `memoryReflection.messageCount`
+- `memoryReflection.agentId`
+- `memoryReflection.maxInputChars`
+- `memoryReflection.timeoutMs`
+- `memoryReflection.thinkLevel`
+
+`sessionMemory.*` 映射仍然只用于迁移兼容。上面列出的 `memoryReflection.*` 字段则是“可解析但忽略”的兼容字段：配置时会触发启动告警，在 remote-backend runtime 下不会改变 reflection 执行行为。
+
 ## 13. 工具
 
 ### 核心工具
@@ -355,15 +374,23 @@ openclaw config get plugins.slots.memory
 
 - `memory_list`
 - `memory_stats`
+- `memory_reflection_status`
+- `memory_distill_enqueue`
+- `memory_distill_status`
+- `memory_recall_debug`
 - `self_improvement_review`
 - `self_improvement_extract_skill`
 
-### Backend client job 面
+这些 management/debug 工具仍然受 caller scope 和运行时主体身份约束，不提供匿名本地 fallback。
+
+### Backend client 管理/调试面
 
 插件侧 backend client 还提供：
 
+- reflection source loading
 - reflection jobs
 - distill jobs
+- recall debug traces
 
 ## 14. 仓库结构
 
@@ -374,6 +401,8 @@ docs/archive/             历史计划与已关闭 scope
 src/backend-client/*      传输 + DTO 适配
 src/backend-tools.ts      tool bridge
 src/context/*             prompt-time orchestration
+src/query-expander.ts     仅保留为 test/reference 词汇 helper
+src/reflection-store.ts   仅保留为 test/reference reflection helper
 test/*                    插件侧测试
 ```
 
@@ -411,9 +440,17 @@ cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -
 
 不是。它现在被定义成 `prompt-local seam`：
 
-- 只对 backend 已经返回的 rows 做 prompt 注入层的二次裁剪
+- 只对 backend 已经返回的普通 rows 做 lexical/coverage 导向的 prompt 注入层二次裁剪
 - 不改变 backend authority
-- 不改变 `/v1/recall/*` 契约
+- 不重建 backend retrieval / rerank / embedding authority
+
+### “`memoryReflection.agentId` / `maxInputChars` / `timeoutMs` / `thinkLevel` 现在还会控制 reflection 执行吗？”
+
+不会。它们现在只是兼容字段，仍可解析，但在当前受支持运行时里会被忽略。真正生效的路径只有 backend reflection enqueue。
+
+### “`src/query-expander.ts` 和 `src/reflection-store.ts` 还是运行时权威模块吗？”
+
+不是。它们现在只保留为 test/reference helper，当前受支持运行时不会导入它们。
 
 ### “distill 现在是不是还靠旧的 `jsonl_distill.py` sidecar？”
 

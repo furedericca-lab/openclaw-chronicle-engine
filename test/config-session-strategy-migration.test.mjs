@@ -75,4 +75,28 @@ describe("sessionStrategy legacy compatibility mapping", () => {
     });
     assert.equal(parsed.autoRecallSelectionMode, "setwise-v2");
   });
+
+  it("keeps deprecated local reflection-generation fields parseable but marks them ignored", () => {
+    const parsed = parsePluginConfig({
+      ...baseConfig(),
+      sessionStrategy: "memoryReflection",
+      memoryReflection: {
+        agentId: "memory-distiller",
+        maxInputChars: 16000,
+        timeoutMs: 15000,
+        thinkLevel: "high",
+      },
+    });
+
+    assert.equal(parsed.memoryReflection.agentId, "memory-distiller");
+    assert.equal(parsed.memoryReflection.maxInputChars, 16000);
+    assert.equal(parsed.memoryReflection.timeoutMs, 15000);
+    assert.equal(parsed.memoryReflection.thinkLevel, "high");
+    assert.deepEqual(parsed.memoryReflection.deprecatedIgnoredFields, [
+      "agentId",
+      "maxInputChars",
+      "timeoutMs",
+      "thinkLevel",
+    ]);
+  });
 });

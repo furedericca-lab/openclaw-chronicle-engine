@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +17,7 @@ const jiti = jitiFactory(import.meta.url, {
 
 const pluginModule = jiti("../index.ts");
 const memoryLanceDBProPlugin = pluginModule.default || pluginModule;
-const { readSessionConversationWithResetFallback, parsePluginConfig } = pluginModule;
+const { parsePluginConfig } = pluginModule;
 const { getDisplayCategoryTag } = jiti("../src/reflection-metadata.ts");
 const {
   classifyReflectionRetry,
@@ -57,17 +57,6 @@ const {
 } = jiti("../src/reflection-item-store.ts");
 const { buildReflectionMappedMetadata } = jiti("../src/reflection-mapped-metadata.ts");
 const { REFLECTION_FALLBACK_SCORE_FACTOR, computeReflectionScore } = jiti("../src/reflection-ranking.ts");
-
-function messageLine(role, text, ts) {
-  return JSON.stringify({
-    type: "message",
-    timestamp: ts,
-    message: {
-      role,
-      content: [{ type: "text", text }],
-    },
-  });
-}
 
 function makeEntry({ timestamp, metadata, category = "reflection", scope = "global" }) {
   return {
@@ -139,57 +128,6 @@ function createPluginApiHarness({ pluginConfig, resolveRoot }) {
 }
 
 describe("memory reflection", () => {
-  describe("command:new/reset session fallback helper", () => {
-    let workDir;
-
-    beforeEach(() => {
-      workDir = mkdtempSync(path.join(tmpdir(), "reflection-fallback-test-"));
-    });
-
-    afterEach(() => {
-      rmSync(workDir, { recursive: true, force: true });
-    });
-
-    it("falls back to latest reset snapshot when current session has only slash/control messages", async () => {
-      const sessionsDir = path.join(workDir, "sessions");
-      const sessionPath = path.join(sessionsDir, "abc123.jsonl");
-      const resetOldPath = `${sessionPath}.reset.1700000000`;
-      const resetNewPath = `${sessionPath}.reset.1700000001`;
-      mkdirSync(sessionsDir, { recursive: true });
-
-      writeFileSync(
-        sessionPath,
-        [messageLine("user", "/new", 1), messageLine("assistant", "/note self-improvement (before reset): ...", 2)].join("\n") + "\n",
-        "utf-8"
-      );
-      writeFileSync(
-        resetOldPath,
-        [messageLine("user", "old reset snapshot", 3), messageLine("assistant", "old reset reply", 4)].join("\n") + "\n",
-        "utf-8"
-      );
-      writeFileSync(
-        resetNewPath,
-        [
-          messageLine("user", "Please keep responses concise and factual.", 5),
-          messageLine("assistant", "Acknowledged. I will keep responses concise and factual.", 6),
-        ].join("\n") + "\n",
-        "utf-8"
-      );
-
-      const oldTime = new Date("2024-01-01T00:00:00Z");
-      const newTime = new Date("2024-01-01T00:00:10Z");
-      utimesSync(resetOldPath, oldTime, oldTime);
-      utimesSync(resetNewPath, newTime, newTime);
-
-      const conversation = await readSessionConversationWithResetFallback(sessionPath, 10);
-      assert.ok(conversation);
-      assert.match(conversation, /user: Please keep responses concise and factual\./);
-      assert.match(conversation, /assistant: Acknowledged\. I will keep responses concise and factual\./);
-      assert.doesNotMatch(conversation, /old reset snapshot/);
-      assert.doesNotMatch(conversation, /^user:\s*\/new/m);
-    });
-  });
-
   describe("adaptive retrieval control prompt skip gate", () => {
     it("skips session-start boilerplate containing /new or /reset", () => {
       const prompt = "A new session was started via /new or /reset. Keep this in mind.";
@@ -1289,7 +1227,7 @@ describe("memory reflection", () => {
       assert.ok(selected.some((row) => row.entry.id === "pref-1"));
     });
 
-    it("suppresses semantic redundancy while preserving strongest top1", () => {
+    it("ignores vector hints and still relies on lexical duplicate suppression", () => {
       const now = Date.UTC(2026, 2, 8, 12, 0, 0);
       const day = 24 * 60 * 60 * 1000;
       const rows = [
@@ -1304,21 +1242,21 @@ describe("memory reflection", () => {
         }),
         makeRetrievalResult({
           id: "sem-2",
-          text: "Maintain pre-restart safeguards for high-impact daemons.",
+          text: "Use rollback checklist before restarting critical service.",
           score: 0.989,
           category: "fact",
           scope: "global",
           timestamp: now - 1 * day,
-          vector: [0.995, 0.005, 0, 0],
+          vector: [0, 1, 0, 0],
         }),
         makeRetrievalResult({
           id: "sem-3",
-          text: "Record recovery expectations before applying config edits.",
+          text: "Use rollback checklist before restarting critical systems.",
           score: 0.987,
           category: "fact",
           scope: "global",
           timestamp: now - 1 * day,
-          vector: [0.996, 0.004, 0, 0],
+          vector: [0, 0, 1, 0],
         }),
         makeRetrievalResult({
           id: "decision-1",
@@ -1349,7 +1287,7 @@ describe("memory reflection", () => {
       assert.ok(selected.some((row) => row.entry.id === "pref-1"));
     });
 
-    it("keeps deterministic output under reversed order when semantic penalties are active", () => {
+    it("keeps deterministic output under reversed order even when vectors are present but ignored", () => {
       const now = Date.UTC(2026, 2, 8, 12, 0, 0);
       const day = 24 * 60 * 60 * 1000;
       const rows = [
@@ -1364,12 +1302,12 @@ describe("memory reflection", () => {
         }),
         makeRetrievalResult({
           id: "sem-2",
-          text: "Keep safety checklist in place ahead of daemon restarts.",
+          text: "Store rollback check before service restarts.",
           score: 0.983,
           category: "fact",
           scope: "global",
           timestamp: now - 1 * day,
-          vector: [0.998, 0.002, 0, 0],
+          vector: [0, 1, 0, 0],
         }),
         makeRetrievalResult({
           id: "decision-1",

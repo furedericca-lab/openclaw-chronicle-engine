@@ -13,8 +13,9 @@ use crate::{
         validate_enqueue_distill_job_request, validate_enqueue_reflection_job_request,
         validate_list_request, validate_recall_generic_request,
         validate_recall_reflection_request, validate_stats_request, validate_store_request,
-        validate_update_request, Actor, AppendSessionTranscriptRequest, DeleteRequest,
-        EnqueueDistillJobRequest, EnqueueReflectionJobRequest, HealthResponse, ListRequest,
+        validate_reflection_source_request, validate_update_request, Actor,
+        AppendSessionTranscriptRequest, DeleteRequest, EnqueueDistillJobRequest,
+        EnqueueReflectionJobRequest, HealthResponse, ListRequest, ReflectionSourceRequest,
         Principal, RecallGenericDebugResponse, RecallGenericRequest,
         RecallReflectionDebugResponse, RecallReflectionRequest, StatsRequest, StoreRequest,
         UpdateRequest,
@@ -55,6 +56,7 @@ pub fn build_app(config: AppConfig) -> anyhow::Result<Router> {
         .route("/v1/memories/delete", post(delete_memories))
         .route("/v1/memories/list", post(list_memories))
         .route("/v1/memories/stats", post(memory_stats))
+        .route("/v1/reflection/source", post(load_reflection_source))
         .route("/v1/reflection/jobs", post(enqueue_reflection_job))
         .route("/v1/distill/jobs", post(enqueue_distill_job))
         .route(
@@ -245,6 +247,18 @@ async fn memory_stats(
     validate_stats_request(&req)?;
     ensure_actor_matches_context(&req.actor, &auth)?;
     let response = state.memory_repo.stats(&req.actor).await?;
+    Ok(Json(response))
+}
+
+async fn load_reflection_source(
+    State(state): State<AppState>,
+    Extension(auth): Extension<RuntimeAuthContext>,
+    payload: Result<Json<ReflectionSourceRequest>, JsonRejection>,
+) -> AppResult<Json<crate::models::ReflectionSourceResponse>> {
+    let req = decode_json(payload)?;
+    validate_reflection_source_request(&req)?;
+    ensure_actor_matches_context(&req.actor, &auth)?;
+    let response = state.job_store.load_reflection_source(&req)?;
     Ok(Json(response))
 }
 

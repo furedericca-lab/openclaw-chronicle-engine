@@ -7,7 +7,15 @@ import {
   type RuntimeContextDefaults,
 } from "./backend-client/runtime-context.js";
 import { MemoryBackendClientError } from "./backend-client/client.js";
-import type { MemoryBackendClient, MemoryCategory } from "./backend-client/types.js";
+import type {
+  BackendCaptureItem,
+  BackendRetrievalTrace,
+  DistillMode,
+  DistillPersistMode,
+  MemoryBackendClient,
+  MemoryCategory,
+  ReflectionRecallMode,
+} from "./backend-client/types.js";
 import {
   registerSelfImprovementExtractSkillTool,
   registerSelfImprovementLogTool,
@@ -23,6 +31,13 @@ const MEMORY_CATEGORIES = [
   "reflection",
   "other",
 ] as const;
+
+const MESSAGE_ROLES = ["user", "assistant", "system"] as const;
+const DISTILL_MODES = ["session-lessons", "governance-candidates"] as const;
+const DISTILL_SOURCE_KINDS = ["inline-messages", "session-transcript"] as const;
+const DISTILL_PERSIST_MODES = ["artifacts-only", "persist-memory-rows"] as const;
+const DEBUG_RECALL_CHANNELS = ["generic", "reflection"] as const;
+const REFLECTION_DEBUG_MODES = ["invariant-only", "invariant+derived"] as const;
 
 export interface BackendToolRegistrationOptions {
   enableManagementTools?: boolean;
@@ -46,6 +61,10 @@ export function registerRemoteMemoryTools(
   registerMemoryUpdateTool(api, context);
 
   if (options.enableManagementTools) {
+    registerMemoryReflectionStatusTool(api, context);
+    registerMemoryDistillEnqueueTool(api, context);
+    registerMemoryDistillStatusTool(api, context);
+    registerMemoryRecallDebugTool(api, context);
     registerMemoryStatsTool(api, context);
     registerMemoryListTool(api, context);
   }
@@ -430,6 +449,268 @@ function registerMemoryListTool(
   );
 }
 
+function registerMemoryDistillEnqueueTool(
+  api: OpenClawPluginApi,
+  context: BackendToolRegistrationContext
+) {
+  api.registerTool(
+    (toolCtx) => ({
+      name: "memory_distill_enqueue",
+      label: "Memory Distill Enqueue",
+      description: "Enqueue a backend-native distill job for inline messages or a caller-scoped session transcript.",
+      parameters: Type.Object({
+        mode: stringEnum(DISTILL_MODES),
+        sourceKind: stringEnum(DISTILL_SOURCE_KINDS),
+        persistMode: stringEnum(DISTILL_PERSIST_MODES),
+        messages: Type.Optional(
+          Type.Array(
+            Type.Object({
+              role: stringEnum(MESSAGE_ROLES),
+              text: Type.String({ description: "Message text to distill." }),
+            })
+          )
+        ),
+        sessionKey: Type.Optional(Type.String({ description: "Session transcript key when sourceKind=session-transcript." })),
+        sessionId: Type.Optional(Type.String({ description: "Optional runtime session id when sourceKind=session-transcript." })),
+        maxMessages: Type.Optional(Type.Number({ description: "Optional cap on transcript messages included in distill." })),
+        chunkChars: Type.Optional(Type.Number({ description: "Optional text chunk size in characters." })),
+        chunkOverlapMessages: Type.Optional(Type.Number({ description: "Optional overlap in messages between chunks." })),
+        maxArtifacts: Type.Optional(Type.Number({ description: "Optional cap on emitted artifacts." })),
+      }),
+      async execute(_toolCallId, params) {
+        const {
+          mode,
+          sourceKind,
+          persistMode,
+          messages,
+          sessionKey,
+          sessionId,
+          maxMessages,
+          chunkChars,
+          chunkOverlapMessages,
+          maxArtifacts,
+        } = params as {
+          mode: DistillMode;
+          sourceKind: "inline-messages" | "session-transcript";
+          persistMode: DistillPersistMode;
+          messages?: BackendCaptureItem[];
+          sessionKey?: string;
+          sessionId?: string;
+          maxMessages?: number;
+          chunkChars?: number;
+          chunkOverlapMessages?: number;
+          maxArtifacts?: number;
+        };
+
+        const source = buildDistillSource({
+          sourceKind,
+          messages,
+          sessionKey,
+          sessionId,
+        });
+        if ("error" in source) {
+          return {
+            content: [{ type: "text", text: source.message }],
+            details: { error: source.error },
+          };
+        }
+
+        try {
+          const ctx = buildToolCallContext(toolCtx, context.runtimeDefaults);
+          const response = await context.backendClient.enqueueDistillJob(ctx, {
+            mode,
+            source,
+            options: {
+              persistMode,
+              maxMessages: normalizeOptionalInt(maxMessages, 1, 10_000),
+              chunkChars: normalizeOptionalInt(chunkChars, 128, 1_000_000),
+              chunkOverlapMessages: normalizeOptionalInt(chunkOverlapMessages, 0, 10_000),
+              maxArtifacts: normalizeOptionalInt(maxArtifacts, 1, 10_000),
+            },
+          });
+          const sourceSummary = describeDistillSource(source);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Distill job enqueued: ${response.jobId} (${response.status})\nSource: ${sourceSummary}`,
+              },
+            ],
+            details: {
+              jobId: response.jobId,
+              status: response.status,
+              mode,
+              persistMode,
+              sourceKind: source.kind,
+              sourceSummary,
+            },
+          };
+        } catch (error) {
+          return backendToolError("Distill enqueue failed", error);
+        }
+      },
+    }),
+    { name: "memory_distill_enqueue" }
+  );
+}
+
+function registerMemoryReflectionStatusTool(
+  api: OpenClawPluginApi,
+  context: BackendToolRegistrationContext
+) {
+  api.registerTool(
+    (toolCtx) => ({
+      name: "memory_reflection_status",
+      label: "Memory Reflection Status",
+      description: "Inspect a caller-scoped backend reflection job by id.",
+      parameters: Type.Object({
+        jobId: Type.String({ description: "Reflection job id returned by the reflection enqueue path." }),
+      }),
+      async execute(_toolCallId, params) {
+        const { jobId } = params as { jobId: string };
+        try {
+          const ctx = buildToolCallContext(toolCtx, context.runtimeDefaults);
+          const status = await context.backendClient.getReflectionJobStatus(ctx, { jobId });
+          const lines = [
+            `Reflection job ${status.jobId}: ${status.status}`,
+          ];
+          if (status.persisted !== undefined) {
+            lines.push(`Persisted: ${status.persisted ? "yes" : "no"}`);
+          }
+          if (status.memoryCount !== undefined) {
+            lines.push(`Memory rows: ${status.memoryCount}`);
+          }
+          if (status.error) {
+            lines.push(`Error: ${status.error.code} (${status.error.retryable ? "retryable" : "non-retryable"})`);
+          }
+          return {
+            content: [{ type: "text", text: lines.join("\n") }],
+            details: status,
+          };
+        } catch (error) {
+          return backendToolError("Reflection status lookup failed", error);
+        }
+      },
+    }),
+    { name: "memory_reflection_status" }
+  );
+}
+
+function registerMemoryDistillStatusTool(
+  api: OpenClawPluginApi,
+  context: BackendToolRegistrationContext
+) {
+  api.registerTool(
+    (toolCtx) => ({
+      name: "memory_distill_status",
+      label: "Memory Distill Status",
+      description: "Inspect a backend-native distill job by id.",
+      parameters: Type.Object({
+        jobId: Type.String({ description: "Distill job id returned by memory_distill_enqueue." }),
+      }),
+      async execute(_toolCallId, params) {
+        const { jobId } = params as { jobId: string };
+        try {
+          const ctx = buildToolCallContext(toolCtx, context.runtimeDefaults);
+          const status = await context.backendClient.getDistillJobStatus(ctx, { jobId });
+          const lines = [
+            `Distill job ${status.jobId}: ${status.status}`,
+            `Mode: ${status.mode}`,
+            `Source: ${status.sourceKind}`,
+            `Created: ${status.createdAt}`,
+            `Updated: ${status.updatedAt}`,
+          ];
+          if (status.result) {
+            lines.push(
+              `Result: artifacts=${status.result.artifactCount}, persistedMemoryRows=${status.result.persistedMemoryCount}`
+            );
+            if (status.result.warnings.length > 0) {
+              lines.push(`Warnings: ${status.result.warnings.join(" | ")}`);
+            }
+          }
+          if (status.error) {
+            lines.push(`Error: ${status.error.code} (${status.error.retryable ? "retryable" : "non-retryable"})`);
+          }
+          return {
+            content: [{ type: "text", text: lines.join("\n") }],
+            details: status,
+          };
+        } catch (error) {
+          return backendToolError("Distill status lookup failed", error);
+        }
+      },
+    }),
+    { name: "memory_distill_status" }
+  );
+}
+
+function registerMemoryRecallDebugTool(
+  api: OpenClawPluginApi,
+  context: BackendToolRegistrationContext
+) {
+  api.registerTool(
+    (toolCtx) => ({
+      name: "memory_recall_debug",
+      label: "Memory Recall Debug",
+      description: "Inspect backend retrieval trace data on explicit debug routes.",
+      parameters: Type.Object({
+        channel: stringEnum(DEBUG_RECALL_CHANNELS),
+        query: Type.String({ description: "Debug recall query." }),
+        limit: Type.Optional(Type.Number({ description: "Max rows to inspect (default: 5, max: 20)." })),
+        reflectionMode: Type.Optional(
+          stringEnum(REFLECTION_DEBUG_MODES)
+        ),
+      }),
+      async execute(_toolCallId, params) {
+        const { channel, query, limit = 5, reflectionMode } = params as {
+          channel: "generic" | "reflection";
+          query: string;
+          limit?: number;
+          reflectionMode?: ReflectionRecallMode;
+        };
+        if (channel === "generic" && reflectionMode) {
+          return {
+            content: [{ type: "text", text: "reflectionMode is only valid when channel=reflection." }],
+            details: { error: "invalid_param" },
+          };
+        }
+        try {
+          const ctx = buildToolCallContext(toolCtx, context.runtimeDefaults);
+          const normalizedLimit = clampInt(limit, 1, 20);
+          const response = channel === "reflection"
+            ? await context.backendClient.recallReflectionDebug(ctx, {
+              query,
+              mode: reflectionMode || "invariant+derived",
+              limit: normalizedLimit,
+            })
+            : await context.backendClient.recallGenericDebug(ctx, {
+              query,
+              limit: normalizedLimit,
+            });
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatDebugRecallSummary(channel, response.rows, response.trace),
+              },
+            ],
+            details: {
+              channel,
+              count: response.rows.length,
+              rows: response.rows,
+              trace: response.trace,
+            },
+          };
+        } catch (error) {
+          return backendToolError("Recall debug lookup failed", error);
+        }
+      },
+    }),
+    { name: "memory_recall_debug" }
+  );
+}
+
 function buildToolCallContext(toolCtx: unknown, defaults: RuntimeContextDefaults) {
   const resolved = resolveToolCallContext(toolCtx, defaults);
   if (!resolved.hasPrincipalIdentity) {
@@ -508,4 +789,105 @@ function clampInt(value: number, min: number, max: number): number {
 function clamp01(value: number, fallback: number): number {
   if (!Number.isFinite(value)) return fallback;
   return Math.max(0, Math.min(1, value));
+}
+
+function normalizeOptionalInt(value: unknown, min: number, max: number): number | undefined {
+  if (!Number.isFinite(value)) return undefined;
+  return clampInt(Number(value), min, max);
+}
+
+function buildDistillSource(params: {
+  sourceKind: "inline-messages" | "session-transcript";
+  messages?: BackendCaptureItem[];
+  sessionKey?: string;
+  sessionId?: string;
+}):
+  | { kind: "inline-messages"; messages: BackendCaptureItem[] }
+  | { kind: "session-transcript"; sessionKey: string; sessionId?: string }
+  | { error: string; message: string } {
+  if (params.sourceKind === "inline-messages") {
+    const messages = Array.isArray(params.messages)
+      ? params.messages
+        .map((item) => ({
+          role: item?.role === "assistant" || item?.role === "system" ? item.role : "user",
+          text: typeof item?.text === "string" ? item.text.trim() : "",
+        }))
+        .filter((item) => item.text.length > 0)
+      : [];
+    if (messages.length === 0) {
+      return {
+        error: "missing_messages",
+        message: "messages is required when sourceKind=inline-messages.",
+      };
+    }
+    return {
+      kind: "inline-messages",
+      messages,
+    };
+  }
+
+  const normalizedSessionKey = typeof params.sessionKey === "string" ? params.sessionKey.trim() : "";
+  if (!normalizedSessionKey) {
+    return {
+      error: "missing_session_key",
+      message: "sessionKey is required when sourceKind=session-transcript.",
+    };
+  }
+  const normalizedSessionId = typeof params.sessionId === "string" ? params.sessionId.trim() : "";
+  return {
+    kind: "session-transcript",
+    sessionKey: normalizedSessionKey,
+    sessionId: normalizedSessionId || undefined,
+  };
+}
+
+function describeDistillSource(source:
+  | { kind: "inline-messages"; messages: BackendCaptureItem[] }
+  | { kind: "session-transcript"; sessionKey: string; sessionId?: string }
+): string {
+  if (source.kind === "inline-messages") {
+    return `inline-messages (${source.messages.length} message(s))`;
+  }
+  return `session-transcript (${source.sessionKey}${source.sessionId ? `, sessionId=${source.sessionId}` : ""})`;
+}
+
+function formatDebugRecallSummary(
+  channel: "generic" | "reflection",
+  rows: Array<{ id: string; text: string; score: number }>,
+  trace: BackendRetrievalTrace
+): string {
+  const lines = [
+    `Debug recall trace (${channel}): ${rows.length} row(s)`,
+    `Trace kind: ${trace.kind}`,
+  ];
+  if (trace.mode) {
+    lines.push(`Trace mode: ${trace.mode}`);
+  }
+
+  const stageSummary = trace.stages
+    .slice(0, 8)
+    .map((stage) => {
+      const reason = stage.reason ? ` (${clipForToolOutput(stage.reason, 120)})` : "";
+      return `- ${stage.name}: ${stage.status}${reason}`;
+    });
+  if (stageSummary.length > 0) {
+    lines.push("Stages:");
+    lines.push(...stageSummary);
+  }
+
+  const rowSummary = rows
+    .slice(0, 5)
+    .map((row, index) => `${index + 1}. [${row.id}] ${(Number(row.score) * 100).toFixed(0)}% ${clipForToolOutput(row.text, 120)}`);
+  if (rowSummary.length > 0) {
+    lines.push("Rows:");
+    lines.push(...rowSummary);
+  }
+
+  return lines.join("\n");
+}
+
+function clipForToolOutput(text: string, maxLen: number): string {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLen) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLen - 3))}...`;
 }

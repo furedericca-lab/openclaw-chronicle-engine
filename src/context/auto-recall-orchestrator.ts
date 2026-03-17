@@ -95,7 +95,7 @@ export function createAutoRecallPlanner(
       },
       formatLine: (row) =>
         `- [${row.entry.category}:${row.entry.scope}] ${deps.sanitizeForContext(row.entry.text)} ` +
-        `(${(row.score * 100).toFixed(0)}%${row.sources?.bm25 ? ", vector+BM25" : ""}${row.sources?.reranked ? "+reranked" : ""})`,
+        `(${(row.score * 100).toFixed(0)}%)`,
     });
   };
 

@@ -362,6 +362,15 @@ pub struct EnqueueReflectionJobRequest {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReflectionSourceRequest {
+    pub actor: Actor,
+    pub trigger: ReflectionTrigger,
+    #[serde(default)]
+    pub max_messages: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppendSessionTranscriptRequest {
     pub actor: Actor,
     pub items: Vec<CaptureItem>,
@@ -437,6 +446,12 @@ pub struct EnqueueReflectionJobResponse {
 #[serde(rename_all = "camelCase")]
 pub struct AppendSessionTranscriptResponse {
     pub appended: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReflectionSourceResponse {
+    pub messages: Vec<CaptureItem>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -668,6 +683,14 @@ pub fn validate_enqueue_reflection_job_request(req: &EnqueueReflectionJobRequest
     }
     for item in &req.messages {
         validate_non_empty("messages[].text", &item.text)?;
+    }
+    Ok(())
+}
+
+pub fn validate_reflection_source_request(req: &ReflectionSourceRequest) -> AppResult<()> {
+    req.actor.validate()?;
+    if let Some(max_messages) = req.max_messages {
+        validate_limit("maxMessages", max_messages)?;
     }
     Ok(())
 }

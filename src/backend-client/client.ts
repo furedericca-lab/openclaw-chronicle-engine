@@ -9,7 +9,10 @@ import type {
   BackendMemoryMutationResult,
   BackendReflectionJobResponse,
   BackendReflectionJobStatusResponse,
+  BackendReflectionSourceResponse,
+  BackendRecallGenericDebugResponse,
   BackendRecallGenericRow,
+  BackendRecallReflectionDebugResponse,
   BackendRecallReflectionRow,
   BackendSessionTranscriptAppendResponse,
   BackendStatsResponse,
@@ -177,6 +180,24 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
       return Array.isArray(response.rows) ? response.rows : [];
     },
 
+    async recallGenericDebug(ctx, input) {
+      const body = {
+        ...withActor(ctx),
+        query: input.query,
+        limit: clampInt(input.limit, 1, 200),
+      };
+      const response = await requestJson<BackendRecallGenericDebugResponse>({
+        method: "POST",
+        path: "/v1/debug/recall/generic",
+        ctx,
+        body,
+      });
+      return {
+        rows: Array.isArray(response.rows) ? response.rows : [],
+        trace: response.trace,
+      };
+    },
+
     async recallReflection(ctx, input) {
       const body = {
         ...withActor(ctx),
@@ -191,6 +212,25 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
         body,
       });
       return Array.isArray(response.rows) ? response.rows : [];
+    },
+
+    async recallReflectionDebug(ctx, input) {
+      const body = {
+        ...withActor(ctx),
+        query: input.query,
+        mode: input.mode,
+        limit: clampInt(input.limit, 1, 200),
+      };
+      const response = await requestJson<BackendRecallReflectionDebugResponse>({
+        method: "POST",
+        path: "/v1/debug/recall/reflection",
+        ctx,
+        body,
+      });
+      return {
+        rows: Array.isArray(response.rows) ? response.rows : [],
+        trace: response.trace,
+      };
     },
 
     async storeToolMemory(ctx, input: BackendStoreToolInput) {
@@ -317,6 +357,22 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
         },
       });
       return response;
+    },
+
+    async loadReflectionSource(ctx, input) {
+      const response = await requestJson<BackendReflectionSourceResponse>({
+        method: "POST",
+        path: "/v1/reflection/source",
+        ctx,
+        body: {
+          ...withActor(ctx),
+          trigger: input.trigger,
+          maxMessages: Number.isFinite(input.maxMessages) ? clampInt(Number(input.maxMessages), 1, 200) : undefined,
+        },
+      });
+      return {
+        messages: Array.isArray(response.messages) ? response.messages : [],
+      };
     },
 
     async getReflectionJobStatus(ctx, input) {
