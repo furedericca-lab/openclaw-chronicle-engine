@@ -1,6 +1,5 @@
 import type { BackendRecallReflectionRow } from "../backend-client/types.js";
 import { orchestrateDynamicRecall } from "../recall-engine.js";
-import type { ReflectionItemKind } from "../reflection-item-store.js";
 import {
   joinPrependContextBlocks,
   renderErrorDetectedBlock,
@@ -11,6 +10,7 @@ import type { ReflectionErrorSignal, SessionExposureState } from "./session-expo
 
 export type ReflectionInjectMode = "inheritance-only" | "inheritance+derived";
 export type ReflectionRecallMode = "fixed" | "dynamic";
+export type ReflectionItemKind = "invariant" | "derived";
 
 export interface ReflectionPromptPlannerConfig {
   injectMode: ReflectionInjectMode;

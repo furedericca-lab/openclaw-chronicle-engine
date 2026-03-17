@@ -18,14 +18,14 @@ const jiti = jitiFactory(import.meta.url, {
 const pluginModule = jiti("../index.ts");
 const memoryLanceDBProPlugin = pluginModule.default || pluginModule;
 const { parsePluginConfig } = pluginModule;
-const { getDisplayCategoryTag } = jiti("../src/reflection-metadata.ts");
+const { getDisplayCategoryTag } = jiti("./helpers/reflection-metadata-reference.ts");
 const {
   classifyReflectionRetry,
   computeReflectionRetryDelayMs,
   isReflectionNonRetryError,
   isTransientReflectionUpstreamError,
   runWithReflectionTransientRetryOnce,
-} = jiti("../src/reflection-retry.ts");
+} = jiti("./helpers/reflection-retry-reference.ts");
 const { selectPromptLocalAutoRecallResults } = jiti("../src/prompt-local-auto-recall-selection.ts");
 const {
   createDynamicRecallSessionState,

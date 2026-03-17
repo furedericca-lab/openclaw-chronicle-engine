@@ -23,7 +23,7 @@ const {
   extractReflectionLearningGovernanceCandidates,
   extractReflectionLessons,
   extractReflectionMappedMemories,
-} = jiti("../src/reflection-slices.ts");
+} = jiti("./helpers/reflection-slices-reference.ts");
 
 function createToolHarness(workspaceDir) {
   const factories = new Map();
