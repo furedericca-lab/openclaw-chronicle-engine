@@ -1,12 +1,12 @@
-import type { MemoryEntry } from "./memory-record-types.js";
-import { parseReflectionMetadata } from "./reflection-metadata.js";
-import { sanitizeReflectionSliceLines } from "./reflection-slices.js";
-import { computeReflectionScore, normalizeReflectionLineForAggregation } from "./reflection-ranking.js";
-import { getReflectionItemDecayDefaults, type ReflectionItemKind } from "./reflection-item-store.js";
-import { filterByMaxAge, keepMostRecentPerNormalizedKey } from "./recall-engine.js";
-import { normalizeReflectionSoftKey, normalizeReflectionStrictKey } from "./reflection-normalize.js";
-import { aggregateReflectionGroups, type ReflectionScoredItem } from "./reflection-aggregation.js";
-import { selectFinalReflectionRecallGroups } from "./reflection-recall-final-selection.js";
+import type { MemoryEntry } from "../../src/memory-record-types.js";
+import { parseReflectionMetadata } from "../../src/reflection-metadata.js";
+import { sanitizeReflectionSliceLines } from "../../src/reflection-slices.js";
+import { computeReflectionScore, normalizeReflectionLineForAggregation } from "../../src/reflection-ranking.js";
+import { getReflectionItemDecayDefaults, type ReflectionItemKind } from "../../src/reflection-item-store.js";
+import { filterByMaxAge, keepMostRecentPerNormalizedKey } from "../../src/recall-engine.js";
+import { normalizeReflectionSoftKey, normalizeReflectionStrictKey } from "../../src/reflection-normalize.js";
+import { aggregateReflectionGroups, type ReflectionScoredItem } from "../../src/reflection-aggregation.js";
+import { selectFinalReflectionRecallGroups } from "./reflection-recall-selection-reference.ts";
 
 export interface ReflectionRecallOptions {
   agentId: string;

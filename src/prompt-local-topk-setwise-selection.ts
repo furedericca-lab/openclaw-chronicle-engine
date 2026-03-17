@@ -1,4 +1,4 @@
-export interface FinalSelectCandidate<TRaw = unknown> {
+export interface PromptLocalSetwiseCandidate<TRaw = unknown> {
   id: string;
   text: string;
   baseScore: number;
@@ -13,41 +13,41 @@ export interface FinalSelectCandidate<TRaw = unknown> {
   embedding?: number[];
 }
 
-export interface FinalSelectOverlapThreshold {
+export interface PromptLocalOverlapThreshold {
   minOverlap: number;
   multiplier: number;
 }
 
-export interface FinalSelectSemanticThreshold {
+export interface PromptLocalSemanticThreshold {
   minSimilarity: number;
   multiplier: number;
 }
 
-export interface FinalSelectWeights {
+export interface PromptLocalSelectionWeights {
   relevance: number;
   freshness: number;
   categoryCoverage: number;
   scopeCoverage: number;
 }
 
-export interface FinalSelectPenalties {
+export interface PromptLocalSelectionPenalties {
   sameKeyMultiplier: number;
-  overlapThresholds: FinalSelectOverlapThreshold[];
-  semanticThresholds: FinalSelectSemanticThreshold[];
+  overlapThresholds: PromptLocalOverlapThreshold[];
+  semanticThresholds: PromptLocalSemanticThreshold[];
 }
 
-export interface FinalSelectConfig {
+export interface PromptLocalSelectionConfig {
   shortlistLimit?: number;
   finalLimit?: number;
   now?: number;
   freshnessHalfLifeMs?: number;
   tokenMinLength?: number;
-  weights?: Partial<FinalSelectWeights>;
-  penalties?: Partial<FinalSelectPenalties>;
+  weights?: Partial<PromptLocalSelectionWeights>;
+  penalties?: Partial<PromptLocalSelectionPenalties>;
 }
 
 interface PreparedCandidate<TRaw = unknown> {
-  candidate: FinalSelectCandidate<TRaw>;
+  candidate: PromptLocalSetwiseCandidate<TRaw>;
   stableRank: number;
   ts: number;
   key: string;
@@ -58,23 +58,23 @@ interface PreparedCandidate<TRaw = unknown> {
 const DAY_MS = 86_400_000;
 const EPSILON = 1e-12;
 
-const DEFAULT_WEIGHTS: FinalSelectWeights = {
+const DEFAULT_WEIGHTS: PromptLocalSelectionWeights = {
   relevance: 1,
   freshness: 0,
   categoryCoverage: 0,
   scopeCoverage: 0,
 };
 
-const DEFAULT_PENALTIES: FinalSelectPenalties = {
+const DEFAULT_PENALTIES: PromptLocalSelectionPenalties = {
   sameKeyMultiplier: 0.08,
   overlapThresholds: [],
   semanticThresholds: [],
 };
 
-export function buildFinalSelectionShortlist<TRaw = unknown>(
-  candidates: FinalSelectCandidate<TRaw>[],
-  config: FinalSelectConfig = {}
-): FinalSelectCandidate<TRaw>[] {
+export function buildPromptLocalSelectionShortlist<TRaw = unknown>(
+  candidates: PromptLocalSetwiseCandidate<TRaw>[],
+  config: PromptLocalSelectionConfig = {}
+): PromptLocalSetwiseCandidate<TRaw>[] {
   if (!Array.isArray(candidates) || candidates.length === 0) return [];
   const finalLimit = normalizeLimit(config.finalLimit, candidates.length);
   const shortlistLimit = Math.min(
@@ -88,20 +88,20 @@ export function buildFinalSelectionShortlist<TRaw = unknown>(
     .map(({ candidate }) => candidate);
 }
 
-export function selectFinalTopKSetwise<TRaw = unknown>(
-  candidates: FinalSelectCandidate<TRaw>[],
-  config: FinalSelectConfig = {}
-): FinalSelectCandidate<TRaw>[] {
+export function selectPromptLocalTopKSetwise<TRaw = unknown>(
+  candidates: PromptLocalSetwiseCandidate<TRaw>[],
+  config: PromptLocalSelectionConfig = {}
+): PromptLocalSetwiseCandidate<TRaw>[] {
   if (!Array.isArray(candidates) || candidates.length === 0) return [];
 
   const finalLimit = Math.min(candidates.length, normalizeLimit(config.finalLimit, candidates.length));
   if (finalLimit <= 0) return [];
 
-  const weights: FinalSelectWeights = {
+  const weights: PromptLocalSelectionWeights = {
     ...DEFAULT_WEIGHTS,
     ...(config.weights || {}),
   };
-  const penalties: FinalSelectPenalties = {
+  const penalties: PromptLocalSelectionPenalties = {
     ...DEFAULT_PENALTIES,
     ...(config.penalties || {}),
     overlapThresholds: normalizeThresholds(config.penalties?.overlapThresholds),
@@ -109,7 +109,7 @@ export function selectFinalTopKSetwise<TRaw = unknown>(
   };
   const now = Number.isFinite(config.now) ? Number(config.now) : Date.now();
   const tokenMinLength = normalizeLimit(config.tokenMinLength, 3);
-  const shortlist = buildFinalSelectionShortlist(candidates, {
+  const shortlist = buildPromptLocalSelectionShortlist(candidates, {
     ...config,
     finalLimit,
   });
@@ -183,8 +183,8 @@ function computeAdjustedScore<TRaw>(
   context: {
     now: number;
     freshnessHalfLifeMs: number;
-    weights: FinalSelectWeights;
-    penalties: FinalSelectPenalties;
+    weights: PromptLocalSelectionWeights;
+    penalties: PromptLocalSelectionPenalties;
     selectedKeys: Set<string>;
     selectedCategories: Set<string>;
     selectedScopes: Set<string>;
@@ -248,8 +248,8 @@ function computeAdjustedScore<TRaw>(
 }
 
 function compareForPresort<TRaw>(
-  a: FinalSelectCandidate<TRaw>,
-  b: FinalSelectCandidate<TRaw>,
+  a: PromptLocalSetwiseCandidate<TRaw>,
+  b: PromptLocalSetwiseCandidate<TRaw>,
   aIndex: number,
   bIndex: number
 ): number {
@@ -261,57 +261,19 @@ function compareForPresort<TRaw>(
   const bTs = Number.isFinite(b.ts) ? Number(b.ts) : 0;
   if (bTs !== aTs) return bTs - aTs;
 
-  const idOrder = String(a.id || "").localeCompare(String(b.id || ""));
-  if (idOrder !== 0) return idOrder;
-
-  const textOrder = String(a.text || "").localeCompare(String(b.text || ""));
-  if (textOrder !== 0) return textOrder;
+  const aCanonicalKey = buildCanonicalTieBreakKey(a);
+  const bCanonicalKey = buildCanonicalTieBreakKey(b);
+  if (aCanonicalKey !== bCanonicalKey) return aCanonicalKey.localeCompare(bCanonicalKey);
 
   return aIndex - bIndex;
 }
 
-function sanitizeTimestamp(value: unknown, fallback: number): number {
-  const ts = Number(value);
-  if (!Number.isFinite(ts) || ts <= 0) return fallback;
-  return ts;
-}
-
 function computeFreshnessScore(ts: number, now: number, halfLifeMs: number): number {
+  if (!Number.isFinite(ts) || ts <= 0) return 0;
   if (!Number.isFinite(halfLifeMs) || halfLifeMs <= 0) return 0;
   const ageMs = Math.max(0, now - ts);
-  return Math.exp(-ageMs / halfLifeMs);
-}
-
-function normalizeKey<TRaw>(candidate: FinalSelectCandidate<TRaw>): string {
-  const soft = String(candidate.softKey || "").trim();
-  if (soft) return soft;
-  const normalized = String(candidate.normalizedKey || "").trim();
-  if (normalized) return normalized;
-  return "";
-}
-
-function tokenizeForOverlap(value: string, tokenMinLength: number): string[] {
-  if (!value) return [];
-  return value
-    .toLowerCase()
-    .replace(/[_/\-\\]+/g, " ")
-    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(" ")
-    .map((token) => token.trim())
-    .filter((token) => token.length >= tokenMinLength);
-}
-
-function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 || b.size === 0) return 0;
-  let intersection = 0;
-  for (const token of a) {
-    if (b.has(token)) intersection += 1;
-  }
-  const union = new Set([...a, ...b]).size;
-  if (union === 0) return 0;
-  return intersection / union;
+  const decay = Math.exp((-Math.log(2) * ageMs) / halfLifeMs);
+  return Number.isFinite(decay) ? decay : 0;
 }
 
 function normalizeLimit(value: unknown, fallback: number): number {
@@ -319,39 +281,25 @@ function normalizeLimit(value: unknown, fallback: number): number {
   return Math.max(1, Math.floor(resolved));
 }
 
-function clampMultiplier(value: number): number {
-  if (!Number.isFinite(value)) return 1;
-  if (value <= 0) return 0;
-  if (value >= 1) return 1;
-  return value;
+function normalizeKey(candidate: PromptLocalSetwiseCandidate): string {
+  const raw = candidate.normalizedKey || candidate.softKey || candidate.text || candidate.id;
+  return String(raw || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
-function normalizeThresholds(thresholds: unknown): FinalSelectOverlapThreshold[] {
-  if (!Array.isArray(thresholds) || thresholds.length === 0) return DEFAULT_PENALTIES.overlapThresholds;
-  return thresholds
-    .map((row) => {
-      const minOverlap = Number((row as FinalSelectOverlapThreshold).minOverlap);
-      const multiplier = Number((row as FinalSelectOverlapThreshold).multiplier);
-      if (!Number.isFinite(minOverlap) || minOverlap < 0 || minOverlap > 1) return null;
-      if (!Number.isFinite(multiplier)) return null;
-      return { minOverlap, multiplier: clampMultiplier(multiplier) };
-    })
-    .filter((row): row is FinalSelectOverlapThreshold => row !== null)
-    .sort((a, b) => b.minOverlap - a.minOverlap);
+function buildCanonicalTieBreakKey(candidate: PromptLocalSetwiseCandidate): string {
+  return [
+    normalizeKey(candidate),
+    String(candidate.text || "").trim().toLowerCase(),
+    String(candidate.id || "").trim().toLowerCase(),
+  ].join("::");
 }
 
-function normalizeSemanticThresholds(thresholds: unknown): FinalSelectSemanticThreshold[] {
-  if (!Array.isArray(thresholds) || thresholds.length === 0) return DEFAULT_PENALTIES.semanticThresholds;
-  return thresholds
-    .map((row) => {
-      const minSimilarity = Number((row as FinalSelectSemanticThreshold).minSimilarity);
-      const multiplier = Number((row as FinalSelectSemanticThreshold).multiplier);
-      if (!Number.isFinite(minSimilarity) || minSimilarity < -1 || minSimilarity > 1) return null;
-      if (!Number.isFinite(multiplier)) return null;
-      return { minSimilarity, multiplier: clampMultiplier(multiplier) };
-    })
-    .filter((row): row is FinalSelectSemanticThreshold => row !== null)
-    .sort((a, b) => b.minSimilarity - a.minSimilarity);
+function sanitizeTimestamp(value: unknown, fallback: number): number {
+  const ts = Number(value);
+  return Number.isFinite(ts) && ts > 0 ? ts : fallback;
 }
 
 function sanitizeEmbedding(value: unknown): number[] | undefined {
@@ -365,27 +313,68 @@ function sanitizeEmbedding(value: unknown): number[] | undefined {
   return embedding.length > 0 ? embedding : undefined;
 }
 
+function tokenizeForOverlap(text: string, tokenMinLength: number): string[] {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= tokenMinLength);
+}
+
+function normalizeThresholds(value: unknown): PromptLocalOverlapThreshold[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => ({
+      minOverlap: Number(item?.minOverlap),
+      multiplier: Number(item?.multiplier),
+    }))
+    .filter((item) => Number.isFinite(item.minOverlap) && Number.isFinite(item.multiplier))
+    .sort((a, b) => b.minOverlap - a.minOverlap);
+}
+
+function normalizeSemanticThresholds(value: unknown): PromptLocalSemanticThreshold[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => ({
+      minSimilarity: Number(item?.minSimilarity),
+      multiplier: Number(item?.multiplier),
+    }))
+    .filter((item) => Number.isFinite(item.minSimilarity) && Number.isFinite(item.multiplier))
+    .sort((a, b) => b.minSimilarity - a.minSimilarity);
+}
+
+function clampMultiplier(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return EPSILON;
+  return Math.max(EPSILON, Math.min(1, value));
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const token of a) {
+    if (b.has(token)) intersection += 1;
+  }
+  const union = a.size + b.size - intersection;
+  if (union <= 0) return 0;
+  return intersection / union;
+}
+
 function cosineSimilarity(a: number[], b: number[]): number | null {
-  if (!Array.isArray(a) || !Array.isArray(b)) return null;
   if (a.length === 0 || b.length === 0 || a.length !== b.length) return null;
 
   let dot = 0;
   let normA = 0;
   let normB = 0;
-
   for (let i = 0; i < a.length; i += 1) {
-    const x = a[i];
-    const y = b[i];
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    dot += x * y;
-    normA += x * x;
-    normB += y * y;
+    const va = a[i];
+    const vb = b[i];
+    dot += va * vb;
+    normA += va * va;
+    normB += vb * vb;
   }
 
   if (normA <= 0 || normB <= 0) return null;
-  const score = dot / (Math.sqrt(normA) * Math.sqrt(normB));
-  if (!Number.isFinite(score)) return null;
-  return Math.max(-1, Math.min(1, score));
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-export const DEFAULT_FINAL_SELECTION_FRESHNESS_HALF_LIFE_MS = 14 * DAY_MS;
+export const DEFAULT_PROMPT_LOCAL_SELECTION_FRESHNESS_HALF_LIFE_MS = 45 * DAY_MS;

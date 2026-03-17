@@ -34,8 +34,8 @@ const {
   loadReflectionMappedRowsFromEntries,
 } = jiti("../src/reflection-store.ts");
 const { normalizeReflectionSoftKey } = jiti("../src/reflection-normalize.ts");
-const { rankDynamicReflectionRecallFromEntries } = jiti("../src/reflection-recall.ts");
-const { selectFinalAutoRecallResults } = jiti("../src/auto-recall-final-selection.ts");
+const { rankDynamicReflectionRecallFromEntries } = jiti("./helpers/reflection-recall-reference.ts");
+const { selectPromptLocalAutoRecallResults } = jiti("../src/prompt-local-auto-recall-selection.ts");
 const {
   createDynamicRecallSessionState,
   clearDynamicRecallSessionState,
@@ -1175,7 +1175,7 @@ describe("memory reflection", () => {
         }),
       ];
 
-      const selected = selectFinalAutoRecallResults(rows, { topK: 4, now });
+      const selected = selectPromptLocalAutoRecallResults(rows, { topK: 4, now });
 
       assert.equal(selected.length, 4);
       assert.equal(selected[0].entry.id, "dup-1");
@@ -1225,8 +1225,8 @@ describe("memory reflection", () => {
         }),
       ];
 
-      const forward = selectFinalAutoRecallResults(rows, { topK: 3, now });
-      const reversed = selectFinalAutoRecallResults([...rows].reverse(), { topK: 3, now });
+      const forward = selectPromptLocalAutoRecallResults(rows, { topK: 3, now });
+      const reversed = selectPromptLocalAutoRecallResults([...rows].reverse(), { topK: 3, now });
 
       assert.deepEqual(
         forward.map((row) => row.entry.id),
@@ -1280,7 +1280,7 @@ describe("memory reflection", () => {
         }),
       ];
 
-      const selected = selectFinalAutoRecallResults(rows, { topK: 3, now });
+      const selected = selectPromptLocalAutoRecallResults(rows, { topK: 3, now });
 
       assert.equal(selected.length, 3);
       assert.equal(selected[0].entry.id, "dup-1");
@@ -1340,7 +1340,7 @@ describe("memory reflection", () => {
         }),
       ];
 
-      const selected = selectFinalAutoRecallResults(rows, { topK: 3, now });
+      const selected = selectPromptLocalAutoRecallResults(rows, { topK: 3, now });
 
       assert.equal(selected.length, 3);
       assert.equal(selected[0].entry.id, "sem-1");
@@ -1391,8 +1391,8 @@ describe("memory reflection", () => {
         }),
       ];
 
-      const forward = selectFinalAutoRecallResults(rows, { topK: 3, now });
-      const reversed = selectFinalAutoRecallResults([...rows].reverse(), { topK: 3, now });
+      const forward = selectPromptLocalAutoRecallResults(rows, { topK: 3, now });
+      const reversed = selectPromptLocalAutoRecallResults([...rows].reverse(), { topK: 3, now });
 
       assert.deepEqual(
         forward.map((row) => row.entry.id),
@@ -1442,8 +1442,8 @@ describe("memory reflection", () => {
         }),
       ];
 
-      const selected = selectFinalAutoRecallResults(rows, { topK: 3, now });
-      const reversed = selectFinalAutoRecallResults([...rows].reverse(), { topK: 3, now });
+      const selected = selectPromptLocalAutoRecallResults(rows, { topK: 3, now });
+      const reversed = selectPromptLocalAutoRecallResults([...rows].reverse(), { topK: 3, now });
 
       assert.equal(selected.length, 3);
       assert.equal(selected[0].entry.id, "dup-1");

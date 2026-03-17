@@ -22,6 +22,8 @@ Interpretation:
 
 Archived scopes:
 
+- `ts-residual-debt-cleanup-2026-03-17/`: phased audit and cleanup record for relocating test-only TS recall helpers and renaming retained prompt-local seams. Collected: `2026-03-17`. Reference value: `7/10`.
+  Why: useful for understanding why residual TS files still exist, which ones were moved to tests, and which names were normalized to reflect prompt-local ownership.
 - `documentation-refresh/`: closeout contract for the documentation cleanup that demoted stale operator docs and surfaced the reduced canonical docs set. Collected: `2026-03-17`. Reference value: `5/10`.
   Why: useful as a narrow audit trail for the docs reduction pass, but lower-value than the architecture and implementation scopes it summarizes.
 - `strict-parity-gap-2026-03-17/`: phased strict-parity audit, implementation, and closeout materials for verifying acceptable historical TS capability parity under the Rust + remote architecture. Collected: `2026-03-17`. Reference value: `8/10`.

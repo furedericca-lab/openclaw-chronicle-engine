@@ -1,5 +1,5 @@
 import type { BackendRecallGenericRow } from "../backend-client/types.js";
-import { selectFinalAutoRecallResults } from "../auto-recall-final-selection.js";
+import { selectPromptLocalAutoRecallResults } from "../prompt-local-auto-recall-selection.js";
 import type { RecallResultRow } from "../memory-record-types.js";
 import {
   filterByMaxAge,
@@ -89,7 +89,7 @@ export function createAutoRecallPlanner(
         }));
         const postProcessed = postProcessAutoRecallResults(retrieved, config);
         if (config.selectionMode === "setwise-v2") {
-          return selectFinalAutoRecallResults(postProcessed, { topK });
+          return selectPromptLocalAutoRecallResults(postProcessed, { topK });
         }
         return postProcessed.slice(0, topK);
       },

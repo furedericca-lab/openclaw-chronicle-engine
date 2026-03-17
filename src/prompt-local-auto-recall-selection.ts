@@ -1,12 +1,12 @@
 import type { RecallResultRow } from "./memory-record-types.js";
 import { normalizeRecallTextKey } from "./recall-engine.js";
 import {
-  DEFAULT_FINAL_SELECTION_FRESHNESS_HALF_LIFE_MS,
-  type FinalSelectCandidate,
-  type FinalSelectOverlapThreshold,
-  type FinalSelectSemanticThreshold,
-  selectFinalTopKSetwise,
-} from "./final-topk-setwise-selection.js";
+  DEFAULT_PROMPT_LOCAL_SELECTION_FRESHNESS_HALF_LIFE_MS,
+  type PromptLocalOverlapThreshold,
+  type PromptLocalSemanticThreshold,
+  type PromptLocalSetwiseCandidate,
+  selectPromptLocalTopKSetwise,
+} from "./prompt-local-topk-setwise-selection.js";
 
 export interface AutoRecallFinalSelectionOptions {
   topK?: number;
@@ -14,19 +14,19 @@ export interface AutoRecallFinalSelectionOptions {
   shortlistLimit?: number;
 }
 
-const GENERIC_OVERLAP_THRESHOLDS: FinalSelectOverlapThreshold[] = [
+const GENERIC_OVERLAP_THRESHOLDS: PromptLocalOverlapThreshold[] = [
   { minOverlap: 0.86, multiplier: 0.2 },
   { minOverlap: 0.72, multiplier: 0.45 },
   { minOverlap: 0.58, multiplier: 0.75 },
 ];
 
-const GENERIC_SEMANTIC_THRESHOLDS: FinalSelectSemanticThreshold[] = [
+const GENERIC_SEMANTIC_THRESHOLDS: PromptLocalSemanticThreshold[] = [
   { minSimilarity: 0.985, multiplier: 0.25 },
   { minSimilarity: 0.96, multiplier: 0.45 },
   { minSimilarity: 0.93, multiplier: 0.7 },
 ];
 
-export function selectFinalAutoRecallResults(
+export function selectPromptLocalAutoRecallResults(
   results: RecallResultRow[],
   options: AutoRecallFinalSelectionOptions = {}
 ): RecallResultRow[] {
@@ -39,7 +39,7 @@ export function selectFinalAutoRecallResults(
     normalizeLimit(options.shortlistLimit, Math.max(finalLimit, finalLimit * 4))
   );
 
-  const candidates: FinalSelectCandidate<RecallResultRow>[] = results.map((row) => {
+  const candidates: PromptLocalSetwiseCandidate<RecallResultRow>[] = results.map((row) => {
     const normalizedKey = normalizeRecallTextKey(row.entry.text);
     return {
       id: row.entry.id,
@@ -55,11 +55,11 @@ export function selectFinalAutoRecallResults(
     };
   });
 
-  return selectFinalTopKSetwise(candidates, {
+  return selectPromptLocalTopKSetwise(candidates, {
     finalLimit,
     shortlistLimit,
     now: options.now,
-    freshnessHalfLifeMs: DEFAULT_FINAL_SELECTION_FRESHNESS_HALF_LIFE_MS,
+    freshnessHalfLifeMs: DEFAULT_PROMPT_LOCAL_SELECTION_FRESHNESS_HALF_LIFE_MS,
     weights: {
       relevance: 1,
       freshness: 0.08,

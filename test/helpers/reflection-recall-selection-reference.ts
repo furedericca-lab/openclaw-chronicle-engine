@@ -1,9 +1,9 @@
-import type { ReflectionGroup } from "./reflection-aggregation.js";
+import type { ReflectionGroup } from "../../src/reflection-aggregation.js";
 import {
-  type FinalSelectCandidate,
-  type FinalSelectOverlapThreshold,
-  selectFinalTopKSetwise,
-} from "./final-topk-setwise-selection.js";
+  type PromptLocalSetwiseCandidate,
+  type PromptLocalOverlapThreshold,
+  selectPromptLocalTopKSetwise,
+} from "../../src/prompt-local-topk-setwise-selection.js";
 
 interface ReflectionFinalSelectionOptions {
   shortlistTarget?: number;
@@ -11,7 +11,7 @@ interface ReflectionFinalSelectionOptions {
   now?: number;
 }
 
-const REFLECTION_OVERLAP_THRESHOLDS: FinalSelectOverlapThreshold[] = [
+const REFLECTION_OVERLAP_THRESHOLDS: PromptLocalOverlapThreshold[] = [
   { minOverlap: 0.85, multiplier: 0.12 },
   { minOverlap: 0.70, multiplier: 0.35 },
   { minOverlap: 0.55, multiplier: 0.7 },
@@ -27,7 +27,7 @@ export function selectFinalReflectionRecallGroups(
   const shortlistTarget = Math.min(groups.length, normalizeLimit(options.shortlistTarget, groups.length));
   if (finalTarget <= 0) return [];
 
-  const candidates: FinalSelectCandidate<ReflectionGroup>[] = groups.map((group) => ({
+  const candidates: PromptLocalSetwiseCandidate<ReflectionGroup>[] = groups.map((group) => ({
     id: group.strictKey,
     text: group.representative.text,
     baseScore: Number.isFinite(group.finalScore) ? group.finalScore : 0,
@@ -37,7 +37,7 @@ export function selectFinalReflectionRecallGroups(
     raw: group,
   }));
 
-  return selectFinalTopKSetwise(candidates, {
+  return selectPromptLocalTopKSetwise(candidates, {
     shortlistLimit: shortlistTarget,
     finalLimit: finalTarget,
     now: options.now,
