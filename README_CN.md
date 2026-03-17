@@ -184,10 +184,6 @@ distill 请求
 | `src/adaptive-retrieval.ts` | prompt 侧 recall 触发启发式 |
 | `src/prompt-local-auto-recall-selection.ts` | 对 backend rows 做 prompt-local post-selection |
 | `src/prompt-local-topk-setwise-selection.ts` | 服务于保留本地选择 seam 的 prompt-local 工具函数 |
-| `test/helpers/query-expander-reference.ts` | 保留的 test/reference 词汇扩展 helper；当前受支持运行时不会导入 |
-| `test/helpers/reflection-store-reference.ts` | 保留的 test/reference reflection 组装 helper；当前受支持运行时不会导入 |
-| `test/helpers/reflection-recall-reference.ts` | 保留的 test/reference helper，不是 active backend authority |
-| `test/helpers/reflection-recall-selection-reference.ts` | 保留的下游 test/reference 选择 helper |
 
 ### 实际应该怎么理解
 
@@ -396,8 +392,6 @@ docs/archive/             历史计划与已关闭 scope
 src/backend-client/*      传输 + DTO 适配
 src/backend-tools.ts      tool bridge
 src/context/*             prompt-time orchestration
-test/helpers/query-expander-reference.ts     仅保留为 test/reference 词汇 helper
-test/helpers/reflection-store-reference.ts   仅保留为 test/reference reflection helper
 test/*                    插件侧测试
 ```
 
@@ -442,10 +436,6 @@ cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -
 ### “旧的 `sessionMemory.*` 或被移除的 `memoryReflection.*` 字段现在还能用吗？”
 
 不能。`1.0.0-beta.0` 已删除这些只用于迁移的 alias。请只使用当前 schema 中仍然保留的有效字段。
-
-### “`test/helpers/query-expander-reference.ts` 和 `test/helpers/reflection-store-reference.ts` 还是运行时权威模块吗？”
-
-不是。它们现在只保留为 test/reference helper，当前受支持运行时不会导入它们。
 
 ### “distill 现在是不是还靠旧的 `jsonl_distill.py` sidecar？”
 

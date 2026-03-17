@@ -184,10 +184,6 @@ No, but the answer needs precision:
 | `src/adaptive-retrieval.ts` | prompt-side retrieval trigger heuristic |
 | `src/prompt-local-auto-recall-selection.ts` | prompt-local post-selection over backend rows |
 | `src/prompt-local-topk-setwise-selection.ts` | prompt-local utility used by retained local selection seams |
-| `test/helpers/query-expander-reference.ts` | retained test/reference lexical helper; not imported by the supported runtime |
-| `test/helpers/reflection-store-reference.ts` | retained test/reference reflection-shaping helper; not imported by the supported runtime |
-| `test/helpers/reflection-recall-reference.ts` | retained test/reference helper, not active backend authority |
-| `test/helpers/reflection-recall-selection-reference.ts` | retained downstream test/reference selection helper |
 
 ### Practical interpretation
 
@@ -396,8 +392,6 @@ docs/archive/             historical plans and closed scopes
 src/backend-client/*      transport + DTO adapter
 src/backend-tools.ts      tool bridge
 src/context/*             prompt-time orchestration
-test/helpers/query-expander-reference.ts     retained test/reference lexical helper only
-test/helpers/reflection-store-reference.ts   retained test/reference reflection helper only
 test/*                    plugin-side tests
 ```
 
@@ -438,10 +432,6 @@ No. It is a prompt-local lexical/coverage selector over ordinary backend-returne
 ### “Do old `sessionMemory.*` or removed `memoryReflection.*` fields still work?”
 
 No. `1.0.0-beta.0` removes those migration-only aliases. Use the active schema fields only.
-
-### “Are `test/helpers/query-expander-reference.ts` and `test/helpers/reflection-store-reference.ts` still runtime authority modules?”
-
-No. They remain only as test/reference helpers. The supported runtime does not import them.
 
 ### “Does distill still mean running the old `jsonl_distill.py` sidecar?”
 
