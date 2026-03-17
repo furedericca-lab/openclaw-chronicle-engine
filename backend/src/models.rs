@@ -245,8 +245,75 @@ pub struct RecallGenericResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecallGenericDebugResponse {
+    pub rows: Vec<RecallGenericRow>,
+    pub trace: RetrievalTrace,
+}
+
+#[derive(Debug, Serialize)]
 pub struct RecallReflectionResponse {
     pub rows: Vec<RecallReflectionRow>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecallReflectionDebugResponse {
+    pub rows: Vec<RecallReflectionRow>,
+    pub trace: RetrievalTrace,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RetrievalTraceKind {
+    Generic,
+    Reflection,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RetrievalTraceStageStatus {
+    Ok,
+    Fallback,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrievalTrace {
+    pub kind: RetrievalTraceKind,
+    pub query: RetrievalTraceQuery,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    pub stages: Vec<RetrievalTraceStage>,
+    pub final_row_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrievalTraceQuery {
+    pub preview: String,
+    pub raw_len: usize,
+    pub lexical_preview: String,
+    pub lexical_len: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrievalTraceStage {
+    pub name: String,
+    pub status: RetrievalTraceStageStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub metrics: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]

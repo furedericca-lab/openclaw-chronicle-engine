@@ -13,7 +13,8 @@ use crate::{
         validate_recall_generic_request, validate_recall_reflection_request,
         validate_stats_request, validate_store_request, validate_update_request, Actor,
         DeleteRequest, EnqueueReflectionJobRequest, HealthResponse, ListRequest, Principal,
-        RecallGenericRequest, RecallReflectionRequest, StatsRequest, StoreRequest, UpdateRequest,
+        RecallGenericDebugResponse, RecallGenericRequest, RecallReflectionDebugResponse,
+        RecallReflectionRequest, StatsRequest, StoreRequest, UpdateRequest,
     },
 };
 use axum::{
@@ -43,6 +44,8 @@ pub fn build_app(config: AppConfig) -> anyhow::Result<Router> {
     let data_routes = Router::new()
         .route("/v1/recall/generic", post(recall_generic))
         .route("/v1/recall/reflection", post(recall_reflection))
+        .route("/v1/debug/recall/generic", post(recall_generic_debug))
+        .route("/v1/debug/recall/reflection", post(recall_reflection_debug))
         .route("/v1/memories/store", post(store_memories))
         .route("/v1/memories/update", post(update_memory))
         .route("/v1/memories/delete", post(delete_memories))
@@ -94,6 +97,36 @@ async fn recall_reflection(
     ensure_actor_matches_context(&req.actor, &auth)?;
     let rows = state.memory_repo.recall_reflection(req).await?;
     Ok(Json(rows))
+}
+
+async fn recall_generic_debug(
+    State(state): State<AppState>,
+    Extension(auth): Extension<RuntimeAuthContext>,
+    payload: Result<Json<RecallGenericRequest>, JsonRejection>,
+) -> AppResult<Json<RecallGenericDebugResponse>> {
+    let req = decode_json(payload)?;
+    validate_recall_generic_request(&req)?;
+    ensure_actor_matches_context(&req.actor, &auth)?;
+    let (rows, trace) = state.memory_repo.recall_generic_with_trace(req).await?;
+    Ok(Json(RecallGenericDebugResponse {
+        rows: rows.rows,
+        trace,
+    }))
+}
+
+async fn recall_reflection_debug(
+    State(state): State<AppState>,
+    Extension(auth): Extension<RuntimeAuthContext>,
+    payload: Result<Json<RecallReflectionRequest>, JsonRejection>,
+) -> AppResult<Json<RecallReflectionDebugResponse>> {
+    let req = decode_json(payload)?;
+    validate_recall_reflection_request(&req)?;
+    ensure_actor_matches_context(&req.actor, &auth)?;
+    let (rows, trace) = state.memory_repo.recall_reflection_with_trace(req).await?;
+    Ok(Json(RecallReflectionDebugResponse {
+        rows: rows.rows,
+        trace,
+    }))
 }
 
 async fn store_memories(

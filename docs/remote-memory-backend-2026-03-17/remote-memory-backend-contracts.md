@@ -207,6 +207,13 @@ Contract rules:
 - detailed score-breakdown fields such as vector/BM25/rerank contributions are not part of the stable `/v1` runtime DTO;
 - backend may expose richer diagnostic scoring only outside the ordinary stable data-plane contract.
 
+2026-03-17 refresh note:
+
+- backend now exposes debug-scoped trace routes outside the ordinary recall DTO contract:
+  - `POST /v1/debug/recall/generic`
+  - `POST /v1/debug/recall/reflection`
+- these routes return structured retrieval trace data for debugging/verification while preserving the stable `/v1/recall/*` row schema.
+
 Status model:
 
 - `200`: success, including empty rows

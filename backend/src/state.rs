@@ -7,8 +7,9 @@ use crate::{
         MemoryMutationResult, Principal, RecallGenericRequest, RecallGenericResponse,
         RecallGenericRow, RecallReflectionRequest, RecallReflectionResponse, ReflectionJobStatus,
         ReflectionJobStatusResponse, ReflectionKind, ReflectionMetadata, ReflectionRecallMode,
-        ReflectionTrigger, RowMetadata, StatsResponse, StoreRequest, StoreResponse, UpdateRequest,
-        UpdateResponse, DEFAULT_IMPORTANCE,
+        ReflectionTrigger, RetrievalTrace, RetrievalTraceKind, RetrievalTraceQuery,
+        RetrievalTraceStage, RetrievalTraceStageStatus, RowMetadata, StatsResponse, StoreRequest,
+        StoreResponse, UpdateRequest, UpdateResponse, DEFAULT_IMPORTANCE,
     },
 };
 use arrow_array::{
@@ -221,6 +222,48 @@ struct RankedMemoryRow {
     score: f64,
 }
 
+#[derive(Default)]
+struct RetrievalTraceCollector {
+    stages: Vec<RetrievalTraceStage>,
+    final_row_ids: Vec<String>,
+}
+
+#[derive(Default)]
+struct RerankTraceSummary {
+    stage: Option<RetrievalTraceStage>,
+}
+
+impl RetrievalTraceCollector {
+    fn push(&mut self, stage: RetrievalTraceStage) {
+        self.stages.push(stage);
+    }
+
+    fn set_final_rows(&mut self, rows: &[RankedMemoryRow]) {
+        self.final_row_ids = rows.iter().map(|row| row.row.id.clone()).collect();
+    }
+
+    fn finish(
+        self,
+        kind: RetrievalTraceKind,
+        query: &str,
+        lexical_query: &str,
+        mode: Option<String>,
+    ) -> RetrievalTrace {
+        RetrievalTrace {
+            kind,
+            query: RetrievalTraceQuery {
+                preview: truncate_for_error(query, 160),
+                raw_len: query.chars().count(),
+                lexical_preview: truncate_for_error(lexical_query, 160),
+                lexical_len: lexical_query.chars().count(),
+            },
+            mode,
+            stages: self.stages,
+            final_row_ids: self.final_row_ids,
+        }
+    }
+}
+
 impl GenericRecallEngine {
     fn new(config: &AppConfig) -> anyhow::Result<Self> {
         let rerank_mode =
@@ -301,8 +344,15 @@ impl GenericRecallEngine {
         query_embedding: &[f32],
         seeds: Vec<CandidateSeed>,
         limit: usize,
+        mut trace: Option<&mut RetrievalTraceCollector>,
     ) -> AppResult<Vec<RankedMemoryRow>> {
         if seeds.is_empty() || limit == 0 {
+            if let Some(trace) = trace {
+                trace.push(make_trace_stage(
+                    "rank.finalize",
+                    RetrievalTraceStageStatus::Skipped,
+                ));
+            }
             return Ok(Vec::new());
         }
 
@@ -392,6 +442,7 @@ impl GenericRecallEngine {
         let weight_sum =
             (self.settings.vector_weight + self.settings.bm25_weight).max(f64::EPSILON);
         let mut rerank_candidates = Vec::new();
+        let mut dropped_below_min_score = 0_usize;
         let now = now_millis();
 
         for idx in selected_indices {
@@ -413,6 +464,7 @@ impl GenericRecallEngine {
             }
             score = clamp_score(score);
             if score < self.settings.min_score {
+                dropped_below_min_score += 1;
                 continue;
             }
 
@@ -422,11 +474,35 @@ impl GenericRecallEngine {
         }
         let selected_for_rerank = rerank_candidates.len();
 
+        if let Some(trace) = trace.as_deref_mut() {
+            let mut stage = make_trace_stage("rank.pre-rerank", RetrievalTraceStageStatus::Ok);
+            stage.input_count = Some(candidates.len() as u64);
+            stage.output_count = Some(selected_for_rerank as u64);
+            stage
+                .metrics
+                .insert("candidatePoolSize".to_string(), json!(candidate_pool_size));
+            stage.metrics.insert(
+                "droppedBelowMinScoreCount".to_string(),
+                json!(dropped_below_min_score),
+            );
+            stage.metrics.insert("limit".to_string(), json!(limit));
+            trace.push(stage);
+        }
+
         if rerank_candidates.is_empty() {
+            if let Some(trace) = trace {
+                let mut stage =
+                    make_trace_stage("rank.finalize", RetrievalTraceStageStatus::Skipped);
+                stage.input_count = Some(candidates.len() as u64);
+                stage.output_count = Some(0);
+                stage.reason = Some("no candidates survived pre-rerank scoring".to_string());
+                trace.push(stage);
+            }
             return Ok(Vec::new());
         }
 
-        self.reranker
+        let rerank_summary = self
+            .reranker
             .apply(
                 query,
                 &normalized_query,
@@ -435,8 +511,14 @@ impl GenericRecallEngine {
                 self.settings.rerank_blend,
                 self.settings.rerank_mode,
                 self.settings.diagnostics,
+                selected_for_rerank,
             )
             .await?;
+        if let Some(trace) = trace.as_deref_mut() {
+            if let Some(stage) = rerank_summary.stage {
+                trace.push(stage);
+            }
+        }
 
         let mut ranked_rows = Vec::new();
         let mut noise_filtered = 0_usize;
@@ -514,6 +596,26 @@ impl GenericRecallEngine {
                 "resultCount": ranked_rows.len(),
             }),
         );
+        if let Some(trace) = trace {
+            let mut stage = make_trace_stage("rank.finalize", RetrievalTraceStageStatus::Ok);
+            stage.input_count = Some(selected_for_rerank as u64);
+            stage.output_count = Some(ranked_rows.len() as u64);
+            stage
+                .metrics
+                .insert("noiseFilteredCount".to_string(), json!(noise_filtered));
+            stage
+                .metrics
+                .insert("mmrEnabled".to_string(), json!(self.settings.mmr_diversity));
+            stage
+                .metrics
+                .insert("mmrDeferredCount".to_string(), json!(diversity_deferred));
+            stage.metrics.insert(
+                "hardMinScore".to_string(),
+                json!(self.settings.hard_min_score),
+            );
+            trace.set_final_rows(&ranked_rows);
+            trace.push(stage);
+        }
         Ok(ranked_rows)
     }
 }
@@ -1006,9 +1108,14 @@ impl RerankProviderClient {
         blend: f64,
         mode: RerankMode,
         diagnostics: bool,
-    ) -> AppResult<()> {
+        candidate_count: usize,
+    ) -> AppResult<RerankTraceSummary> {
         if candidates.is_empty() || mode == RerankMode::None {
-            return Ok(());
+            let mut stage = make_trace_stage("rerank", RetrievalTraceStageStatus::Skipped);
+            stage.input_count = Some(candidate_count as u64);
+            stage.output_count = Some(candidates.len() as u64);
+            stage.reason = Some("rerank disabled or no candidates available".to_string());
+            return Ok(RerankTraceSummary { stage: Some(stage) });
         }
 
         if mode == RerankMode::CrossEncoder {
@@ -1016,7 +1123,7 @@ impl RerankProviderClient {
                 .cross_encoder_rerank(query, candidates, blend, diagnostics)
                 .await
             {
-                Ok(()) => return Ok(()),
+                Ok(stage) => return Ok(RerankTraceSummary { stage: Some(stage) }),
                 Err(err) => {
                     emit_internal_diagnostic(
                         diagnostics,
@@ -1027,12 +1134,34 @@ impl RerankProviderClient {
                             "reason": truncate_for_error(&format!("{err:?}"), 240),
                         }),
                     );
+                    let mut stage = make_trace_stage("rerank", RetrievalTraceStageStatus::Fallback);
+                    stage.input_count = Some(candidate_count as u64);
+                    stage.output_count = Some(candidates.len() as u64);
+                    stage.fallback_to = Some("lightweight".to_string());
+                    stage.reason = Some(truncate_for_error(&format!("{err:?}"), 240));
+                    stage
+                        .metrics
+                        .insert("requestedMode".to_string(), json!("cross-encoder"));
+                    stage
+                        .metrics
+                        .insert("appliedMode".to_string(), json!("lightweight"));
+                    self.lightweight_rerank(normalized_query, query_tokens, candidates, blend);
+                    return Ok(RerankTraceSummary { stage: Some(stage) });
                 }
             }
         }
 
         self.lightweight_rerank(normalized_query, query_tokens, candidates, blend);
-        Ok(())
+        let mut stage = make_trace_stage("rerank", RetrievalTraceStageStatus::Ok);
+        stage.input_count = Some(candidate_count as u64);
+        stage.output_count = Some(candidates.len() as u64);
+        stage
+            .metrics
+            .insert("requestedMode".to_string(), json!("lightweight"));
+        stage
+            .metrics
+            .insert("appliedMode".to_string(), json!("lightweight"));
+        Ok(RerankTraceSummary { stage: Some(stage) })
     }
 
     fn api_key_attempt_order(&self, needs_api_key: bool) -> Vec<Option<String>> {
@@ -1080,7 +1209,7 @@ impl RerankProviderClient {
         candidates: &mut [ScoredCandidate],
         blend: f64,
         diagnostics: bool,
-    ) -> AppResult<()> {
+    ) -> AppResult<RetrievalTraceStage> {
         let needs_api_key = self.provider != "vllm";
         let attempts = self.api_key_attempt_order(needs_api_key);
         if needs_api_key && attempts.is_empty() {
@@ -1095,7 +1224,21 @@ impl RerankProviderClient {
                 .cross_encoder_rerank_once(query, candidates, blend, api_key.as_deref())
                 .await
             {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    let mut stage = make_trace_stage("rerank", RetrievalTraceStageStatus::Ok);
+                    stage.input_count = Some(candidates.len() as u64);
+                    stage.output_count = Some(candidates.len() as u64);
+                    stage
+                        .metrics
+                        .insert("requestedMode".to_string(), json!("cross-encoder"));
+                    stage
+                        .metrics
+                        .insert("appliedMode".to_string(), json!("cross-encoder"));
+                    stage
+                        .metrics
+                        .insert("attemptCount".to_string(), json!(attempt_idx + 1));
+                    return Ok(stage);
+                }
                 Err((retryable, message)) => {
                     last_error = Some(message.clone());
                     emit_internal_diagnostic(
@@ -1645,17 +1788,59 @@ impl LanceMemoryRepo {
         &self,
         req: RecallGenericRequest,
     ) -> AppResult<RecallGenericResponse> {
+        let (response, _) = self.recall_generic_internal(req, false).await?;
+        Ok(response)
+    }
+
+    pub async fn recall_generic_with_trace(
+        &self,
+        req: RecallGenericRequest,
+    ) -> AppResult<(RecallGenericResponse, RetrievalTrace)> {
+        let (response, trace) = self.recall_generic_internal(req, true).await?;
+        Ok((
+            response,
+            trace.expect("trace must exist when recall_generic_with_trace is requested"),
+        ))
+    }
+
+    async fn recall_generic_internal(
+        &self,
+        req: RecallGenericRequest,
+        include_trace: bool,
+    ) -> AppResult<(RecallGenericResponse, Option<RetrievalTrace>)> {
         let limit = clamped_limit(req.limit) as usize;
         let table = self.open_or_create_table().await?;
         let query_embedding = self.generic_recall_engine.embed_query(&req.query).await?;
         let lexical_query = self.generic_recall_engine.lexical_query(&req.query);
         let filter = principal_filter(&req.actor);
+        let mut trace = include_trace.then(RetrievalTraceCollector::default);
+        if let Some(trace) = trace.as_mut() {
+            let mut stage = make_trace_stage("embed.query", RetrievalTraceStageStatus::Ok);
+            stage
+                .metrics
+                .insert("dimensions".to_string(), json!(query_embedding.len()));
+            trace.push(stage);
+        }
         let seeds = self
-            .fetch_recall_seeds(&table, &lexical_query, &query_embedding, &filter, limit)
+            .fetch_recall_seeds(
+                &table,
+                &lexical_query,
+                &query_embedding,
+                &filter,
+                limit,
+                trace.as_mut(),
+            )
             .await?;
         let ranked = self
             .generic_recall_engine
-            .rank_candidates(&req.query, &lexical_query, &query_embedding, seeds, limit)
+            .rank_candidates(
+                &req.query,
+                &lexical_query,
+                &query_embedding,
+                seeds,
+                limit,
+                trace.as_mut(),
+            )
             .await?;
         if let Err(err) = self
             .record_recall_access_metadata(&table, &req.actor, &ranked)
@@ -1668,6 +1853,19 @@ impl LanceMemoryRepo {
                     "reason": truncate_for_error(&format!("{err:?}"), 240),
                 }),
             );
+            if let Some(trace) = trace.as_mut() {
+                let mut stage =
+                    make_trace_stage("access-update", RetrievalTraceStageStatus::Failed);
+                stage.input_count = Some(ranked.len() as u64);
+                stage.output_count = Some(0);
+                stage.reason = Some(truncate_for_error(&format!("{err:?}"), 240));
+                trace.push(stage);
+            }
+        } else if let Some(trace) = trace.as_mut() {
+            let mut stage = make_trace_stage("access-update", RetrievalTraceStageStatus::Ok);
+            stage.input_count = Some(ranked.len() as u64);
+            stage.output_count = Some(ranked.len().min(ACCESS_UPDATE_MAX_ROWS) as u64);
+            trace.push(stage);
         }
         let response_rows = ranked
             .into_iter()
@@ -1684,20 +1882,64 @@ impl LanceMemoryRepo {
             })
             .collect();
 
-        Ok(RecallGenericResponse {
+        let response = RecallGenericResponse {
             rows: response_rows,
-        })
+        };
+        let trace = trace.map(|trace| {
+            trace.finish(
+                RetrievalTraceKind::Generic,
+                &req.query,
+                &lexical_query,
+                None,
+            )
+        });
+        Ok((response, trace))
     }
 
     pub async fn recall_reflection(
         &self,
         req: RecallReflectionRequest,
     ) -> AppResult<RecallReflectionResponse> {
+        let (response, _) = self.recall_reflection_internal(req, false).await?;
+        Ok(response)
+    }
+
+    pub async fn recall_reflection_with_trace(
+        &self,
+        req: RecallReflectionRequest,
+    ) -> AppResult<(RecallReflectionResponse, RetrievalTrace)> {
+        let (response, trace) = self.recall_reflection_internal(req, true).await?;
+        Ok((
+            response,
+            trace.expect("trace must exist when recall_reflection_with_trace is requested"),
+        ))
+    }
+
+    async fn recall_reflection_internal(
+        &self,
+        req: RecallReflectionRequest,
+        include_trace: bool,
+    ) -> AppResult<(RecallReflectionResponse, Option<RetrievalTrace>)> {
         let mode = req.mode.unwrap_or(ReflectionRecallMode::InvariantDerived);
         let limit = clamped_limit(req.limit) as usize;
         let table = self.open_or_create_table().await?;
         let query_embedding = self.generic_recall_engine.embed_query(&req.query).await?;
         let lexical_query = self.generic_recall_engine.lexical_query(&req.query);
+        let mut trace = include_trace.then(RetrievalTraceCollector::default);
+        if let Some(trace) = trace.as_mut() {
+            let mut stage = make_trace_stage("embed.query", RetrievalTraceStageStatus::Ok);
+            stage
+                .metrics
+                .insert("dimensions".to_string(), json!(query_embedding.len()));
+            stage.metrics.insert(
+                "reflectionMode".to_string(),
+                json!(match mode {
+                    ReflectionRecallMode::InvariantOnly => "invariant-only",
+                    ReflectionRecallMode::InvariantDerived => "invariant+derived",
+                }),
+            );
+            trace.push(stage);
+        }
         let mut filter = format!(
             "{} AND category = '{}'",
             principal_filter(&req.actor),
@@ -1707,11 +1949,25 @@ impl LanceMemoryRepo {
             filter.push_str(" AND reflection_kind = 'invariant'");
         }
         let seeds = self
-            .fetch_recall_seeds(&table, &lexical_query, &query_embedding, &filter, limit)
+            .fetch_recall_seeds(
+                &table,
+                &lexical_query,
+                &query_embedding,
+                &filter,
+                limit,
+                trace.as_mut(),
+            )
             .await?;
         let ranked = self
             .generic_recall_engine
-            .rank_candidates(&req.query, &lexical_query, &query_embedding, seeds, limit)
+            .rank_candidates(
+                &req.query,
+                &lexical_query,
+                &query_embedding,
+                seeds,
+                limit,
+                trace.as_mut(),
+            )
             .await?;
         if let Err(err) = self
             .record_recall_access_metadata(&table, &req.actor, &ranked)
@@ -1724,6 +1980,19 @@ impl LanceMemoryRepo {
                     "reason": truncate_for_error(&format!("{err:?}"), 240),
                 }),
             );
+            if let Some(trace) = trace.as_mut() {
+                let mut stage =
+                    make_trace_stage("access-update", RetrievalTraceStageStatus::Failed);
+                stage.input_count = Some(ranked.len() as u64);
+                stage.output_count = Some(0);
+                stage.reason = Some(truncate_for_error(&format!("{err:?}"), 240));
+                trace.push(stage);
+            }
+        } else if let Some(trace) = trace.as_mut() {
+            let mut stage = make_trace_stage("access-update", RetrievalTraceStageStatus::Ok);
+            stage.input_count = Some(ranked.len() as u64);
+            stage.output_count = Some(ranked.len().min(ACCESS_UPDATE_MAX_ROWS) as u64);
+            trace.push(stage);
         }
 
         let rows = ranked
@@ -1757,7 +2026,19 @@ impl LanceMemoryRepo {
             })
             .collect::<Vec<_>>();
 
-        Ok(RecallReflectionResponse { rows })
+        let response = RecallReflectionResponse { rows };
+        let trace = trace.map(|trace| {
+            trace.finish(
+                RetrievalTraceKind::Reflection,
+                &req.query,
+                &lexical_query,
+                Some(match mode {
+                    ReflectionRecallMode::InvariantOnly => "invariant-only".to_string(),
+                    ReflectionRecallMode::InvariantDerived => "invariant+derived".to_string(),
+                }),
+            )
+        });
+        Ok((response, trace))
     }
 
     async fn record_recall_access_metadata(
@@ -1801,6 +2082,7 @@ impl LanceMemoryRepo {
         query_embedding: &[f32],
         filter: &str,
         limit: usize,
+        mut trace: Option<&mut RetrievalTraceCollector>,
     ) -> AppResult<Vec<CandidateSeed>> {
         let candidate_pool_size = self.generic_recall_engine.candidate_pool_size(limit);
         let diagnostics = self.generic_recall_engine.settings.diagnostics;
@@ -1810,7 +2092,18 @@ impl LanceMemoryRepo {
             .query_vector_candidates(table, query_embedding, filter, candidate_pool_size)
             .await
         {
-            Ok(rows) => rows,
+            Ok(rows) => {
+                if let Some(trace) = trace.as_deref_mut() {
+                    let mut stage =
+                        make_trace_stage("seed.vector-search", RetrievalTraceStageStatus::Ok);
+                    stage.output_count = Some(rows.len() as u64);
+                    stage
+                        .metrics
+                        .insert("candidatePoolSize".to_string(), json!(candidate_pool_size));
+                    trace.push(stage);
+                }
+                rows
+            }
             Err(err) => {
                 had_retrieval_error = true;
                 emit_internal_diagnostic(
@@ -1822,6 +2115,14 @@ impl LanceMemoryRepo {
                         "reason": truncate_for_error(&format!("{err:?}"), 240),
                     }),
                 );
+                if let Some(trace) = trace.as_deref_mut() {
+                    let mut stage =
+                        make_trace_stage("seed.vector-search", RetrievalTraceStageStatus::Fallback);
+                    stage.output_count = Some(0);
+                    stage.fallback_to = Some("fts-or-scan".to_string());
+                    stage.reason = Some(truncate_for_error(&format!("{err:?}"), 240));
+                    trace.push(stage);
+                }
                 Vec::new()
             }
         };
@@ -1829,7 +2130,18 @@ impl LanceMemoryRepo {
             .query_fts_candidates(table, lexical_query, filter, candidate_pool_size)
             .await
         {
-            Ok(rows) => rows,
+            Ok(rows) => {
+                if let Some(trace) = trace.as_deref_mut() {
+                    let mut stage =
+                        make_trace_stage("seed.fts-search", RetrievalTraceStageStatus::Ok);
+                    stage.output_count = Some(rows.len() as u64);
+                    stage
+                        .metrics
+                        .insert("candidatePoolSize".to_string(), json!(candidate_pool_size));
+                    trace.push(stage);
+                }
+                rows
+            }
             Err(err) => {
                 had_retrieval_error = true;
                 emit_internal_diagnostic(
@@ -1841,11 +2153,20 @@ impl LanceMemoryRepo {
                         "reason": truncate_for_error(&format!("{err:?}"), 240),
                     }),
                 );
+                if let Some(trace) = trace.as_deref_mut() {
+                    let mut stage =
+                        make_trace_stage("seed.fts-search", RetrievalTraceStageStatus::Fallback);
+                    stage.output_count = Some(0);
+                    stage.fallback_to = Some("vector-or-scan".to_string());
+                    stage.reason = Some(truncate_for_error(&format!("{err:?}"), 240));
+                    trace.push(stage);
+                }
                 Vec::new()
             }
         };
 
         let mut merged: HashMap<String, CandidateSeed> = HashMap::new();
+        let vector_hit_count = vector_hits.len();
         for (row, vector_score) in vector_hits {
             let entry = merged.entry(row.id.clone()).or_insert(CandidateSeed {
                 row,
@@ -1856,6 +2177,7 @@ impl LanceMemoryRepo {
         }
 
         let mut fts_hits = fts_hits;
+        let fts_hit_count = fts_hits.len();
         fts_hits.sort_by(|a, b| {
             b.updated_at
                 .cmp(&a.updated_at)
@@ -1873,6 +2195,7 @@ impl LanceMemoryRepo {
         }
 
         let mut seeds: Vec<CandidateSeed> = merged.into_values().collect();
+        let mut full_scan_used = false;
         if seeds.is_empty() && had_retrieval_error {
             emit_internal_diagnostic(
                 diagnostics,
@@ -1883,6 +2206,7 @@ impl LanceMemoryRepo {
                     "reason": "vector-and-fts-empty-after-errors",
                 }),
             );
+            full_scan_used = true;
             seeds = self
                 .query_rows(table, Some(filter.to_string()))
                 .await?
@@ -1893,6 +2217,29 @@ impl LanceMemoryRepo {
                     bm25_score: None,
                 })
                 .collect();
+        }
+        if let Some(trace) = trace {
+            let mut stage = if full_scan_used {
+                make_trace_stage("seed.merge", RetrievalTraceStageStatus::Fallback)
+            } else {
+                make_trace_stage("seed.merge", RetrievalTraceStageStatus::Ok)
+            };
+            stage.input_count = Some((vector_hit_count + fts_hit_count) as u64);
+            stage.output_count = Some(seeds.len() as u64);
+            stage
+                .metrics
+                .insert("vectorHitCount".to_string(), json!(vector_hit_count));
+            stage
+                .metrics
+                .insert("ftsHitCount".to_string(), json!(fts_hit_count));
+            stage
+                .metrics
+                .insert("fullScanUsed".to_string(), json!(full_scan_used));
+            if full_scan_used {
+                stage.fallback_to = Some("full-scan".to_string());
+                stage.reason = Some("vector-and-fts-empty-after-errors".to_string());
+            }
+            trace.push(stage);
         }
         Ok(seeds)
     }
@@ -3955,6 +4302,18 @@ fn emit_internal_diagnostic(enabled: bool, payload: Value) {
         eprintln!("{encoded}");
     } else {
         eprintln!("{{\"event\":\"retrieval.diagnostic.serialization_failed\",\"stage\":\"emit\"}}");
+    }
+}
+
+fn make_trace_stage(name: &str, status: RetrievalTraceStageStatus) -> RetrievalTraceStage {
+    RetrievalTraceStage {
+        name: name.to_string(),
+        status,
+        input_count: None,
+        output_count: None,
+        fallback_to: None,
+        reason: None,
+        metrics: BTreeMap::new(),
     }
 }
 

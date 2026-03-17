@@ -22,9 +22,13 @@ Interpretation:
 
 Archived scopes:
 
+- `documentation-refresh/`: closeout contract for the documentation cleanup that demoted stale operator docs and surfaced the reduced canonical docs set. Collected: `2026-03-17`. Reference value: `5/10`.
+  Why: useful as a narrow audit trail for the docs reduction pass, but lower-value than the architecture and implementation scopes it summarizes.
+- `strict-parity-gap-2026-03-17/`: phased strict-parity audit, implementation, and closeout materials for verifying acceptable historical TS capability parity under the Rust + remote architecture. Collected: `2026-03-17`. Reference value: `8/10`.
+  Why: strong audit and implementation value because it records the final traceability parity decision and the accepted ownership boundary for retained TS prompt-local helpers.
 - `context-engine-split/`: historical phase plans and task docs for the internal context-engine separation work. Collected: `2026-03-12`. Reference value: `7/10`.
   Why: preserves rationale for the plugin-side orchestration split, though much of it is execution-detail-heavy.
-- `remote-memory-backend/`: historical implementation handoff, sign-off, verification, and closeout materials for the remote backend migration. Collected: `2026-03-15`. Reference value: `8/10`.
+- `remote-memory-backend/`: historical implementation handoff, sign-off, verification, and closeout materials for the remote backend migration. Collected: `2026-03-17`. Reference value: `8/10`.
   Why: still helpful for understanding backend API migration and rollout sequencing.
 - `remote-authority-reset/`: phased plans, contracts, research notes, and closeout docs for the remote-only authority cleanup. Collected: `2026-03-16`. Reference value: `8/10`.
   Why: high audit value and strong linkage to the current remote-only architecture, but misleading if read as current execution guidance.
@@ -39,5 +43,5 @@ Archived scopes:
 
 Notes:
 
-- The 2026-03-15 architecture-reset snapshots were moved to top-level `docs/context-engine-split-2026-03-15/` and `docs/remote-memory-backend-2026-03-15/` for easier direct access.
+- The 2026-03-15/2026-03-17 architecture-reset snapshots were moved to top-level `docs/context-engine-split-2026-03-15/` and `docs/remote-memory-backend-2026-03-17/` for easier direct access.
 - Older archive folders remain unchanged as execution/history evidence.

@@ -2822,6 +2822,251 @@ async fn retrieval_diagnostics_enabled_does_not_leak_internal_fields_to_v1_rows(
 }
 
 #[tokio::test]
+async fn debug_generic_recall_route_returns_structured_trace_without_mutating_v1_rows() {
+    let app = setup_app_with(|cfg| {
+        cfg.retrieval.diagnostics = true;
+        cfg.retrieval.min_score = 0.0;
+        cfg.retrieval.hard_min_score = 0.0;
+    });
+
+    let store = json!({
+        "actor": actor("u1", "main", "sess-debug-trace-1", "session-key-debug-trace"),
+        "mode": "tool-store",
+        "memory": {
+            "text": "Document rollback drill steps and verify post-check evidence."
+        }
+    });
+    let (status, store_body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(store),
+        Some("idem-debug-trace-store-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "store failed: {store_body}");
+
+    let recall = json!({
+        "actor": actor("u1", "main", "sess-debug-trace-2", "session-key-debug-trace"),
+        "query": "rollback drill evidence",
+        "limit": 3
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/debug/recall/generic",
+        Some(recall),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "debug recall failed: {body}");
+    let rows = body["rows"].as_array().expect("rows should be present");
+    assert!(!rows.is_empty(), "debug recall should return rows");
+    assert!(
+        rows[0].get("trace").is_none(),
+        "trace must not leak into row payloads"
+    );
+    assert!(rows[0].get("diagnostics").is_none());
+
+    assert_eq!(body["trace"]["kind"], "generic");
+    let stages = body["trace"]["stages"]
+        .as_array()
+        .expect("trace stages should be an array");
+    assert!(
+        stages.iter().any(|stage| stage["name"] == "seed.merge"),
+        "trace should record merged seed stage"
+    );
+    assert!(
+        stages.iter().any(|stage| stage["name"] == "rank.finalize"),
+        "trace should record finalization stage"
+    );
+    assert!(
+        stages.iter().any(|stage| stage["name"] == "access-update"),
+        "trace should record access metadata update stage"
+    );
+    let final_row_ids = body["trace"]["finalRowIds"]
+        .as_array()
+        .expect("trace should include final row ids");
+    assert!(
+        !final_row_ids.is_empty(),
+        "trace should include final row ids"
+    );
+}
+
+#[tokio::test]
+async fn debug_recall_route_enforces_authenticated_actor_principal_boundary() {
+    let app = setup_app();
+    let recall = json!({
+        "actor": actor("u2", "other-agent", "sess-debug-boundary", "session-key-boundary"),
+        "query": "forbidden trace inspection",
+        "limit": 3
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/debug/recall/generic",
+        Some(recall),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        body["error"]["message"],
+        "actor principal does not match authenticated request context"
+    );
+}
+
+#[tokio::test]
+async fn debug_recall_trace_records_rerank_fallback_reason_without_exposing_runtime_dto_fields() {
+    let (rerank_base_url, _requests) = spawn_auth_rerank_mock_server(None, true).await;
+    let app = setup_app_with(|cfg| {
+        cfg.retrieval.diagnostics = true;
+        cfg.retrieval.min_score = 0.0;
+        cfg.retrieval.hard_min_score = 0.0;
+        cfg.providers.rerank.enabled = true;
+        cfg.providers.rerank.mode = "cross-encoder".to_string();
+        cfg.providers.rerank.provider = "jina".to_string();
+        cfg.providers.rerank.base_url = Some(format!("{rerank_base_url}/rerank"));
+        cfg.providers.rerank.api_key = Some("first-key,second-key".to_string());
+        cfg.providers.rerank.blend = 1.0;
+    });
+
+    for (idx, text) in [
+        "Primary rollback sequence for service unit changes.",
+        "Post-check evidence collection after rollback sequence.",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let session_id = format!("sess-rerank-trace-store-{idx}");
+        let idem_key = format!("idem-rerank-trace-store-{idx}");
+        let store = json!({
+            "actor": actor("u1", "main", &session_id, "session-key-rerank-trace"),
+            "mode": "tool-store",
+            "memory": {
+                "text": text
+            }
+        });
+        let (status, body) = request_json(
+            &app,
+            Method::POST,
+            "/v1/memories/store",
+            Some(store),
+            Some(&idem_key),
+            Some(("u1", "main")),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "store failed: {body}");
+    }
+
+    let recall = json!({
+        "actor": actor("u1", "main", "sess-rerank-trace-1", "session-key-rerank-trace"),
+        "query": "rollback sequence",
+        "limit": 3
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/debug/recall/generic",
+        Some(recall),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "debug recall failed: {body}");
+    let rerank_stage = body["trace"]["stages"]
+        .as_array()
+        .expect("trace stages should be present")
+        .iter()
+        .find(|stage| stage["name"] == "rerank")
+        .cloned()
+        .expect("rerank stage should be recorded");
+    assert_eq!(rerank_stage["status"], "fallback");
+    assert_eq!(rerank_stage["fallbackTo"], "lightweight");
+    assert_eq!(rerank_stage["metrics"]["appliedMode"], "lightweight");
+    let reason = rerank_stage["reason"]
+        .as_str()
+        .expect("rerank fallback reason should be recorded");
+    assert!(
+        reason.len() <= 240,
+        "rerank fallback reason should be bounded, got {} chars",
+        reason.len()
+    );
+}
+
+#[tokio::test]
+async fn debug_reflection_recall_route_reports_mode_and_trace_without_leaking_extra_row_fields() {
+    let app = setup_app_with(|cfg| {
+        cfg.retrieval.diagnostics = true;
+        cfg.retrieval.min_score = 0.0;
+        cfg.retrieval.hard_min_score = 0.0;
+    });
+
+    let store = json!({
+        "actor": actor("u1", "main", "sess-debug-reflection-store", "session-key-debug-reflection"),
+        "mode": "tool-store",
+        "memory": {
+            "text": "Always verify DNS and mount health after restart.",
+            "category": "reflection"
+        }
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(store),
+        Some("idem-debug-reflection-store"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "reflection store failed: {body}");
+
+    let recall = json!({
+        "actor": actor("u1", "main", "sess-debug-reflection-query", "session-key-debug-reflection"),
+        "query": "restart checks",
+        "mode": "invariant-only",
+        "limit": 3
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/debug/recall/reflection",
+        Some(recall),
+        None,
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "debug reflection recall failed: {body}"
+    );
+    assert_eq!(body["trace"]["kind"], "reflection");
+    assert_eq!(body["trace"]["mode"], "invariant-only");
+    let rows = body["rows"].as_array().expect("rows should be an array");
+    assert!(
+        !rows.is_empty(),
+        "reflection debug recall should return rows"
+    );
+    assert!(rows[0].get("trace").is_none());
+    assert!(rows[0].get("diagnostics").is_none());
+}
+
+#[tokio::test]
 async fn generic_recall_prefers_real_signal_over_placeholder_ordering() {
     let app = setup_app();
 

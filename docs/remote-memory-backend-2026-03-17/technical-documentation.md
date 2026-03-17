@@ -196,12 +196,16 @@ Deferred from the initial frozen admin surface:
 - memory mutation endpoints
 - bulk operator endpoints
 
-Current implementation status (2026-03-13):
+Current implementation status (2026-03-17 refresh):
 
 - admin/control-plane routes are not yet exposed in this backend build;
 - admin tokens are therefore not accepted on any runtime path;
 - data-plane middleware continues to require runtime bearer token + runtime principal headers only;
 - this keeps admin-token bypass isolated to explicit future control-plane routes, with no active bypass path in current MVP.
+- backend now additionally exposes debug-scoped retrieval trace routes:
+  - `POST /v1/debug/recall/generic`
+  - `POST /v1/debug/recall/reflection`
+- these debug routes are principal-scoped, return structured trace payloads outside ordinary `/v1/recall/*` DTO rows, and do not imply that the reserved `/v1/admin/*` control-plane surface has shipped.
 
 Data-plane route notes:
 
@@ -239,6 +243,7 @@ Idempotency lifecycle behavior in current MVP:
 - admin endpoints belong to a separate control plane, not the ordinary actor/data-plane contract.
 - admin-token bypass applies only to explicitly marked management endpoints and must remain auditable.
 - until admin routes are explicitly implemented, admin tokens must not grant access to any data-plane endpoint.
+- debug-scoped retrieval trace routes are not admin-token routes; they remain on the runtime principal boundary and exist to expose inspectable recall traces without widening ordinary recall DTOs.
 - all admin requests must emit an audit record with request id, operator identity, endpoint/method, target selector, timestamp, result status, and status code;
 - admin mutations must additionally require and record a reason field.
 - error payloads must not leak secrets or raw upstream provider payloads.

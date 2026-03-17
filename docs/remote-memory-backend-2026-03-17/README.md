@@ -1,5 +1,7 @@
 # remote-memory-backend Docs Index
 
+Snapshot refresh: `2026-03-17`
+
 Canonical documents (active):
 
 - `remote-memory-backend-contracts.md`
