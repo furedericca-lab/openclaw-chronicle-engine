@@ -1,5 +1,5 @@
 import type { BackendRecallReflectionRow } from "../backend-client/types.js";
-import { orchestrateDynamicRecall } from "../recall-engine.js";
+import { orchestrateDynamicRecall } from "./recall-engine.js";
 import {
   joinPrependContextBlocks,
   renderErrorDetectedBlock,

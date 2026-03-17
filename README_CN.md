@@ -181,8 +181,8 @@ distill 请求
 | 保留路径 | 保留原因 |
 |---|---|
 | `src/context/*` | 仅负责 prompt-time 编排 |
-| `src/recall-engine.ts` | 本地 gating / dedupe / exposure-state helper |
-| `src/adaptive-retrieval.ts` | prompt 侧 recall 触发启发式 |
+| `src/context/recall-engine.ts` | 本地 gating / dedupe / exposure-state helper |
+| `src/context/adaptive-retrieval.ts` | prompt 侧 recall 触发启发式 |
 
 ### 实际应该怎么理解
 

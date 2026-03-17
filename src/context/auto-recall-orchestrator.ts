@@ -1,10 +1,9 @@
 import type { BackendRecallGenericRow } from "../backend-client/types.js";
-import type { RecallResultRow } from "../memory-record-types.js";
 import {
   orchestrateDynamicRecall,
   type DynamicRecallResult,
   type DynamicRecallSessionState,
-} from "../recall-engine.js";
+} from "./recall-engine.js";
 
 export type AutoRecallSelectionMode = "mmr";
 export type AutoRecallCategory = "preference" | "fact" | "decision" | "entity" | "other" | "reflection";
@@ -50,6 +49,14 @@ export interface AutoRecallPlanParams {
   userId?: string;
 }
 
+interface AutoRecallResultRow {
+  id: string;
+  text: string;
+  category: AutoRecallCategory;
+  scope: string;
+  score: number;
+}
+
 export function createAutoRecallPlanner(
   config: AutoRecallPlannerConfig,
   deps: AutoRecallPlannerDependencies
@@ -93,7 +100,7 @@ export function createAutoRecallPlanner(
         return retrieved.slice(0, topK);
       },
       formatLine: (row) =>
-        `- [${row.entry.category}:${row.entry.scope}] ${deps.sanitizeForContext(row.entry.text)} ` +
+        `- [${row.category}:${row.scope}] ${deps.sanitizeForContext(row.text)} ` +
         `(${(row.score * 100).toFixed(0)}%)`,
     });
   };
@@ -107,18 +114,12 @@ function normalizePositiveInt(value: unknown, fallback: number): number {
   return Math.max(1, Math.floor(parsed));
 }
 
-function mapBackendRowsToRecallResults(rows: BackendRecallGenericRow[]): RecallResultRow[] {
+function mapBackendRowsToRecallResults(rows: BackendRecallGenericRow[]): AutoRecallResultRow[] {
   return rows.map((row) => ({
-    entry: {
-      id: row.id,
-      text: row.text,
-      vector: [],
-      category: row.category,
-      scope: row.scope,
-      importance: 1,
-      timestamp: Number(row.metadata?.updatedAt ?? row.metadata?.createdAt ?? Date.now()),
-    },
+    id: row.id,
+    text: row.text,
+    category: row.category,
+    scope: row.scope,
     score: Number.isFinite(row.score) ? Number(row.score) : 0,
-    sources: {},
   }));
 }

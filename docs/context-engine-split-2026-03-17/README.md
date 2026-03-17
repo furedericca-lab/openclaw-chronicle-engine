@@ -1,9 +1,9 @@
 # context-engine-split Docs Index
 
-Historical snapshot documents (read-only, non-canonical):
+Current design snapshot documents:
 
 - `context-engine-split-contracts.md`
-- `context-engine-split-2026-03-15-technical-documentation.md`
+- `context-engine-split-2026-03-17-technical-documentation.md`
 - `context-engine-split-scope-milestones.md`
 - `context-engine-split-implementation-research-notes.md`
 - `context-engine-split-brainstorming.md`
@@ -15,8 +15,8 @@ Current canonical runtime docs:
 
 Snapshot note:
 
-- This folder records the 2026-03-15 context-engine split design snapshot.
-- It is preserved for architecture history, not as the current `1.0.0-beta.0` plugin contract or file-layout authority.
+- This folder records the refreshed 2026-03-17 context-engine split design snapshot.
+- It reflects the current internal context-module layout and boundary judgment as of `1.0.0-beta.0`, but `runtime-architecture.md` remains the top-level runtime/source-of-truth boundary document.
 
 Historical execution artifacts:
 

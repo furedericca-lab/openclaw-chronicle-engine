@@ -17,8 +17,8 @@ const jiti = jitiFactory(import.meta.url, {
 const {
   registerSelfImprovementLogTool,
   registerSelfImprovementExtractSkillTool,
+  appendSelfImprovementEntry,
 } = jiti("../src/self-improvement-tools.ts");
-const { appendSelfImprovementEntry } = jiti("../src/self-improvement-files.ts");
 const {
   extractReflectionLearningGovernanceCandidates,
   extractReflectionLessons,

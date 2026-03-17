@@ -22,6 +22,8 @@ Interpretation:
 
 Archived scopes:
 
+- `src-root-boundary-cleanup-2026-03-17/`: single-contract cleanup record for consolidating self-improvement support into one module, deleting the last thin local recall DTO shell, and moving prompt-time recall helpers fully under `src/context/` to match the context-engine split boundary. Collected: `2026-03-17`. Reference value: `7/10`.
+  Why: useful as a focused audit trail for the point where the remaining `src/` root modules were reclassified more cleanly into adapter vs context ownership and the last low-value local recall DTO residue was removed.
 - `setwise-v2-removal-2026-03-17/`: single-contract cleanup record for deleting the final prompt-local `setwise-v2` auto-recall selector, collapsing the active runtime to backend-owned `mmr` ranking plus direct truncation, and removing the corresponding schema/test/doc surface. Collected: `2026-03-17`. Reference value: `6/10`.
   Why: useful as a narrow audit trail for the point where the repo stopped treating prompt-local auto-recall post-selection as a supported runtime seam and simplified the pre-release config surface before release.
 - `src-test-residual-cleanup-2026-03-17/`: single-contract cleanup record for removing final `src/` and `test/` old-architecture residue after the remote-backend cutover, including backend-owned recall filter forwarding, stale test naming cleanup, consolidation of test-only reflection helpers, and consolidation of self-improvement registration into the main self-improvement tool module. Collected: `2026-03-17`. Reference value: `7/10`.
@@ -69,5 +71,5 @@ Archived scopes:
 
 Notes:
 
-- The 2026-03-15/2026-03-17 architecture-reset snapshots were moved to top-level `docs/context-engine-split-2026-03-15/` and `docs/remote-memory-backend-2026-03-17/` for easier direct access.
+- The 2026-03-17 architecture/design snapshots were moved to top-level `docs/context-engine-split-2026-03-17/` and `docs/remote-memory-backend-2026-03-17/` for easier direct access.
 - Older archive folders remain unchanged as execution/history evidence.

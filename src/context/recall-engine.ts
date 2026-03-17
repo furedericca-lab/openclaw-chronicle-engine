@@ -1,5 +1,5 @@
 import { shouldSkipRetrieval } from "./adaptive-retrieval.js";
-import { renderTaggedPromptBlock } from "./context/prompt-block-renderer.js";
+import { renderTaggedPromptBlock } from "./prompt-block-renderer.js";
 
 export interface DynamicRecallSessionState {
   historyBySession: Map<string, Map<string, number>>;

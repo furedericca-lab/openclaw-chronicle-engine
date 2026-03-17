@@ -181,8 +181,8 @@ No, but the answer needs precision:
 | Retained path | Why it remains |
 |---|---|
 | `src/context/*` | prompt-time orchestration only |
-| `src/recall-engine.ts` | local gating / dedupe / exposure-state helpers |
-| `src/adaptive-retrieval.ts` | prompt-side retrieval trigger heuristic |
+| `src/context/recall-engine.ts` | local gating / dedupe / exposure-state helpers |
+| `src/context/adaptive-retrieval.ts` | prompt-side retrieval trigger heuristic |
 
 ### Practical interpretation
 

@@ -2,7 +2,7 @@ import {
   clearDynamicRecallSessionState,
   createDynamicRecallSessionState,
   type DynamicRecallSessionState,
-} from "../recall-engine.js";
+} from "./recall-engine.js";
 
 export type ReflectionErrorSignal = {
   at: number;

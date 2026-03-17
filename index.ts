@@ -11,8 +11,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
 import { registerRemoteMemoryTools } from "./src/backend-tools.js";
-import { ensureSelfImprovementLearningFiles } from "./src/self-improvement-files.js";
-import { registerSelfImprovementTools } from "./src/self-improvement-tools.js";
+import { ensureSelfImprovementLearningFiles, registerSelfImprovementTools } from "./src/self-improvement-tools.js";
 import {
   createSessionExposureState,
   DEFAULT_SESSION_EXPOSURE_MAX_TRACKED_SESSIONS,

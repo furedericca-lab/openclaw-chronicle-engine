@@ -31,12 +31,12 @@ const {
   clearDynamicRecallSessionState,
   orchestrateDynamicRecall,
   normalizeRecallTextKey,
-} = jiti("../src/recall-engine.ts");
+} = jiti("../src/context/recall-engine.ts");
 const { renderTaggedPromptBlock, renderErrorDetectedBlock } = jiti("../src/context/prompt-block-renderer.ts");
 const { createSessionExposureState } = jiti("../src/context/session-exposure-state.ts");
 const { createAutoRecallPlanner } = jiti("../src/context/auto-recall-orchestrator.ts");
 const { createReflectionPromptPlanner } = jiti("../src/context/reflection-prompt-planner.ts");
-const { shouldSkipRetrieval } = jiti("../src/adaptive-retrieval.ts");
+const { shouldSkipRetrieval } = jiti("../src/context/adaptive-retrieval.ts");
 
 function makeEntry({ timestamp, metadata, category = "reflection", scope = "global" }) {
   return {

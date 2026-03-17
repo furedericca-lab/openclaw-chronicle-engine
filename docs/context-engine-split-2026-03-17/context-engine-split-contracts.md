@@ -1,12 +1,11 @@
----
-description: Historical 2026-03-15 API and schema snapshot for context-engine-split.
+description: 2026-03-17 design contract snapshot for context-engine-split.
 ---
 
 # context-engine-split Contracts
 
-Historical snapshot note:
-- this contract records the 2026-03-15 branch assumptions for the context-engine split;
-- it is preserved for architecture history, not as the current post-`1.0.0-beta.0` config/schema authority.
+Snapshot note:
+- this contract records the refreshed 2026-03-17 internal design boundary for the context-engine split;
+- it is design guidance for current module placement and orchestration seams, while `openclaw.plugin.json` remains the config/schema authority.
 
 ## API Contracts
 
@@ -106,9 +105,9 @@ Authority rule:
 - local modules must not compute readable scopes, requested scopes, or policy overrides.
 
 Compatibility rule in this snapshot:
-- No config key rename in this branch.
-- `autoRecallSelectionMode: legacy` must continue to parse as `mmr`.
-- `sessionMemory.*` legacy compatibility mapping was still assumed intact at this point in time.
+- No new public plugin contract is introduced here.
+- Internal module moves are allowed when behavior remains test-backed.
+- Removed legacy config aliases such as `sessionMemory.*` and removed modes such as `setwise-v2` are outside this design snapshot and must not be reintroduced by context-layer work.
 
 ## Event contracts
 
@@ -130,9 +129,9 @@ Validation rules:
 - Docs must not claim a shipped standalone ContextEngine.
 
 Compatibility policy:
-- Backward compatible by default.
-- Internal module moves are allowed.
-- Public tool names, config keys, and memory-slot behavior are not allowed to break in this branch.
+- The public plugin kind, tool names, and current config keys stay stable.
+- Internal orchestration/file-layout changes are acceptable when tests stay green.
+- Context-layer work must not recreate local retrieval/scope authority.
 
 ## Security-sensitive fields and redaction/masking requirements
 

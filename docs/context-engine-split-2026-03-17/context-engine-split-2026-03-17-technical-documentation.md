@@ -1,13 +1,12 @@
----
-description: Historical 2026-03-15 technical architecture snapshot for context-engine-split.
+description: 2026-03-17 technical architecture snapshot for context-engine-split.
 ---
 
 # context-engine-split Technical Documentation
 
-Historical snapshot note:
-- this document records the 2026-03-15 context-engine split design state;
-- it is not the canonical post-`1.0.0-beta.0` contract or active file-layout authority;
-- references to local compatibility guarantees and to `src/reflection-store.ts` below are snapshot-era design context, not current runtime guidance.
+Snapshot note:
+- this document records the refreshed 2026-03-17 context-engine split design state;
+- it reflects the current active file-layout judgment for context orchestration;
+- `runtime-architecture.md` remains the top-level runtime/source-of-truth boundary document.
 
 ## Canonical Architecture
 
@@ -16,20 +15,24 @@ Current runtime contract remains:
 - Slot ownership: OpenClaw memory slot
 - Public surfaces: memory tools, reflection/self-improvement tools, current config schema
 
-Target internal architecture in this snapshot:
+Current internal architecture in this snapshot:
 
-1. **Backend memory core**
-   - `src/store.ts`
-   - `src/embedder.ts`
-   - `src/retriever.ts`
-   - `src/scopes.ts`
-   - historical `src/reflection-store.ts` snapshot (the current repo no longer keeps this file at top level)
-   - `src/tools.ts`
+1. **Backend/adapter core**
+   - `src/backend-client/*`
+   - `src/backend-tools.ts`
+   - backend-owned retrieval, ranking, scope filtering, and persistence authority in the Rust backend
 
 2. **Context orchestration core**
    - new `src/context/*` modules for prompt-time planning/rendering/state
    - consumes backend candidate providers and config
    - returns structured prompt prepend blocks and session-state updates
+   - current active modules include:
+     - `src/context/auto-recall-orchestrator.ts`
+     - `src/context/reflection-prompt-planner.ts`
+     - `src/context/prompt-block-renderer.ts`
+     - `src/context/session-exposure-state.ts`
+     - `src/context/recall-engine.ts`
+     - `src/context/adaptive-retrieval.ts`
 
 3. **Plugin wiring layer**
    - `index.ts`
@@ -38,7 +41,7 @@ Target internal architecture in this snapshot:
 ## Key Constraints and Non-Goals
 
 Constraints:
-- Preserve the 2026-03-15 `memory` plugin contract assumptions captured by this snapshot.
+- Preserve the current `1.0.0-beta.0` `memory` plugin contract.
 - Preserve gated hook paths:
   - `before_agent_start`
   - `before_prompt_build`
@@ -55,7 +58,7 @@ Non-goals:
 
 ## Interfaces between components
 
-### Backend-facing interfaces (implemented in this branch)
+### Backend-facing interfaces (implemented in the current repo)
 - Generic recall provider input:
   - query, actor identity, auto-recall limits
   - implementation seam: `src/context/auto-recall-orchestrator.ts` dependency contract (`recallGeneric`)
@@ -68,7 +71,7 @@ Non-goals:
   - rendered `prependContext` for `<inherited-rules>` and `<error-detected>`
   - session error-signal mutations via `src/context/session-exposure-state.ts`
 
-### Orchestration-facing interfaces (implemented in this branch)
+### Orchestration-facing interfaces (implemented in the current repo)
 - Block renderer:
   - implementation seam: `src/context/prompt-block-renderer.ts`
   - output: tagged prompt blocks with untrusted-data wrapping where required
@@ -83,7 +86,7 @@ Non-goals:
 
 Startup/bootstrap:
 - `index.ts` parses config and constructs backend/orchestration dependencies.
-- Hook registration remains in `index.ts`, but handlers should become thin delegates.
+- Hook registration remains in `index.ts`, and handlers are expected to stay thin delegates.
 
 Runtime modes:
 - `sessionStrategy: systemSessionMemory` keeps built-in OpenClaw session behavior and optional auto-recall.
@@ -106,7 +109,7 @@ Prompt-time data flow after refactor:
 ### Hook parity and fail-open wording (current behavior)
 - `before_agent_start`:
   - delegated to `createAutoRecallPlanner(...).plan(...)`
-  - on failure logs `memory-lancedb-pro: auto-recall failed: ...` and continues without injected block
+  - on failure logs an auto-recall warning and continues without injected block
 - `after_tool_call` + `before_prompt_build`:
   - delegated to `createReflectionPromptPlanner(...)`
   - reflection-recall injection failures log `memory-reflection: reflection-recall injection failed: ...`; prompt build continues
@@ -136,7 +139,7 @@ A later standalone ContextEngine adapter should stay thin and consume existing s
 
 ## Security model and hardening notes
 
-- Scope filtering and read authority remain backend-owned; orchestration must not reconstruct or bypass them locally.
+- Scope filtering, retrieval ranking, and read authority remain backend-owned; orchestration must not reconstruct or bypass them locally.
 - Rendered context blocks must keep existing untrusted-data wrapping semantics where applicable.
 - No credential handling changes are in scope.
 - Any future config edit outside this branch still requires backup of `openclaw.json` before runtime changes.
@@ -156,4 +159,4 @@ A later standalone ContextEngine adapter should stay thin and consume existing s
 - Full regression: `npm test`
 - Reflection-heavy paths: `node --test test/memory-reflection.test.mjs test/self-improvement.test.mjs`
 - Session-strategy cutover guard: `node --test test/config-session-strategy-cutover.test.mjs`
-- Doc hygiene: placeholder/residual scans under `docs/context-engine-split`
+- Doc hygiene: placeholder/residual scans under `docs/context-engine-split-2026-03-17`

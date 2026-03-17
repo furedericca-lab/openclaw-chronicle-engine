@@ -1,11 +1,10 @@
----
-description: Historical 2026-03-15 scope and milestone snapshot for context-engine-split.
+description: 2026-03-17 scope and milestone snapshot for context-engine-split.
 ---
 
 # context-engine-split Scope and Milestones
 
-Historical snapshot note:
-- this file records the milestone framing for the 2026-03-15 internal split effort;
+Snapshot note:
+- this file records the refreshed milestone framing for the 2026-03-17 internal split design state;
 - current runtime authority and current config cutover status are documented elsewhere.
 
 ## In Scope
@@ -24,8 +23,8 @@ Historical snapshot note:
 
 - Changing `openclaw.plugin.json` from `memory` to `contextEngine`.
 - Adding a new shipped ContextEngine plugin entrypoint.
-- Replacing LanceDB with another store.
-- Reworking retrieval scoring/rerank math except where needed to preserve parity through extraction.
+- Changing backend-owned retrieval/ranking/scope authority.
+- Reworking backend retrieval scoring/rerank behavior except where needed to preserve adapter parity.
 - Adding DAG-based transcript compaction or lossless session persistence.
 
 ## Milestones
@@ -60,6 +59,6 @@ Acceptance gate:
 
 ## Exit Criteria
 
-- `memory-lancedb-pro` still ships as a `memory` plugin and passes tests.
+- `openclaw-chronicle-engine` still ships as a `memory` plugin and passes tests.
 - Prompt orchestration logic is modular enough that a thin future ContextEngine adapter can be written without reopening retrieval/storage internals.
 - Active-path verification evidence is recorded under `docs/archive/context-engine-split/task-plans/4phases-checklist.md`.

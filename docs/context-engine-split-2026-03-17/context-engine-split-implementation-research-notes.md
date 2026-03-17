@@ -10,13 +10,10 @@ Current plugin contract:
 - `openclaw.plugin.json` declares `"kind": "memory"`.
 - `index.ts` exports `kind: "memory" as const` and registers the whole plugin.
 
-Current backend-heavy modules:
-- `src/store.ts` — LanceDB storage and query primitives.
-- `src/embedder.ts` — embedding provider abstraction.
-- `src/retriever.ts` — hybrid retrieval, scoring, rerank.
-- `src/scopes.ts` — scope access model.
-- historical `src/reflection-store.ts` plus `src/reflection-item-store.ts` / `src/reflection-event-store.ts` — reflection persistence in the 2026-03-15 snapshot; the current repo no longer keeps `src/reflection-store.ts` at top level.
-- `src/tools.ts` — memory/self-improvement tool registration.
+Current backend/adapter-heavy modules:
+- `src/backend-client/*` — backend transport/runtime-context boundary.
+- `src/backend-tools.ts` — memory and management tool registration against the backend client.
+- Rust backend — retrieval, ranking, rerank, scope visibility, and persistence authority.
 
 Current orchestration-heavy ownership in `index.ts`:
 - `before_agent_start` generic auto-recall injection (`index.ts:1675-1715`).
@@ -26,12 +23,12 @@ Current orchestration-heavy ownership in `index.ts`:
 - `before_prompt_build` for `<inherited-rules>` and `<error-detected>` injection (`index.ts:2150-2182`).
 - parsing of reflection/auto-recall config in `parsePluginConfig` (`index.ts:2722+`).
 
-Supporting orchestration helpers already exist, but are mixed with plugin wiring:
-- `src/recall-engine.ts` — prompt gating/session dedupe/tagged block assembly helper.
-- `src/auto-recall-final-selection.ts` — generic final top-k selection adapter.
-- `src/reflection-recall.ts` / `src/reflection-aggregation.ts` / `src/reflection-recall-final-selection.ts` — reflection row ranking/selection.
-- `src/adaptive-retrieval.ts` — query worthiness heuristics.
-- `src/session-recovery.ts` / `src/reflection-retry.ts` — command-flow runtime helpers.
+Supporting orchestration helpers already exist and are now largely under `src/context/`:
+- `src/context/recall-engine.ts` — prompt gating/session dedupe/tagged block assembly helper.
+- `src/context/adaptive-retrieval.ts` — query worthiness heuristics.
+- `src/context/auto-recall-orchestrator.ts` — generic auto-recall planner.
+- `src/context/reflection-prompt-planner.ts` — reflection/error planner.
+- `src/context/session-exposure-state.ts` — session-local exposure suppression and error-signal state.
 
 ## Gap analysis with evidence
 
@@ -41,8 +38,8 @@ Supporting orchestration helpers already exist, but are mixed with plugin wiring
 2. **Prompt-time state is kept alongside backend setup.**
    Evidence: `autoRecallState`, `reflectionErrorStateBySession`, and reflection-agent caches are all created in `index.ts`, even though these are session exposure concerns rather than persistence primitives.
 
-3. **Current recall helpers are reusable but not presented as explicit adapter/orchestration contracts.**
-   Evidence: `orchestrateDynamicRecall()` in `src/recall-engine.ts` accepts loader/formatter lambdas, but callers still define prompt tags and rendering directly in `index.ts`.
+3. **The reusable recall helpers are now context-owned, but the design docs need to track the moved paths precisely.**
+   Evidence: `orchestrateDynamicRecall()` now lives in `src/context/recall-engine.ts`, while callers in `src/context/*` consume it directly.
 
 4. **Future ContextEngine migration lacks a thin adapter seam.**
    Evidence: no module currently exposes a backend-facing API like "recall generic rows" or "recall reflection rows" without also deciding output tags and block formatting.
@@ -70,7 +67,7 @@ Supporting orchestration helpers already exist, but are mixed with plugin wiring
 
 ## Selected design and rationale
 
-Selected design: **extract a ContextEngine-ready orchestration layer inside the current repo while preserving the public `memory` plugin contract.**
+Selected design: **keep the ContextEngine-ready orchestration layer inside the current repo while preserving the public `memory` plugin contract.**
 
 Planned module boundary shift:
 - Keep backend-owned retrieval/persistence in backend-oriented modules.
@@ -85,13 +82,17 @@ Planned module boundary shift:
 - Remove local scope participation from orchestration contracts; orchestration should consume backend-authoritative rows and decide only timing/rendering.
 - For v1, `agent_end` remains in the backend/data path as the auto-capture ingestion boundary; further abstraction is explicitly deferred.
 
-Proposed seam modules:
-- `src/backend-client/generic-recall.ts` or equivalent — send actor/query requests and return authoritative generic recall rows.
-- `src/backend-client/reflection-recall.ts` or equivalent — send actor/query/mode requests and return authoritative reflection rows.
-- `src/context/error-signal-provider.ts` — expose pending tool-error hints for prompt-time use.
-- `src/context/block-renderer.ts` — render `<relevant-memories>`, `<inherited-rules>`, `<error-detected>` from structured inputs.
-- `src/context/session-state.ts` — session-local suppression/dedupe state previously owned in `index.ts`.
-- Optional thin composition module: `src/context/context-orchestrator.ts`.
+Current seam modules:
+- backend data access:
+  - `src/backend-client/client.ts`
+  - `src/backend-client/runtime-context.ts`
+- context orchestration:
+  - `src/context/auto-recall-orchestrator.ts`
+  - `src/context/reflection-prompt-planner.ts`
+  - `src/context/prompt-block-renderer.ts`
+  - `src/context/session-exposure-state.ts`
+  - `src/context/recall-engine.ts`
+  - `src/context/adaptive-retrieval.ts`
 
 ## Test and validation strategy
 
@@ -103,8 +104,8 @@ Focused path checks:
 - `node --test test/config-session-strategy-cutover.test.mjs`
 
 Documentation/residual checks:
-- `bash /root/.openclaw/workspace/skills/repo-task-driven/scripts/doc_placeholder_scan.sh docs/context-engine-split`
-- `bash /root/.openclaw/workspace/skills/repo-task-driven/scripts/post_refactor_text_scan.sh docs/context-engine-split README.md`
+- `bash /root/.openclaw/workspace/skills/repo-task-driven/scripts/doc_placeholder_scan.sh docs/context-engine-split-2026-03-17`
+- `bash /root/.openclaw/workspace/skills/repo-task-driven/scripts/post_refactor_text_scan.sh docs/context-engine-split-2026-03-17 README.md`
 
 Expected outcomes:
 - No behavior change in existing memory slot/tool behavior.
