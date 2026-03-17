@@ -140,7 +140,7 @@ distill 请求
 | Diversity / MMR | 历史 TS 能力 | Rust backend | 已具备 |
 | Reflection recall 权威 | 本地 TS + 本地持久化路径 | Rust backend recall 路径 | 已替换 |
 | Reflection async jobs | 本地 / 插件耦合执行 | Rust backend enqueue + job tracking | 已替换 |
-| Distill async jobs | 历史 sidecar / example 流水线 | Rust backend distill jobs | 已具备 backend-native deterministic slice |
+| Distill async jobs | 历史 sidecar / example 流水线 | Rust backend distill jobs | 已是 backend-native deterministic runtime |
 | Scope derivation / ACL | 历史上本地 TS 有参与 | 仅 Rust backend | 已替换 |
 | 可检查 retrieval trace | 历史 TS 有更厚 telemetry 对象 | Rust backend debug trace routes | 达到可接受 parity，但不是 1:1 复刻 |
 | Prompt 注入渲染 | 本地 TS | 本地 TS | 有意保留 |
@@ -251,17 +251,37 @@ distill 请求
 |---|---|---|
 | Job ownership | 外部脚本 + worker | Rust backend job surface |
 | Source preprocessing | 脚本本地过滤 / 清洗 | backend cleanup / filtering pipeline |
+| Reduction quality | model-backed sidecar map/reduce | deterministic Rust span/window reducer |
 | Persistence | 外部再导回存储 | backend 自己持久化 artifacts，并可选写 memory |
 | 状态检查 | 队列文件 / worker 日志 | `GET /v1/distill/jobs/{jobId}` |
 | Runtime authority | 已不是 canonical path | backend-native 才是 canonical direction |
 
-重要边界：
+当前运行时形态：
+
+- runtime 在 `agent_end` 时把有序 transcript rows append 到 backend
+- runtime 可按配置的 `distill.everyTurns`，每累计 N 个 user turn 自动 enqueue 一个 backend-native `session-transcript` distill job
+- backend 自己解析 source rows、做清洗、构建 deterministic span/window candidates、聚合 evidence，并持久化 artifacts
+- 当 `persistMode=persist-memory-rows` 时，backend 还会把最终 artifact 继续落成 memory rows
+
+当前行为边界：
 
 - 旧 `jsonl_distill.py` / example-worker sidecar 路径已经从活动 repo 运行时中移除
 - 它不是当前受支持运行路径
 - 当前受支持方向是 backend-native distill jobs，并由 backend 自己持久化 session transcript
 - 当前 distill summary 刻意保持为英文 deterministic 输出
 - 可选 runtime cadence 会按 `distill.everyTurns` 自动 enqueue 一个 `session-transcript` distill job
+
+当前 distill 擅长的事：
+
+- 不依赖 sidecar 基础设施的 deterministic incident/decision extraction
+- 在 backend reduction window 内做多消息 evidence 聚合
+- 在同一 caller-scoped backend authority 模型下稳定产出 artifact，并可选继续持久化 memory
+
+当前 distill 明确不做的事：
+
+- 语言自适应抽取
+- model-backed map-stage lesson extraction
+- 恢复 queue-file / worker / `memory-pro import` 这一套旧架构
 
 ## 10. 调试与可观测性
 

@@ -140,7 +140,7 @@ distill request
 | Diversity / MMR | Historical TS-side capability | Rust backend | Present |
 | Reflection recall authority | Local TS + local persistence path | Rust backend recall path | Replaced |
 | Reflection async jobs | Local/plugin-coupled execution | Rust backend enqueue + job tracking | Replaced |
-| Distill async jobs | Historical sidecar/example pipeline | Rust backend distill jobs | Present, backend-native deterministic slice |
+| Distill async jobs | Historical sidecar/example pipeline | Rust backend distill jobs | Present, backend-native deterministic runtime |
 | Scope derivation / ACL | Local TS participation existed historically | Rust backend only | Replaced |
 | Inspectable retrieval trace | Historical TS had thicker telemetry objects | Rust backend debug trace routes | Acceptable parity, not 1:1 shape recreation |
 | Prompt injection rendering | Local TS | Local TS | Intentionally retained |
@@ -257,15 +257,32 @@ That means:
 | Status inspection | Queue files / external worker logs | `GET /v1/distill/jobs/{jobId}` |
 | Runtime authority | Not canonical anymore | Canonical direction |
 
-Important boundary:
+Current runtime shape:
+
+- runtime appends ordered transcript rows to backend on `agent_end`
+- runtime may optionally enqueue one backend-native `session-transcript` distill job every configured `distill.everyTurns` user turns
+- backend resolves the source rows, cleans them, builds deterministic span/window candidates, merges overlapping evidence, and persists artifacts
+- when `persistMode=persist-memory-rows`, backend also persists distilled memory rows from the final artifacts
+
+Current behavior boundary:
 
 - the old `jsonl_distill.py` / example-worker sidecar path has been removed from the active repo runtime
 - it is not the supported runtime path
 - the supported direction is backend-native distill jobs backed by persisted session transcript rows
 - distill summaries in the current runtime are intentionally English-only and deterministic
 - optional runtime cadence can enqueue one `session-transcript` distill job every configured `distill.everyTurns` user turns
-- distill summaries in the current runtime are intentionally English-only and deterministic
-- optional runtime cadence can enqueue one `session-transcript` distill job every configured `distill.everyTurns` user turns
+
+What current distill is good at:
+
+- deterministic incident/decision extraction without sidecar infrastructure
+- multi-message evidence aggregation inside backend reduction windows
+- stable artifacts and optional memory persistence under the same caller-scoped backend authority model
+
+What current distill is intentionally not:
+
+- language-adaptive extraction
+- model-backed map-stage lesson extraction
+- a restored queue-file / worker / `memory-pro import` architecture
 
 ## 10. Debuggability
 
