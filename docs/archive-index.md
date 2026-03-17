@@ -22,6 +22,8 @@ Interpretation:
 
 Archived scopes:
 
+- `memory-v1-beta-cutover-2026-03-17/`: phased cutover record for resetting the plugin/package line to `1.0.0-beta.0`, removing migration-only config aliases, relocating test-only helper residue, and aligning active docs with the post-migration baseline. Collected: `2026-03-17`. Reference value: `8/10`.
+  Why: high implementation and audit value because it records the exact break from migration-era compatibility, the release-line reset, and the repository-layout cleanup that clarified which remaining helpers are test-only.
 - `memory-backend-gap-closeout-2026-03-17/`: phased implementation and closeout record for the final reflection-source authority transfer, reflection status surface exposure, and compatibility residue cleanup after the backend migration. Collected: `2026-03-17`. Reference value: `8/10`.
   Why: high implementation and audit value because it records the final removal of plugin-local reflection source recovery, the shipped `POST /v1/reflection/source` contract, and the disposition of the remaining compatibility-only memory configuration surface.
 - `adapter-surface-closeout-2026-03-17/`: phased closeout record for finishing the plugin/adapter-facing management/debug surfaces and demoting misleading residual TS/runtime artifacts after the remote-authority cutover. Collected: `2026-03-17`. Reference value: `7/10`.
