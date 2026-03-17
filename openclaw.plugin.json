@@ -403,7 +403,7 @@
     },
     "memoryReflection.recall.mode": {
       "label": "Reflection-Recall Mode",
-      "help": "fixed keeps compatibility inheritance; dynamic enables prompt-gated Reflection-Recall.",
+      "help": "fixed keeps always-on inherited-rule injection; dynamic enables prompt-gated Reflection-Recall.",
       "advanced": true
     },
     "memoryReflection.recall.topK": {

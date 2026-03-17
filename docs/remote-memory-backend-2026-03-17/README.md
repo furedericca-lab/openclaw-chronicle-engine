@@ -2,7 +2,7 @@
 
 Snapshot refresh: `2026-03-17`
 
-Canonical documents (active):
+Historical snapshot documents (read-only, non-canonical):
 
 - `remote-memory-backend-contracts.md`
 - `remote-memory-backend-2026-03-17-technical-documentation.md`
@@ -12,9 +12,10 @@ Canonical documents (active):
 
 Snapshot clarification:
 
-- this 2026-03-17 snapshot now covers shipped runtime data-plane capabilities such as recall, auto-capture, memory mutation, reflection jobs, transcript persistence, and distill enqueue/status with both `inline-messages` and `session-transcript` execution;
+- this 2026-03-17 snapshot records the architecture reset that led to the shipped runtime data-plane capabilities such as recall, auto-capture, memory mutation, reflection jobs, transcript persistence, and distill enqueue/status with both `inline-messages` and `session-transcript` execution;
 - transcript append is caller-scoped via `POST /v1/session-transcripts/append`, and `agent_end` forwards runtime messages into that backend-owned source of truth;
-- the old sidecar/example artifacts have been removed from the active repo runtime and no longer define any supported architecture.
+- the old sidecar/example artifacts have been removed from the active repo runtime and no longer define any supported architecture;
+- current canonical runtime guidance lives in `../runtime-architecture.md` and `../README.md`, not in this snapshot folder.
 
 Historical execution artifacts:
 

@@ -22,6 +22,8 @@ Interpretation:
 
 Archived scopes:
 
+- `residual-debt-cleanup-2026-03-17/`: single-contract cleanup record for reconciling historical-snapshot docs wording, deleting an empty top-level docs residue, converting the Chinese noise-filter script into automated coverage, and removing the last stale compatibility phrasing from the active schema text. Collected: `2026-03-17`. Reference value: `5/10`.
+  Why: useful as a narrow closeout audit trail for the last non-architectural cleanup pass after the `1.0.0-beta.0` baseline stabilized.
 - `test-reference-cleanup-2026-03-17/`: single-contract cleanup record for deleting obsolete local-authority reference tests after the Rust backend became the sole memory authority. Collected: `2026-03-17`. Reference value: `6/10`.
   Why: useful as a narrow audit trail for why the removed `query-expander` / `reflection-store` / `reflection-recall` test helpers were treated as historical residue rather than current runtime coverage.
 - `post-beta-cleanup-2026-03-17/`: single-contract cleanup record for demoting misleading top-level historical docs, renaming the last migration-era cutover test path, and removing residual placeholder/template wording after the `1.0.0-beta.0` baseline reset. Collected: `2026-03-17`. Reference value: `6/10`.
