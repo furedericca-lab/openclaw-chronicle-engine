@@ -7,19 +7,19 @@
   "keywords": [
     "openclaw",
     "openclaw-plugin",
+    "chronicle-engine",
     "memory",
-    "ai-memory",
-    "long-term-memory",
-    "long-context",
-    "remote-memory",
+    "remote-backend",
     "context-orchestration",
-    "distill"
+    "reflection",
+    "distill",
+    "retrieval"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/furedericca-lab/openclaw-chronicle-engine.git"
   },
-  "author": "win4r",
+  "author": "furedericca",
   "license": "MIT",
   "dependencies": {
     "@sinclair/typebox": "0.34.48"

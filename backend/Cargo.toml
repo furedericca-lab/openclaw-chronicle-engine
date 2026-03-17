@@ -1,7 +1,11 @@
 [package]
 name = "memory-lancedb-pro-backend"
-version = "0.1.0"
+version = "1.0.0-beta.0"
 edition = "2021"
+authors = ["furedericca"]
+license = "MIT"
+description = "Remote backend for the OpenClaw Chronicle Engine memory plugin."
+repository = "https://github.com/furedericca-lab/openclaw-chronicle-engine"
 
 [lib]
 name = "memory_lancedb_pro_backend"
