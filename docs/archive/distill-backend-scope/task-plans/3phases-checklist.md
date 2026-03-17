@@ -47,7 +47,7 @@ description: Execution and verification checklist for distill-backend-scope 3-ph
     - `test/jsonl-distill-slash-filter.test.mjs`
     - `examples/new-session-distill/worker/lesson-extract-worker.mjs`
     - `examples/new-session-distill/hook/enqueue-lesson-extract/handler.ts`
-    - `docs/remote-memory-backend-2026-03-17/technical-documentation.md`
+    - `docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md`
     - `docs/remote-memory-backend-2026-03-17/remote-memory-backend-contracts.md`
 - Checkpoint confirmation:
   - Phase 1 complete; the current distiller residue is classified and the missing architectural viewpoint is explicit.
@@ -62,7 +62,7 @@ description: Execution and verification checklist for distill-backend-scope 3-ph
   - [x] initial DTO and job-state model frozen to implementation-prep depth
 - Evidence commands + result status:
   - doc updates completed in:
-    - `docs/distill-backend-scope/technical-documentation.md`
+    - `docs/archive/distill-backend-scope/distill-backend-scope-technical-documentation.md`
     - `docs/distill-backend-scope/distill-backend-scope-contracts.md`
     - `docs/distill-backend-scope/distill-backend-scope-implementation-research-notes.md`
 - Checkpoint confirmation:

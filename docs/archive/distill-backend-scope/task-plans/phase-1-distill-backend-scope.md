@@ -8,7 +8,7 @@ description: Phase 1 task list for distill-backend-scope.
 
 - `scripts/jsonl_distill.py`
 - `examples/new-session-distill/*`
-- `docs/remote-memory-backend-2026-03-17/technical-documentation.md`
+- `docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md`
 - `docs/remote-memory-backend-2026-03-17/remote-memory-backend-contracts.md`
 
 ## Canonical architecture / Key constraints

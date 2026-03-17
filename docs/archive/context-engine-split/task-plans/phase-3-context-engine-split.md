@@ -5,7 +5,7 @@ description: Behavior-parity verification and documentation updates for context-
 # Tasks: context-engine-split
 
 ## Input
-- `docs/context-engine-split/technical-documentation.md`
+- `docs/context-engine-split-2026-03-15/context-engine-split-2026-03-15-technical-documentation.md`
 - `README.md`
 - `README_CN.md`
 - `test/memory-reflection.test.mjs`

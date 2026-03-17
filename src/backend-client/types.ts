@@ -116,6 +116,10 @@ export interface BackendReflectionJobResponse {
   status: "queued" | "running" | "completed" | "failed";
 }
 
+export interface BackendSessionTranscriptAppendResponse {
+  appended: number;
+}
+
 export interface BackendReflectionJobStatusResponse extends BackendReflectionJobResponse {
   persisted?: boolean;
   memoryCount?: number;
@@ -182,6 +186,10 @@ export interface MemoryBackendClient {
     ctx: BackendCallContext,
     input: { items: BackendCaptureItem[] }
   ) => Promise<BackendMemoryMutationResult[]>;
+  appendSessionTranscript: (
+    ctx: BackendCallContext,
+    input: { items: BackendCaptureItem[]; idempotencyKey?: string }
+  ) => Promise<BackendSessionTranscriptAppendResponse>;
   updateMemory: (
     ctx: BackendCallContext,
     input: BackendUpdateInput

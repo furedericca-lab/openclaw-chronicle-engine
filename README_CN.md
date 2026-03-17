@@ -235,8 +235,8 @@ distill 请求
 | auto-recall prompt 注入 | 支持 | 本地编排 + backend recall |
 | reflection recall + enqueue | 支持 | backend recall/jobs + 本地 prompt 规划 |
 | distill job enqueue + 轮询 | 支持 | backend 权威异步 job 面 |
-| distill inline-messages 清洗 + artifact 持久化 | 支持 | backend 初版 executor |
-| distill `session-transcript` source | 暂未实现 | 契约已冻结，source resolution 仍 deferred |
+| distill inline-messages 清洗 + artifact 持久化 | 支持 | backend 权威执行路径 |
+| distill `session-transcript` source | 支持 | backend 持久化 transcript + 异步 distill 执行 |
 | `memory_store` / `memory_update` / `memory_forget` | 支持 | 远程后端工具 |
 | `memory_list` / `memory_stats` | 支持 | 可选管理工具 |
 | 本地 `memory-pro` CLI | 不支持 | 已移除 |
@@ -254,9 +254,9 @@ distill 请求
 
 重要边界：
 
-- `scripts/jsonl_distill.py` 和 `examples/new-session-distill/*` 现在只是 migration-reference / example residue
-- 它们不是当前受支持运行路径
-- 当前受支持方向是 backend-native distill jobs
+- 旧 `jsonl_distill.py` / example-worker sidecar 路径已经从活动 repo 运行时中移除
+- 它不是当前受支持运行路径
+- 当前受支持方向是 backend-native distill jobs，并由 backend 自己持久化 session transcript
 
 ## 10. 调试与可观测性
 
@@ -417,13 +417,14 @@ cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -
 
 ### “distill 现在是不是还靠旧的 `jsonl_distill.py` sidecar？”
 
-不是。这个脚本现在只作为迁移参考残留存在。
+不是。这个 sidecar 路径已经从当前活动运行时和 repo 中移除。
 
 当前受支持方向是：
 
 - backend-native distill jobs
 - backend-owned status
 - backend-owned artifacts
+- backend-owned session transcript persistence 与 replay-safe source resolution
 
 旧 sidecar / example 流水线不是 canonical runtime path。
 

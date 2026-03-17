@@ -8,7 +8,7 @@ description: Execution and audit checklist for remote-authority-reset with imple
 - `docs/remote-authority-reset/remote-authority-reset-brainstorming.md`
 - `docs/remote-authority-reset/remote-authority-reset-implementation-research-notes.md`
 - `docs/remote-authority-reset/remote-authority-reset-scope-milestones.md`
-- `docs/remote-authority-reset/technical-documentation.md`
+- `docs/archive/remote-authority-reset/remote-authority-reset-technical-documentation.md`
 - `docs/remote-authority-reset/remote-authority-reset-contracts.md`
 - `docs/remote-authority-reset/remote-only-local-authority-removal-plan.md`
 - `docs/remote-authority-reset/task-plans/phase-1-remote-authority-reset.md`
@@ -154,7 +154,7 @@ Delivered:
   - `README_CN.md`
   - `openclaw.plugin.json` (`remoteBackend.enabled` ui hint no longer implies local embedding config paths)
   - `docs/remote-authority-reset/README.md`
-  - `docs/remote-authority-reset/technical-documentation.md`
+  - `docs/archive/remote-authority-reset/remote-authority-reset-technical-documentation.md`
 - added release-cut/rollback notes:
   - `docs/remote-authority-reset/phase-4-closeout-release-notes.md`
 - re-confirmed remote principal + backend-owned scope invariants in active code/docs evidence:

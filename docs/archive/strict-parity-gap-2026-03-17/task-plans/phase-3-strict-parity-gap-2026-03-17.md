@@ -7,7 +7,7 @@ description: Resolve retained TS helper ownership and close strict parity verifi
 ## Input
 
 - `docs/archive/strict-parity-gap-2026-03-17/strict-parity-gap-2026-03-17-implementation-research-notes.md`
-- `docs/archive/strict-parity-gap-2026-03-17/technical-documentation.md`
+- `docs/archive/strict-parity-gap-2026-03-17/strict-parity-gap-2026-03-17-technical-documentation.md`
 - `docs/archive/strict-parity-gap-2026-03-17/strict-parity-gap-2026-03-17-contracts.md`
 - `index.ts`
 - `src/context/*`

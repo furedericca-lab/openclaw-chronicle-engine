@@ -19,7 +19,7 @@ Evidence:
 - `openclaw.plugin.json` still requires `embedding` at the top-level schema.
 
 Why this is a blocker:
-- `docs/remote-memory-backend/technical-documentation.md` states:
+- `docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md` states:
   - remote backend is the only authority for ACL/scope/provider config/persistence
   - shell does not implement local fallback backend behavior
   - shell startup in remote mode should load only remote transport config plus local integration flags
@@ -53,7 +53,7 @@ Evidence:
 - tests currently treat this behavior as valid.
 
 Why this matters:
-- `docs/remote-memory-backend/remote-memory-backend-contracts.md` and `technical-documentation.md` define `X-Auth-User-Id` / `X-Auth-Agent-Id` as trusted runtime principal headers.
+- `docs/remote-memory-backend/remote-memory-backend-contracts.md` and `remote-memory-backend-2026-03-17-technical-documentation.md` define `X-Auth-User-Id` / `X-Auth-Agent-Id` as trusted runtime principal headers.
 - The shell must not silently invent a principal and then send that synthesized identity as if it were authoritative.
 - `sessionId` may be generated for diagnostics; `userId` / `agentId` should not be fabricated for data-plane ownership.
 
@@ -92,7 +92,7 @@ Likely code files:
 - relevant tests under `test/`
 
 Likely docs to update:
-- `docs/remote-memory-backend/technical-documentation.md`
+- `docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md`
 - `docs/remote-memory-backend/remote-memory-backend-contracts.md`
 - `docs/remote-memory-backend/phase-4-verification-status-report.md` only if the closeout statement must be corrected
 - optionally add a concise follow-up status note if that is cleaner than mutating old report language

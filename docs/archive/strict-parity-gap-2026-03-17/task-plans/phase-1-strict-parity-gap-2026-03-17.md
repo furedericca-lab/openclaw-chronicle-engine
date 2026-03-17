@@ -37,7 +37,7 @@ Definition of Done: strict parity criteria, retained-helper ownership, acceptabl
 Tasks:
 
 - [x] T001 [Docs] Freeze the strict parity definition and acceptance language.
-  - DoD: `docs/archive/strict-parity-gap-2026-03-17/strict-parity-gap-2026-03-17-implementation-research-notes.md`, `...-contracts.md`, and `technical-documentation.md` agree on what counts as a strict gap versus a closed item or acceptable Rust-native / remote-native replacement.
+  - DoD: `docs/archive/strict-parity-gap-2026-03-17/strict-parity-gap-2026-03-17-implementation-research-notes.md`, `...-contracts.md`, and `strict-parity-gap-2026-03-17-technical-documentation.md` agree on what counts as a strict gap versus a closed item or acceptable Rust-native / remote-native replacement.
 - [x] T002 [P] [Docs] Build the retained TS helper ownership matrix.
   - DoD: docs classify `src/recall-engine.ts`, `src/auto-recall-final-selection.ts`, `src/reflection-recall.ts`, `src/final-topk-setwise-selection.ts`, and related `src/context/*` seams as either prompt-local or backend-parity debt.
 - [x] T003 [P] [QA] Define representative strict-parity scenarios and expected evidence.

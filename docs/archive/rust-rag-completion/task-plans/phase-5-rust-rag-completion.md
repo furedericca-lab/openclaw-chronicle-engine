@@ -8,7 +8,7 @@ description: P0/P1 parity closeout tasks for rust-rag-completion.
 - /root/verify/memory-lancedb-pro-context-engine-split/README.md
 - /root/verify/memory-lancedb-pro-context-engine-split/docs/rust-rag-completion/rust-rag-parity-gap-priority.md
 - /root/verify/memory-lancedb-pro-context-engine-split/docs/rust-rag-completion/rust-rag-completion-scope-milestones.md
-- /root/verify/memory-lancedb-pro-context-engine-split/docs/rust-rag-completion/technical-documentation.md
+- /root/verify/memory-lancedb-pro-context-engine-split/docs/archive/rust-rag-completion/rust-rag-completion-technical-documentation.md
 - /root/verify/memory-lancedb-pro-context-engine-split/docs/rust-rag-completion/rust-rag-completion-contracts.md
 - /root/verify/memory-lancedb-pro-context-engine-split/docs/rust-rag-completion/task-plans/4phases-checklist.md
 

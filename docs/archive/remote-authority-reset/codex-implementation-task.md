@@ -18,7 +18,7 @@ Read and follow these first:
 - `docs/remote-authority-reset/remote-authority-reset-brainstorming.md`
 - `docs/remote-authority-reset/remote-authority-reset-implementation-research-notes.md`
 - `docs/remote-authority-reset/remote-authority-reset-scope-milestones.md`
-- `docs/remote-authority-reset/technical-documentation.md`
+- `docs/archive/remote-authority-reset/remote-authority-reset-technical-documentation.md`
 - `docs/remote-authority-reset/remote-authority-reset-contracts.md`
 - `docs/remote-authority-reset/task-plans/4phases-checklist.md`
 - `docs/remote-authority-reset/task-plans/phase-1-remote-authority-reset.md`

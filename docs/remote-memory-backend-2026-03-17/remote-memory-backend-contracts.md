@@ -283,7 +283,7 @@ Capability-boundary note:
 - `auto-capture` is a shipped `/v1` write capability;
 - transcript distill enqueue/status is now part of the frozen shipped `/v1` surface in this snapshot;
 - `inline-messages` execution/artifact population is shipped;
-- `session-transcript` source resolution is still deferred.
+- `session-transcript` source resolution is shipped through backend-owned transcript persistence plus async distill execution.
 
 ### `POST /v1/memories/store`
 
@@ -381,6 +381,51 @@ Action enum:
 Status model:
 
 - `200`, `400`, `401`, `403`, `409`, `429`, `500`, `503`
+
+### `POST /v1/session-transcripts/append`
+
+Purpose:
+
+- persist ordered transcript rows for later backend-owned `session-transcript` distill execution.
+
+Request:
+
+```json
+{
+  "actor": {
+    "userId": "u_123",
+    "agentId": "main",
+    "sessionId": "runtime-instance-uuid",
+    "sessionKey": "agent:main:uuid"
+  },
+  "items": [
+    {
+      "role": "user",
+      "text": "Keep NO_PROXY aligned with LAN ranges."
+    },
+    {
+      "role": "assistant",
+      "text": "Fix: restart mosdns after disabling systemd-resolved."
+    }
+  ]
+}
+```
+
+Rules:
+
+- `items` must be a non-empty array;
+- `role` is `user`, `assistant`, or `system`;
+- `text` must be non-empty;
+- caller must provide an idempotency key;
+- backend assigns sequence order and persists caller-scoped transcript rows.
+
+Response `200`:
+
+```json
+{
+  "appended": 2
+}
+```
 
 ### `POST /v1/memories/update`
 
@@ -779,9 +824,9 @@ Deferred future async surface:
 - transcript distill now ships explicit backend-native enqueue/status routes:
   - `POST /v1/distill/jobs`
   - `GET /v1/distill/jobs/{jobId}`
-- the current implementation includes caller-scoped async execution for `inline-messages`, persisted artifacts, and optional memory-row persistence;
-- `session-transcript` requests currently terminate with structured source-unavailable failure until transcript resolution ships;
-- the current repo-side `scripts/jsonl_distill.py` and `examples/new-session-distill/*` do not define a shipped runtime contract.
+- the current implementation includes caller-scoped transcript append (`POST /v1/session-transcripts/append`), async execution for `inline-messages`, backend-owned `session-transcript` execution, persisted artifacts, and optional memory-row persistence;
+- `session-transcript` requests execute when persisted transcript rows exist for the scoped caller/session and fail with structured source-unavailable semantics only when the requested transcript source is absent;
+- the old repo-side sidecar/example path no longer defines any shipped runtime contract.
 
 ## Validation rules and compatibility policy
 

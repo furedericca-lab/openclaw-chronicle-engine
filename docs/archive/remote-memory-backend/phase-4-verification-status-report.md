@@ -26,7 +26,7 @@ detail=phase4-verification-and-doc-closeout-passed
   - admin token cannot bypass data-plane routes;
   - unauthorized error payloads do not leak token values;
   - `/v1/admin/*` remains non-runtime-accessible in current MVP implementation.
-- `T302` and `T305` completed by finalizing migration/rollback and parity-boundary documentation in `docs/remote-memory-backend/technical-documentation.md`.
+- `T302` and `T305` completed by finalizing migration/rollback and parity-boundary documentation in `docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md`.
 
 ## Verification evidence
 

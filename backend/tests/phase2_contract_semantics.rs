@@ -167,6 +167,28 @@ async fn poll_distill_job(
     request_json(app, Method::GET, &path, None, None, Some(auth_context), &[]).await
 }
 
+async fn append_session_transcript(
+    app: &Router,
+    actor: Value,
+    items: Value,
+    idempotency_key: &str,
+    auth_context: (&str, &str),
+) -> (StatusCode, Value) {
+    request_json(
+        app,
+        Method::POST,
+        "/v1/session-transcripts/append",
+        Some(json!({
+            "actor": actor,
+            "items": items,
+        })),
+        Some(idempotency_key),
+        Some(auth_context),
+        &[],
+    )
+    .await
+}
+
 fn setup_app() -> Router {
     let tmp = std::env::temp_dir().join(format!(
         "memory-lancedb-pro-backend-test-{}",
@@ -2747,7 +2769,27 @@ async fn reflection_job_status_is_scoped_to_user_and_agent() {
 
 #[tokio::test]
 async fn distill_job_enqueue_and_status_follow_frozen_contract() {
-    let app = setup_app();
+    let tmp = std::env::temp_dir().join(format!(
+        "memory-lancedb-pro-backend-distill-session-source-{}",
+        Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&tmp).expect("temp test path should be created");
+    let app = setup_app_at(&tmp);
+    let (status, body) = append_session_transcript(
+        &app,
+        actor("u1", "main", "sess-1", "session-key-1"),
+        json!([
+            { "role": "user", "text": "/note skip this command" },
+            { "role": "assistant", "text": "Conversation info (untrusted metadata):\nRestart mosdns after disabling systemd-resolved." },
+            { "role": "assistant", "text": "<relevant-memories>ignore this injected block</relevant-memories>\nCause: systemd-resolved occupied port 53. Fix: disable it and restart mosdns." },
+            { "role": "assistant", "text": "Best practice: be careful." }
+        ]),
+        "idem-session-transcript-append-1",
+        ("u1", "main"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["appended"], 4);
 
     let enqueue = json!({
         "actor": actor("u1", "main", "sess-1", "session-key-1"),
@@ -2785,21 +2827,30 @@ async fn distill_job_enqueue_and_status_follow_frozen_contract() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["jobId"], job_id);
-    assert!(matches!(
-        body["status"].as_str(),
-        Some("queued" | "running" | "completed" | "failed")
-    ));
+    assert_eq!(body["status"], "completed");
     assert_eq!(body["mode"], "session-lessons");
     assert_eq!(body["sourceKind"], "session-transcript");
     assert!(body["createdAt"].is_number());
     assert!(body["updatedAt"].is_number());
-    if body["status"] == "completed" {
-        assert!(body["result"]["artifactCount"].is_number());
-        assert!(body["result"]["persistedMemoryCount"].is_number());
-    }
-    if body["status"] == "failed" {
-        assert_eq!(body["error"]["code"], "DISTILL_SOURCE_UNAVAILABLE");
-    }
+    assert_eq!(body["result"]["persistedMemoryCount"], 0);
+    assert_eq!(body["result"]["artifactCount"], 2);
+    let conn = rusqlite::Connection::open(tmp.join("sqlite/jobs.db")).expect("sqlite should open");
+    let mut stmt = conn
+        .prepare("SELECT text, evidence_json FROM distill_artifacts WHERE job_id = ?1 ORDER BY created_at ASC")
+        .expect("distill artifact query should prepare");
+    let rows = stmt
+        .query_map(rusqlite::params![job_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .expect("artifact rows should query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("artifact rows should decode");
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|(text, _)| text.contains("restart mosdns")));
+    assert!(rows.iter().all(|(text, _)| !text.to_lowercase().contains("best practice")));
+    assert!(rows
+        .iter()
+        .all(|(_, evidence)| evidence.contains("\"messageIds\":[2]") || evidence.contains("\"messageIds\":[3]")));
 }
 
 #[tokio::test]
@@ -2940,7 +2991,7 @@ async fn distill_inline_messages_job_completes_and_persists_artifacts_and_memori
 }
 
 #[tokio::test]
-async fn distill_session_transcript_job_fails_until_source_resolution_exists() {
+async fn distill_session_transcript_job_fails_when_requested_source_has_no_persisted_messages() {
     let app = setup_app();
 
     let enqueue = json!({

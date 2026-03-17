@@ -235,8 +235,8 @@ That means:
 | Auto-recall prompt injection | Yes | Local orchestration over backend recall |
 | Reflection recall + enqueue | Yes | Backend-owned recall/jobs, local prompt planning |
 | Distill job enqueue + polling | Yes | Backend-owned async job surface |
-| Distill inline-message cleaning + artifact persistence | Yes | Backend-owned initial executor slice |
-| Distill `session-transcript` source | Not yet | Frozen contract exists, source resolution still deferred |
+| Distill inline-message cleaning + artifact persistence | Yes | Backend-owned execution path |
+| Distill `session-transcript` source | Yes | Backend-owned transcript persistence + async distill execution |
 | `memory_store` / `memory_update` / `memory_forget` | Yes | Remote-backed |
 | `memory_list` / `memory_stats` | Yes | Optional management tools |
 | Local `memory-pro` CLI | No | Removed |
@@ -254,9 +254,9 @@ That means:
 
 Important boundary:
 
-- `scripts/jsonl_distill.py` and `examples/new-session-distill/*` are now migration-reference / example residue
-- they are not the supported runtime path
-- the supported direction is backend-native distill jobs
+- the old `jsonl_distill.py` / example-worker sidecar path has been removed from the active repo runtime
+- it is not the supported runtime path
+- the supported direction is backend-native distill jobs backed by persisted session transcript rows
 
 ## 10. Debuggability
 
@@ -413,13 +413,14 @@ No. It is treated as a prompt-local seam because it only shapes already-returned
 
 ### “Does distill still mean running the old `jsonl_distill.py` sidecar?”
 
-No. That script remains only as migration/reference residue.
+No. That sidecar path has been removed from the active runtime and the repo.
 
 The supported direction is:
 
 - backend-native distill jobs
 - backend-owned status
 - backend-owned artifacts
+- backend-owned session transcript persistence and replay-safe source resolution
 
 The old sidecar/example pipeline is not the canonical runtime path.
 

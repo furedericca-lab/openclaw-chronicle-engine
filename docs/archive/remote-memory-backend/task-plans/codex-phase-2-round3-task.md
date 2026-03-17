@@ -8,7 +8,7 @@ Previous Codex runs:
 
 Read first:
 - docs/remote-memory-backend/remote-memory-backend-contracts.md
-- docs/remote-memory-backend/technical-documentation.md
+- docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md
 - docs/remote-memory-backend/remote-memory-backend-scope-milestones.md
 - docs/remote-memory-backend/task-plans/phase-2-remote-memory-backend.md
 - docs/remote-memory-backend/task-plans/4phases-checklist.md
@@ -83,7 +83,7 @@ Verification expectations:
 
 If meaningful code lands, update:
 - docs/remote-memory-backend/remote-memory-backend-contracts.md
-- docs/remote-memory-backend/technical-documentation.md
+- docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md
 - docs/remote-memory-backend/task-plans/4phases-checklist.md
 
 Preferred report:

@@ -7,7 +7,7 @@ description: Verification and operator-readiness tasks for remote-memory-backend
 ## Input
 
 - `docs/remote-memory-backend/remote-memory-backend-contracts.md`
-- `docs/remote-memory-backend/technical-documentation.md`
+- `docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md`
 - phases 2-3 implementation results
 - local shell tests and backend contract tests
 
@@ -74,7 +74,7 @@ Checkpoint: the migration is reviewable and reversible without ambiguous authori
     - unauthorized error payload does not leak token material;
     - `/v1/admin/*` remains non-runtime-accessible in current MVP implementation.
 - `T302` + `T305` completed by finalizing migration/rollback runbook and deferred parity boundaries in:
-  - `docs/remote-memory-backend/technical-documentation.md`
+  - `docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md`
   - `docs/remote-memory-backend/phase-4-verification-status-report.md`
 
 Evidence commands (2026-03-13):

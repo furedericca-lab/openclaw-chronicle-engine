@@ -12,7 +12,7 @@ Read first:
 - docs/context-engine-split/context-engine-split-brainstorming.md
 - docs/context-engine-split/context-engine-split-implementation-research-notes.md
 - docs/context-engine-split/context-engine-split-scope-milestones.md
-- docs/context-engine-split/technical-documentation.md
+- docs/context-engine-split-2026-03-15/context-engine-split-2026-03-15-technical-documentation.md
 - docs/context-engine-split/context-engine-split-contracts.md
 - docs/context-engine-split/task-plans/phase-3-context-engine-split.md
 - docs/context-engine-split/task-plans/phase-4-context-engine-split.md

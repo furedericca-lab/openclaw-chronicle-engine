@@ -21,7 +21,7 @@ Authoritative reference material to inspect before changing code:
 - src/reflection-recall.ts
 - test/benchmark-fixtures.json
 - docs/archive/2026-03-15-architecture-reset/remote-memory-backend/remote-memory-backend-contracts.md
-- docs/archive/2026-03-15-architecture-reset/remote-memory-backend/technical-documentation.md
+- docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md
 
 Mission:
 1. Replace placeholder generic recall with a real Rust RAG pipeline.

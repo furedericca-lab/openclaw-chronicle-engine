@@ -654,6 +654,20 @@ function sha256Hex(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
+function buildSessionTranscriptAppendIdempotencyKey(
+  actor: { sessionId: string; sessionKey: string },
+  items: BackendCaptureItem[]
+): string {
+  const digest = sha256Hex(
+    JSON.stringify({
+      sessionId: actor.sessionId,
+      sessionKey: actor.sessionKey,
+      items,
+    })
+  );
+  return `session-transcript-append:${digest.slice(0, 48)}`;
+}
+
 async function readSessionConversationForReflection(filePath: string, messageCount: number): Promise<string | null> {
   try {
     const lines = (await readFile(filePath, "utf-8")).trim().split("\n");
@@ -1386,60 +1400,72 @@ const chronicleEnginePlugin = {
       });
     }
 
-    // Auto-capture: analyze and store important information after agent ends
-    if (config.autoCapture !== false) {
-      api.on("agent_end", async (event, ctx) => {
-        if (!event.success || !event.messages || event.messages.length === 0) {
+    api.on("agent_end", async (event, ctx) => {
+      if (!event.success || !Array.isArray(event.messages) || event.messages.length === 0) {
+        return;
+      }
+
+      const transcriptItems = parseEventMessagesToCaptureItems(event.messages);
+      if (transcriptItems.length === 0) {
+        return;
+      }
+
+      const resolvedBackendCtx = resolveBackendCallContext(
+        mergeContextSources(ctx, event),
+        remoteRuntimeDefaults,
+        {
+          agentId: typeof ctx?.agentId === "string" ? ctx.agentId : undefined,
+          sessionId: typeof ctx?.sessionId === "string" ? ctx.sessionId : undefined,
+          sessionKey: typeof ctx?.sessionKey === "string" ? ctx.sessionKey : undefined,
+        }
+      );
+      if (!resolvedBackendCtx.hasPrincipalIdentity) {
+        api.logger.warn(
+          `openclaw-chronicle-engine: transcript append blocked (missing runtime principal: ${resolvedBackendCtx.missingPrincipalFields.join(", ")})`
+        );
+        return;
+      }
+
+      try {
+        const appendResult = await memoryBackendClient.appendSessionTranscript(
+          resolvedBackendCtx.context,
+          {
+            items: transcriptItems.slice(0, 256),
+            // Use a stable batch fingerprint so duplicate agent_end deliveries do not replay transcript rows.
+            idempotencyKey: buildSessionTranscriptAppendIdempotencyKey(
+              resolvedBackendCtx.context.actor,
+              transcriptItems.slice(0, 256)
+            ),
+          }
+        );
+        api.logger.info(
+          `openclaw-chronicle-engine: session transcript appended to remote backend (${transcriptItems.length} item(s), appended=${appendResult.appended})`
+        );
+      } catch (err) {
+        api.logger.warn(`openclaw-chronicle-engine: session transcript append failed: ${String(err)}`);
+      }
+
+      if (config.autoCapture === false) {
+        return;
+      }
+
+      try {
+        const captureItems = transcriptItems
+          .filter((item) => item.role === "user" || (config.captureAssistant === true && item.role === "assistant"))
+          .slice(0, 64);
+        if (captureItems.length === 0) {
           return;
         }
-
-        try {
-          const captureItems: BackendCaptureItem[] = [];
-          for (const msg of event.messages) {
-            if (!msg || typeof msg !== "object") continue;
-            const msgObj = msg as Record<string, unknown>;
-            const roleRaw = typeof msgObj.role === "string" ? msgObj.role.toLowerCase() : "";
-            if (roleRaw !== "user" && !(config.captureAssistant === true && roleRaw === "assistant")) {
-              continue;
-            }
-            const text = extractTextContent(msgObj.content);
-            if (!text || !text.trim()) continue;
-            captureItems.push({
-              role: roleRaw === "assistant" ? "assistant" : "user",
-              text: text.trim(),
-            });
-          }
-
-          if (captureItems.length === 0) {
-            return;
-          }
-
-          const resolvedBackendCtx = resolveBackendCallContext(
-            mergeContextSources(ctx, event),
-            remoteRuntimeDefaults,
-            {
-              agentId: typeof ctx?.agentId === "string" ? ctx.agentId : undefined,
-              sessionId: typeof ctx?.sessionId === "string" ? ctx.sessionId : undefined,
-              sessionKey: typeof ctx?.sessionKey === "string" ? ctx.sessionKey : undefined,
-            }
-          );
-          if (!resolvedBackendCtx.hasPrincipalIdentity) {
-            api.logger.warn(
-              `openclaw-chronicle-engine: auto-capture blocked (missing runtime principal: ${resolvedBackendCtx.missingPrincipalFields.join(", ")})`
-            );
-            return;
-          }
-          const result = await memoryBackendClient.storeAutoCapture(resolvedBackendCtx.context, {
-            items: captureItems.slice(0, 64),
-          });
-          api.logger.info(
-            `openclaw-chronicle-engine: auto-capture forwarded to remote backend (${captureItems.length} item(s), mutations=${result.length})`
-          );
-        } catch (err) {
-          api.logger.warn(`openclaw-chronicle-engine: capture failed: ${String(err)}`);
-        }
-      });
-    }
+        const result = await memoryBackendClient.storeAutoCapture(resolvedBackendCtx.context, {
+          items: captureItems,
+        });
+        api.logger.info(
+          `openclaw-chronicle-engine: auto-capture forwarded to remote backend (${captureItems.length} item(s), mutations=${result.length})`
+        );
+      } catch (err) {
+        api.logger.warn(`openclaw-chronicle-engine: capture failed: ${String(err)}`);
+      }
+    });
 
     // ========================================================================
     // Integrated Self-Improvement (inheritance + derived)

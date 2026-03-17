@@ -6,7 +6,7 @@ description: Future ContextEngine handoff readiness for context-engine-split.
 
 ## Input
 - `docs/context-engine-split/context-engine-split-contracts.md`
-- `docs/context-engine-split/technical-documentation.md`
+- `docs/context-engine-split-2026-03-15/context-engine-split-2026-03-15-technical-documentation.md`
 - phase-2/phase-3 results
 - touched orchestration modules
 

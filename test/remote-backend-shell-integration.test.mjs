@@ -492,6 +492,13 @@ describe("remote backend shell integration", () => {
     const fetchMock = installFetchMock([
       {
         method: "POST",
+        path: "/v1/session-transcripts/append",
+        reply: () => ({
+          appended: 3,
+        }),
+      },
+      {
+        method: "POST",
         path: "/v1/memories/store",
         reply: () => ({
           results: [
@@ -536,8 +543,22 @@ describe("remote backend shell integration", () => {
       }
     );
 
-    assert.equal(fetchMock.calls.length, 1);
-    const call = fetchMock.calls[0];
+    assert.equal(fetchMock.calls.length, 2);
+    const appendCall = fetchMock.calls[0];
+    assert.equal(appendCall.path, "/v1/session-transcripts/append");
+    assert.deepEqual(Object.keys(appendCall.body).sort(), ["actor", "items"]);
+    assert.equal(appendCall.body.actor.userId, "user-auto");
+    assert.equal(appendCall.body.actor.agentId, "agent-auto");
+    assert.equal(appendCall.body.actor.sessionId, "session-auto");
+    assert.equal(appendCall.body.actor.sessionKey, "agent:agent-auto:session:stable-auto");
+    assert.equal(appendCall.body.items.length, 3, "transcript append should retain assistant content");
+    assert.match(
+      appendCall.headers["idempotency-key"],
+      /^session-transcript-append:/,
+      "transcript append should use a stable idempotency key"
+    );
+
+    const call = fetchMock.calls[1];
     assert.equal(call.path, "/v1/memories/store");
     assert.deepEqual(Object.keys(call.body).sort(), ["actor", "items", "mode"]);
     assert.equal(call.body.mode, "auto-capture");
@@ -548,6 +569,47 @@ describe("remote backend shell integration", () => {
     assert.equal(call.body.items.length, 2, "assistant message should be filtered when captureAssistant=false");
     assert.equal(call.body.items[0].role, "user");
     assert.equal(call.body.items[1].role, "user");
+  });
+
+  it("appends session transcript even when autoCapture is disabled", async () => {
+    const root = makeTempRoot();
+
+    const fetchMock = installFetchMock([
+      {
+        method: "POST",
+        path: "/v1/session-transcripts/append",
+        reply: () => ({ appended: 2 }),
+      },
+    ]);
+
+    const harness = createPluginApiHarness({
+      pluginConfig: makeRemoteConfig(root, {
+        sessionStrategy: "none",
+        autoCapture: false,
+      }),
+      resolveRoot: root,
+    });
+    memoryLanceDBProPlugin.register(harness.api);
+
+    const handler = getLatestHandler(harness.eventHandlers, "agent_end");
+    await handler(
+      {
+        success: true,
+        messages: [
+          { role: "user", content: [{ type: "text", text: "Persist this session for distill." }] },
+          { role: "assistant", content: [{ type: "text", text: "Transcript append should still happen." }] },
+        ],
+      },
+      {
+        userId: "user-transcript-only",
+        agentId: "agent-transcript-only",
+        sessionId: "session-transcript-only",
+        sessionKey: "agent:agent-transcript-only:session:stable",
+      }
+    );
+
+    assert.equal(fetchMock.calls.length, 1);
+    assert.equal(fetchMock.calls[0].path, "/v1/session-transcripts/append");
   });
 
   it("keeps auto-recall fail-open when backend generic recall fails", async () => {

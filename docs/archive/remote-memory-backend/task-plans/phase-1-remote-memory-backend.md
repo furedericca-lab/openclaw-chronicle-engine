@@ -9,7 +9,7 @@ description: Planning and contract-freeze tasks for remote-memory-backend.
 - `docs/remote-memory-backend/remote-memory-backend-brainstorming.md`
 - `docs/remote-memory-backend/remote-memory-backend-implementation-research-notes.md`
 - `docs/remote-memory-backend/remote-memory-backend-scope-milestones.md`
-- `docs/remote-memory-backend/technical-documentation.md`
+- `docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md`
 - `docs/remote-memory-backend/remote-memory-backend-contracts.md`
 - `index.ts`
 - `src/context/*`

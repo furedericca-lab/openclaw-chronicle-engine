@@ -8,7 +8,7 @@ description: Task list for rust-rag-completion phase 3.
 - Canonical sources:
   - /root/verify/memory-lancedb-pro-context-engine-split/README.md
   - /root/verify/memory-lancedb-pro-context-engine-split/docs/rust-rag-completion/rust-rag-completion-scope-milestones.md
-  - /root/verify/memory-lancedb-pro-context-engine-split/docs/rust-rag-completion/technical-documentation.md
+  - /root/verify/memory-lancedb-pro-context-engine-split/docs/archive/rust-rag-completion/rust-rag-completion-technical-documentation.md
   - /root/verify/memory-lancedb-pro-context-engine-split/docs/rust-rag-completion/rust-rag-completion-contracts.md
 
 ## Canonical architecture / Key constraints

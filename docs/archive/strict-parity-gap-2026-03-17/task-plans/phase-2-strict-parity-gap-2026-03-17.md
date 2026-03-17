@@ -6,7 +6,7 @@ description: Close backend observability and retrieval traceability gaps under t
 
 ## Input
 
-- `docs/archive/strict-parity-gap-2026-03-17/technical-documentation.md`
+- `docs/archive/strict-parity-gap-2026-03-17/strict-parity-gap-2026-03-17-technical-documentation.md`
 - `docs/archive/strict-parity-gap-2026-03-17/strict-parity-gap-2026-03-17-contracts.md`
 - `docs/archive/strict-parity-gap-2026-03-17/strict-parity-gap-2026-03-17-implementation-research-notes.md`
 - `backend/src/state.rs`
@@ -45,7 +45,7 @@ Tasks:
 - [x] T104 [Security] Validate redaction and principal-boundary rules for trace surfaces.
   - DoD: tests/docs confirm sensitive fields are bounded/redacted and that cross-principal trace exposure is impossible without explicit admin authorization.
 - [x] T105 [Docs] Record exact trace surface behavior and verification commands.
-  - DoD: `technical-documentation.md`, `...-contracts.md`, and the checklist specify commands and expected outcomes for trace inspection and leak-prevention verification.
+  - DoD: `strict-parity-gap-2026-03-17-technical-documentation.md`, `...-contracts.md`, and the checklist specify commands and expected outcomes for trace inspection and leak-prevention verification.
 
 Checkpoint: backend retrieval traceability is no longer weaker than the old TS system in ambiguous or ad hoc ways, even if the Rust implementation shape differs.
 

@@ -212,7 +212,7 @@ Discovery / evidence commands:
 rg -n "jsonl_distill|new-session-distill|distiller|reflection/jobs|auto-capture" docs src test README.md README_CN.md examples scripts
 sed -n '1,260p' scripts/jsonl_distill.py
 sed -n '1,260p' examples/new-session-distill/worker/lesson-extract-worker.mjs
-sed -n '1,260p' docs/remote-memory-backend-2026-03-17/technical-documentation.md
+sed -n '1,260p' docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md
 sed -n '1,260p' docs/remote-memory-backend-2026-03-17/remote-memory-backend-contracts.md
 sed -n '1,260p' docs/distill-backend-scope/distill-backend-scope-contracts.md
 sed -n '1,240p' test/jsonl-distill-slash-filter.test.mjs

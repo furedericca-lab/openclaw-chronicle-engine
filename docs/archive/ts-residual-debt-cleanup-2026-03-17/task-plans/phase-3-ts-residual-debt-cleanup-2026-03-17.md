@@ -7,7 +7,7 @@ description: Reduce naming and seam ambiguity in retained prompt-local TS helper
 ## Input
 
 - `docs/archive/ts-residual-debt-cleanup-2026-03-17/ts-residual-debt-cleanup-2026-03-17-implementation-research-notes.md`
-- `docs/archive/ts-residual-debt-cleanup-2026-03-17/technical-documentation.md`
+- `docs/archive/ts-residual-debt-cleanup-2026-03-17/ts-residual-debt-cleanup-2026-03-17-technical-documentation.md`
 - `docs/archive/ts-residual-debt-cleanup-2026-03-17/ts-residual-debt-cleanup-2026-03-17-contracts.md`
 - `src/recall-engine.ts`
 - `src/adaptive-retrieval.ts`

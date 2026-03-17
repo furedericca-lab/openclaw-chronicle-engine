@@ -58,7 +58,7 @@ Required outcome:
 ## Contract closeout review pass
 
 After fixing the two risks above, perform one more contract-alignment pass against:
-- `docs/remote-memory-backend/technical-documentation.md`
+- `docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md`
 - `docs/remote-memory-backend/remote-memory-backend-contracts.md`
 
 Closeout goal:
@@ -90,7 +90,7 @@ Code:
 - `test/remote-backend-shell-integration.test.mjs`
 
 Docs:
-- `docs/remote-memory-backend/technical-documentation.md`
+- `docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md`
 - `docs/remote-memory-backend/remote-memory-backend-contracts.md`
 - optionally a concise follow-up closeout note/status report if useful
 

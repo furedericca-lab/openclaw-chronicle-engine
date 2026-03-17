@@ -8,7 +8,7 @@ description: Execution and verification checklist for context-engine-split 4-pha
 - `docs/context-engine-split/context-engine-split-brainstorming.md`
 - `docs/context-engine-split/context-engine-split-implementation-research-notes.md`
 - `docs/context-engine-split/context-engine-split-scope-milestones.md`
-- `docs/context-engine-split/technical-documentation.md`
+- `docs/context-engine-split-2026-03-15/context-engine-split-2026-03-15-technical-documentation.md`
 - `docs/context-engine-split/context-engine-split-contracts.md`
 - `docs/context-engine-split/task-plans/phase-1-context-engine-split.md`
 - `docs/context-engine-split/task-plans/phase-2-context-engine-split.md`
@@ -74,10 +74,10 @@ description: Execution and verification checklist for context-engine-split 4-pha
 - Completed tasks:
   - `T201`: Re-ran regression suite and confirmed extraction parity remains intact.
   - `T202`: Updated `README.md` and `README_CN.md` architecture/module-boundary sections to reflect backend ownership vs `src/context/*` orchestration ownership.
-  - `T203`: Updated hook-parity and fail-open wording in `docs/context-engine-split/technical-documentation.md` with explicit active-path behavior.
+  - `T203`: Updated hook-parity and fail-open wording in `docs/context-engine-split-2026-03-15/context-engine-split-2026-03-15-technical-documentation.md` with explicit active-path behavior.
 - Evidence commands:
   - `npm test`
-  - `rg -n "src/context/|standalone ContextEngine|before_agent_start|before_prompt_build|after_tool_call|command:new|command:reset" README.md README_CN.md docs/context-engine-split/technical-documentation.md`
+  - `rg -n "src/context/|standalone ContextEngine|before_agent_start|before_prompt_build|after_tool_call|command:new|command:reset" README.md README_CN.md docs/context-engine-split-2026-03-15/context-engine-split-2026-03-15-technical-documentation.md`
 - Issues/blockers:
   - None.
 - Resolutions:
@@ -89,13 +89,13 @@ description: Execution and verification checklist for context-engine-split 4-pha
 - Status: Completed
 - Batch date: 2026-03-09
 - Completed tasks:
-  - `T301`: Added thin adapter handoff notes in `docs/context-engine-split/technical-documentation.md` describing future adapter inputs and backend-owned responsibilities.
+  - `T301`: Added thin adapter handoff notes in `docs/context-engine-split-2026-03-15/context-engine-split-2026-03-15-technical-documentation.md` describing future adapter inputs and backend-owned responsibilities.
   - `T302`: Ran required doc hygiene scans across `docs/context-engine-split`, `README.md`, and `README_CN.md`.
-  - `T303`: Documented rollback/migration guardrails in `docs/context-engine-split/technical-documentation.md` (compatibility baseline, rollback direction, migration re-verification requirement).
+  - `T303`: Documented rollback/migration guardrails in `docs/context-engine-split-2026-03-15/context-engine-split-2026-03-15-technical-documentation.md` (compatibility baseline, rollback direction, migration re-verification requirement).
 - Evidence commands:
   - `bash /root/.openclaw/workspace/skills/repo-task-driven/scripts/doc_placeholder_scan.sh docs/context-engine-split`
   - `bash /root/.openclaw/workspace/skills/repo-task-driven/scripts/post_refactor_text_scan.sh docs/context-engine-split README.md README_CN.md`
-  - `rg -n "Future thin-adapter handoff|Rollback and migration guardrails|plugin kind stays memory" docs/context-engine-split/technical-documentation.md`
+  - `rg -n "Future thin-adapter handoff|Rollback and migration guardrails|plugin kind stays memory" docs/context-engine-split-2026-03-15/context-engine-split-2026-03-15-technical-documentation.md`
 - Issues/blockers:
   - None.
 - Resolutions:

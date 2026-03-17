@@ -3,7 +3,7 @@
 Canonical documents (active):
 
 - `remote-authority-reset-contracts.md`
-- `technical-documentation.md`
+- `remote-authority-reset-technical-documentation.md`
 - `remote-authority-reset-scope-milestones.md`
 - `remote-authority-reset-implementation-research-notes.md`
 - `remote-authority-reset-brainstorming.md`
@@ -29,7 +29,7 @@ Purpose:
 
 Execution order for implementation:
 
-1. Read `remote-authority-reset-contracts.md` and `technical-documentation.md`.
+1. Read `remote-authority-reset-contracts.md` and `remote-authority-reset-technical-documentation.md`.
 2. Execute staged deletions from `remote-only-local-authority-removal-plan.md`.
 3. Follow `task-plans/phase-2-remote-authority-reset.md` through `phase-4-remote-authority-reset.md`.
 4. Record evidence in `task-plans/4phases-checklist.md`.

@@ -7,7 +7,7 @@ description: Relocate or isolate test/reference-only TS helpers from top-level r
 ## Input
 
 - `docs/archive/ts-residual-debt-cleanup-2026-03-17/ts-residual-debt-cleanup-2026-03-17-implementation-research-notes.md`
-- `docs/archive/ts-residual-debt-cleanup-2026-03-17/technical-documentation.md`
+- `docs/archive/ts-residual-debt-cleanup-2026-03-17/ts-residual-debt-cleanup-2026-03-17-technical-documentation.md`
 - `docs/archive/ts-residual-debt-cleanup-2026-03-17/ts-residual-debt-cleanup-2026-03-17-contracts.md`
 - `src/reflection-recall.ts`
 - `src/reflection-recall-final-selection.ts`

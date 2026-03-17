@@ -11,6 +11,7 @@ import type {
   BackendReflectionJobStatusResponse,
   BackendRecallGenericRow,
   BackendRecallReflectionRow,
+  BackendSessionTranscriptAppendResponse,
   BackendStatsResponse,
   BackendStoreToolInput,
   BackendUpdateInput,
@@ -224,6 +225,22 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
         },
       });
       return Array.isArray(response.results) ? response.results : [];
+    },
+
+    async appendSessionTranscript(ctx, input) {
+      const response = await requestJson<BackendSessionTranscriptAppendResponse>({
+        method: "POST",
+        path: "/v1/session-transcripts/append",
+        ctx,
+        idempotencyKey: input.idempotencyKey || randomUUID(),
+        body: {
+          ...withActor(ctx),
+          items: input.items,
+        },
+      });
+      return {
+        appended: Number(response.appended || 0),
+      };
     },
 
     async updateMemory(ctx, input: BackendUpdateInput) {

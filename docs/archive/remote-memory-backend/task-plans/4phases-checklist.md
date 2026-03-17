@@ -9,7 +9,7 @@ description: Execution and verification checklist for the remote-memory-backend 
 - `docs/remote-memory-backend/remote-memory-backend-brainstorming.md`
 - `docs/remote-memory-backend/remote-memory-backend-implementation-research-notes.md`
 - `docs/remote-memory-backend/remote-memory-backend-scope-milestones.md`
-- `docs/remote-memory-backend/technical-documentation.md`
+- `docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md`
 - `docs/remote-memory-backend/remote-memory-backend-contracts.md`
 - `docs/remote-memory-backend/phase-2-sign-off-note.md`
 - `docs/remote-memory-backend/task-plans/phase-1-remote-memory-backend.md`
@@ -203,7 +203,7 @@ description: Execution and verification checklist for the remote-memory-backend 
       - `/v1/admin/*` remains non-runtime-accessible in current MVP implementation.
   - `T302` + `T305` completed:
     - migration cutover/rollback runbook and deferred parity boundary finalized in:
-      - `docs/remote-memory-backend/technical-documentation.md`
+      - `docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md`
       - `docs/remote-memory-backend/phase-4-verification-status-report.md`
 - Evidence commands:
   - `node --test --test-name-pattern='.' test/remote-backend-shell-integration.test.mjs`

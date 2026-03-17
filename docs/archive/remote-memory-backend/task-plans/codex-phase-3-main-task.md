@@ -6,7 +6,7 @@ Branch: dev/context-engine-split
 Read first:
 - docs/remote-memory-backend/phase-2-sign-off-note.md
 - docs/remote-memory-backend/remote-memory-backend-contracts.md
-- docs/remote-memory-backend/technical-documentation.md
+- docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md
 - docs/remote-memory-backend/task-plans/phase-3-remote-memory-backend.md
 - docs/remote-memory-backend/task-plans/4phases-checklist.md
 - docs/remote-memory-backend/task-plans/phase-3-implementation-handoff.md

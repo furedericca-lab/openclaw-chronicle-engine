@@ -362,6 +362,13 @@ pub struct EnqueueReflectionJobRequest {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppendSessionTranscriptRequest {
+    pub actor: Actor,
+    pub items: Vec<CaptureItem>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EnqueueDistillJobRequest {
     pub actor: Actor,
     pub mode: DistillMode,
@@ -424,6 +431,12 @@ pub enum ReflectionTrigger {
 pub struct EnqueueReflectionJobResponse {
     pub job_id: String,
     pub status: ReflectionJobStatus,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppendSessionTranscriptResponse {
+    pub appended: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -655,6 +668,19 @@ pub fn validate_enqueue_reflection_job_request(req: &EnqueueReflectionJobRequest
     }
     for item in &req.messages {
         validate_non_empty("messages[].text", &item.text)?;
+    }
+    Ok(())
+}
+
+pub fn validate_append_session_transcript_request(
+    req: &AppendSessionTranscriptRequest,
+) -> AppResult<()> {
+    req.actor.validate()?;
+    if req.items.is_empty() {
+        return Err(AppError::invalid_request("items must be non-empty"));
+    }
+    for item in &req.items {
+        validate_non_empty("items[].text", &item.text)?;
     }
     Ok(())
 }

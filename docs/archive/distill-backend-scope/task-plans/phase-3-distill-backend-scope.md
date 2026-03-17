@@ -7,7 +7,7 @@ description: Phase 3 task list for distill-backend-scope.
 ## Input
 
 - `docs/distill-backend-scope/*`
-- `docs/remote-memory-backend-2026-03-17/technical-documentation.md`
+- `docs/remote-memory-backend-2026-03-17/remote-memory-backend-2026-03-17-technical-documentation.md`
 - `docs/remote-memory-backend-2026-03-17/remote-memory-backend-contracts.md`
 - `docs/remote-memory-backend-2026-03-17/README.md`
 

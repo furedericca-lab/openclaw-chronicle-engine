@@ -22,6 +22,10 @@ Interpretation:
 
 Archived scopes:
 
+- `distill-backend-scope/`: phased planning, contract freeze, remote-backend alignment, and initial runtime implementation closeout for backend-native distill jobs. Collected: `2026-03-17`. Reference value: `8/10`.
+  Why: high implementation and audit value because it records the transition from sidecar distill residue to the canonical backend-native distill contract, including the first shipped `inline-messages` executor slice. Remaining transcript-source and reducer parity work moved to `docs/archive/distill-parity-migration-2026-03-17/`.
+- `distill-parity-migration-2026-03-17/`: phased parity-closeout record for backend-owned transcript persistence, `session-transcript` execution, deterministic reducer alignment, and removal of final JSONL/worker residue. Collected: `2026-03-17`. Reference value: `8/10`.
+  Why: high implementation and audit value because it captures the final distill parity boundary, the backend-owned transcript authority decision, and the exact cleanup that retired the last local sidecar/script assumptions.
 - `ts-residual-debt-cleanup-2026-03-17/`: phased audit and cleanup record for relocating test-only TS recall helpers and renaming retained prompt-local seams. Collected: `2026-03-17`. Reference value: `7/10`.
   Why: useful for understanding why residual TS files still exist, which ones were moved to tests, and which names were normalized to reflect prompt-local ownership.
 - `documentation-refresh/`: closeout contract for the documentation cleanup that demoted stale operator docs and surfaced the reduced canonical docs set. Collected: `2026-03-17`. Reference value: `5/10`.

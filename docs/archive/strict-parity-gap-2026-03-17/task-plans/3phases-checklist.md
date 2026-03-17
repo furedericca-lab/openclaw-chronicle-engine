@@ -9,7 +9,7 @@ description: Execution and verification checklist for strict-parity-gap-2026-03-
 - `docs/archive/strict-parity-gap-2026-03-17/strict-parity-gap-2026-03-17-brainstorming.md`
 - `docs/archive/strict-parity-gap-2026-03-17/strict-parity-gap-2026-03-17-implementation-research-notes.md`
 - `docs/archive/strict-parity-gap-2026-03-17/strict-parity-gap-2026-03-17-scope-milestones.md`
-- `docs/archive/strict-parity-gap-2026-03-17/technical-documentation.md`
+- `docs/archive/strict-parity-gap-2026-03-17/strict-parity-gap-2026-03-17-technical-documentation.md`
 - `docs/archive/strict-parity-gap-2026-03-17/strict-parity-gap-2026-03-17-contracts.md`
 - `docs/archive/strict-parity-gap-2026-03-17/task-plans/phase-1-strict-parity-gap-2026-03-17.md`
 - `docs/archive/strict-parity-gap-2026-03-17/task-plans/phase-2-strict-parity-gap-2026-03-17.md`

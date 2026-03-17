@@ -38,7 +38,7 @@ Constraints:
 - backend config comes from static TOML only in MVP;
 - reflection execution is backend-owned and async;
 - `/new` and `/reset` must not block on reflection completion.
-- transcript distill is partially shipped in this snapshot; `session-transcript` source resolution remains deferred.
+- transcript distill is fully shipped in this snapshot for both `inline-messages` and backend-owned `session-transcript` execution.
 
 Non-goals:
 
@@ -123,7 +123,7 @@ Capability boundary note:
 
 - `reflection` is a shipped backend-owned async capability for reflective row generation;
 - `auto-capture` is a shipped backend-owned mutation path for ordinary memory extraction;
-- `distill` now ships backend-owned enqueue/status plus an initial `inline-messages` executor slice, and should still be treated as a deferred backend-native async transcript capability rather than as the current sidecar example pipeline.
+- `distill` now ships backend-owned enqueue/status, transcript persistence, `inline-messages` execution, and backend-native `session-transcript` execution.
 
 ## Operational behavior
 
@@ -166,14 +166,14 @@ Capability boundary note:
   - shell submits transcript items;
   - backend decides extraction, dedupe, classification, update/delete/noop behavior.
 
-- transcript distill (partially shipped capability):
+- transcript distill:
   - canonical routes now exist:
     - `POST /v1/distill/jobs`
     - `GET /v1/distill/jobs/{jobId}`
-  - current implementation supports `inline-messages` execution, artifact persistence, and optional memory-row persistence;
-  - `session-transcript` source resolution and richer extraction/reduction remain deferred;
-  - current repo residue such as `scripts/jsonl_distill.py` and `examples/new-session-distill/*` is not part of the active runtime architecture;
-  - follow-up distill execution should continue following backend-native async job semantics rather than sidecar queue-file plus local import semantics.
+    - `POST /v1/session-transcripts/append`
+  - current implementation supports transcript append, `inline-messages` execution, backend-owned `session-transcript` execution, artifact persistence, and optional memory-row persistence;
+  - reducer shaping is deterministic and backend-owned, including evidence gating, duplicate suppression, and stable artifact ranking;
+  - sidecar queue-file and local-import residue is no longer part of the active runtime architecture.
 
 - explicit memory update:
   - shell submits `memoryId` plus a constrained patch payload;
@@ -263,7 +263,7 @@ Idempotency lifecycle behavior in current MVP:
 - admin-token bypass applies only to explicitly marked management endpoints and must remain auditable.
 - until admin routes are explicitly implemented, admin tokens must not grant access to any data-plane endpoint.
 - debug-scoped retrieval trace routes are not admin-token routes; they remain on the runtime principal boundary and exist to expose inspectable recall traces without widening ordinary recall DTOs.
-- sidecar transcript distill utilities such as `scripts/jsonl_distill.py` must not be treated as alternate authority paths for persistence or ACL.
+- backend-owned transcript persistence must remain the only supported source for `session-transcript` distill execution.
 - all admin requests must emit an audit record with request id, operator identity, endpoint/method, target selector, timestamp, result status, and status code;
 - admin mutations must additionally require and record a reason field.
 - error payloads must not leak secrets or raw upstream provider payloads.

@@ -7,7 +7,7 @@ description: Phase 2 task list for distill-backend-scope.
 ## Input
 
 - `docs/distill-backend-scope/distill-backend-scope-implementation-research-notes.md`
-- `docs/distill-backend-scope/technical-documentation.md`
+- `docs/archive/distill-backend-scope/distill-backend-scope-technical-documentation.md`
 - `docs/distill-backend-scope/distill-backend-scope-contracts.md`
 
 ## Canonical architecture / Key constraints

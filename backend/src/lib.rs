@@ -9,12 +9,13 @@ pub use state::AppState;
 use crate::{
     config::AppConfig,
     models::{
-        validate_delete_request, validate_enqueue_distill_job_request,
-        validate_enqueue_reflection_job_request, validate_list_request,
-        validate_recall_generic_request, validate_recall_reflection_request,
-        validate_stats_request, validate_store_request, validate_update_request, Actor,
-        DeleteRequest, EnqueueDistillJobRequest, EnqueueReflectionJobRequest, HealthResponse,
-        ListRequest, Principal, RecallGenericDebugResponse, RecallGenericRequest,
+        validate_append_session_transcript_request, validate_delete_request,
+        validate_enqueue_distill_job_request, validate_enqueue_reflection_job_request,
+        validate_list_request, validate_recall_generic_request,
+        validate_recall_reflection_request, validate_stats_request, validate_store_request,
+        validate_update_request, Actor, AppendSessionTranscriptRequest, DeleteRequest,
+        EnqueueDistillJobRequest, EnqueueReflectionJobRequest, HealthResponse, ListRequest,
+        Principal, RecallGenericDebugResponse, RecallGenericRequest,
         RecallReflectionDebugResponse, RecallReflectionRequest, StatsRequest, StoreRequest,
         UpdateRequest,
     },
@@ -49,6 +50,7 @@ pub fn build_app(config: AppConfig) -> anyhow::Result<Router> {
         .route("/v1/debug/recall/generic", post(recall_generic_debug))
         .route("/v1/debug/recall/reflection", post(recall_reflection_debug))
         .route("/v1/memories/store", post(store_memories))
+        .route("/v1/session-transcripts/append", post(append_session_transcript))
         .route("/v1/memories/update", post(update_memory))
         .route("/v1/memories/delete", post(delete_memories))
         .route("/v1/memories/list", post(list_memories))
@@ -197,6 +199,29 @@ async fn delete_memories(
     )
     .await?;
     Ok(Json(crate::models::DeleteResponse { deleted }))
+}
+
+async fn append_session_transcript(
+    State(state): State<AppState>,
+    Extension(auth): Extension<RuntimeAuthContext>,
+    headers: HeaderMap,
+    payload: Result<Json<AppendSessionTranscriptRequest>, JsonRejection>,
+) -> AppResult<Json<crate::models::AppendSessionTranscriptResponse>> {
+    let idempotency_key = require_idempotency_key(&headers)?.to_string();
+    let req = decode_json(payload)?;
+    validate_append_session_transcript_request(&req)?;
+    ensure_actor_matches_context(&req.actor, &auth)?;
+    let req_for_append = req.clone();
+    let response = run_idempotent_operation(
+        &state,
+        &auth.principal,
+        "POST /v1/session-transcripts/append",
+        &idempotency_key,
+        &fingerprint_request(&req)?,
+        async { state.job_store.append_session_transcript(&req_for_append) },
+    )
+    .await?;
+    Ok(Json(response))
 }
 
 async fn list_memories(
