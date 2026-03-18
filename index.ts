@@ -28,7 +28,6 @@ import type {
   MemoryBackendClient,
   DistillMode as BackendDistillMode,
   DistillPersistMode as BackendDistillPersistMode,
-  ReflectionTrigger as BackendReflectionTrigger,
   ReflectionRecallMode as BackendReflectionRecallMode,
 } from "./src/backend-client/types.js";
 
@@ -69,7 +68,6 @@ interface PluginConfig {
   memoryReflection?: {
     enabled?: boolean;
     injectMode?: ReflectionInjectMode;
-    messageCount?: number;
     errorReminderMaxEntries?: number;
     dedupeErrorSignals?: boolean;
     recall?: {
@@ -206,7 +204,6 @@ After completing tasks, evaluate if any learnings should be captured:
 Keep entries simple: date, title, what happened, what to do differently.`;
 
 const SELF_IMPROVEMENT_NOTE_PREFIX = "/note self-improvement (before reset):";
-const DEFAULT_REFLECTION_MESSAGE_COUNT = 120;
 const DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES = 3;
 const DEFAULT_REFLECTION_DEDUPE_ERROR_SIGNALS = true;
 const DEFAULT_REFLECTION_ERROR_SCAN_MAX_CHARS = 8_000;
@@ -969,7 +966,7 @@ const chronicleEnginePlugin = {
         description: "Inject self-improvement reminder on agent bootstrap",
       });
 
-      if (config.selfImprovement?.beforeResetNote !== false && config.sessionStrategy !== "memoryReflection") {
+      if (config.selfImprovement?.beforeResetNote !== false) {
         registeredBeforeResetNoteHooks = true;
         const appendSelfImprovementNote = async (event: any) => {
           try {
@@ -1033,7 +1030,6 @@ const chronicleEnginePlugin = {
     // ========================================================================
 
     if (config.sessionStrategy === "memoryReflection") {
-      const reflectionMessageCount = config.memoryReflection?.messageCount ?? DEFAULT_REFLECTION_MESSAGE_COUNT;
       const reflectionErrorReminderMaxEntries =
         parsePositiveInt(config.memoryReflection?.errorReminderMaxEntries) ?? DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES;
       const reflectionDedupeErrorSignals = config.memoryReflection?.dedupeErrorSignals !== false;
@@ -1046,35 +1042,6 @@ const chronicleEnginePlugin = {
       const reflectionRecallMinRepeated = config.memoryReflection?.recall?.minRepeated ?? DEFAULT_REFLECTION_RECALL_MIN_REPEATED;
       const reflectionRecallMinScore = config.memoryReflection?.recall?.minScore ?? DEFAULT_REFLECTION_RECALL_MIN_SCORE;
       const reflectionRecallMinPromptLength = config.memoryReflection?.recall?.minPromptLength ?? DEFAULT_REFLECTION_RECALL_MIN_PROMPT_LENGTH;
-      const reflectionTriggerSeenAt = new Map<string, number>();
-      const REFLECTION_TRIGGER_DEDUPE_MS = 12_000;
-
-      const pruneReflectionTriggerSeenAt = () => {
-        const now = Date.now();
-        for (const [key, ts] of reflectionTriggerSeenAt.entries()) {
-          if (now - ts > REFLECTION_TRIGGER_DEDUPE_MS * 3) {
-            reflectionTriggerSeenAt.delete(key);
-          }
-        }
-      };
-
-      const isDuplicateReflectionTrigger = (key: string): boolean => {
-        pruneReflectionTriggerSeenAt();
-        const now = Date.now();
-        const prev = reflectionTriggerSeenAt.get(key);
-        reflectionTriggerSeenAt.set(key, now);
-        return typeof prev === "number" && (now - prev) < REFLECTION_TRIGGER_DEDUPE_MS;
-      };
-
-      // Shared command contract across local and remote reflection paths.
-      // Unknown values degrade to "reset" to preserve fail-open command flow.
-      const normalizeReflectionTrigger = (action: unknown): BackendReflectionTrigger => {
-        const raw = typeof action === "string" ? action.trim().toLowerCase() : "";
-        return raw === "new" ? "new" : "reset";
-      };
-
-      const toReflectionCommandName = (trigger: BackendReflectionTrigger): string =>
-        `command:${trigger}`;
 
       const reflectionPromptPlanner = createReflectionPromptPlanner(
         {
@@ -1157,153 +1124,16 @@ const chronicleEnginePlugin = {
         });
         reflectionPromptPlanner.pruneSessionState();
       }, { priority: 20 });
-
-      const runMemoryReflection = async (event: any) => {
-        const sessionKey = typeof event.sessionKey === "string" ? event.sessionKey : "";
-        let clearSessionId = typeof event?.sessionId === "string" ? event.sessionId : undefined;
-        try {
-          reflectionPromptPlanner.pruneSessionState();
-          const trigger = normalizeReflectionTrigger(event?.action);
-          const commandName = toReflectionCommandName(trigger);
-          const context = (event.context || {}) as Record<string, unknown>;
-          const cfg = context.cfg;
-          const workspaceDir = resolveWorkspaceDirFromContext(context);
-          const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<string, unknown>;
-          const currentSessionId = typeof sessionEntry.sessionId === "string"
-            ? sessionEntry.sessionId
-            : (typeof event?.sessionId === "string" ? event.sessionId : "unknown");
-          clearSessionId = currentSessionId;
-          const runtimeAgentId =
-            asNonEmptyString(typeof event?.agentId === "string" ? event.agentId : undefined) ??
-            asNonEmptyString(typeof context.agentId === "string" ? context.agentId : undefined);
-          const commandSource = typeof context.commandSource === "string" ? context.commandSource : "";
-          const triggerKey = `${trigger}|${sessionKey || "(none)"}|${currentSessionId || "unknown"}`;
-          if (isDuplicateReflectionTrigger(triggerKey)) {
-            api.logger.info(`memory-reflection: duplicate trigger skipped; key=${triggerKey}`);
-            return;
-          }
-          api.logger.info(
-            `memory-reflection: ${commandName} enqueue start; sessionKey=${sessionKey || "(none)"}; source=${commandSource || "(unknown)"}; sessionId=${currentSessionId}`
-          );
-
-          const resolvedBackendCtx = resolveBackendCallContext(
-            mergeContextSources(event, context, {
-              agentId: runtimeAgentId,
-              sessionId: currentSessionId,
-              sessionKey,
-            }),
-            remoteRuntimeDefaults,
-            {
-              agentId: runtimeAgentId,
-              sessionId: currentSessionId,
-              sessionKey,
-            }
-          );
-          if (!resolvedBackendCtx.hasPrincipalIdentity) {
-            api.logger.warn(
-              `memory-reflection: ${commandName} enqueue blocked (missing runtime principal: ${resolvedBackendCtx.missingPrincipalFields.join(", ")})`
-            );
-            return;
-          }
-
-          let captureItems: BackendCaptureItem[] = [];
-          try {
-            const reflectionSource = await memoryBackendClient.loadReflectionSource(
-              resolvedBackendCtx.context,
-              {
-                trigger,
-                maxMessages: reflectionMessageCount,
-              }
-            );
-            if (Array.isArray(reflectionSource.messages) && reflectionSource.messages.length > 0) {
-              captureItems = reflectionSource.messages;
-            }
-          } catch (err) {
-            api.logger.warn(`memory-reflection: ${commandName} source load failed: ${String(err)}`);
-          }
-          if (captureItems.length === 0 && Array.isArray(event.messages)) {
-            captureItems = parseEventMessagesToCaptureItems(event.messages);
-          }
-          if (captureItems.length === 0) {
-            api.logger.warn(`memory-reflection: ${commandName} no capture payload found; skip enqueue`);
-            return;
-          }
-
-          if (config.selfImprovement?.enabled !== false && config.selfImprovement?.beforeResetNote !== false) {
-            if (Array.isArray(event.messages)) {
-              const exists = event.messages.some((m: unknown) => typeof m === "string" && m.includes(SELF_IMPROVEMENT_NOTE_PREFIX));
-              if (!exists) {
-                event.messages.push(buildSelfImprovementResetNote());
-              }
-            }
-          }
-
-          const enqueueInput = {
-            trigger,
-            messages: captureItems.slice(0, 256),
-          };
-          void memoryBackendClient
-            .enqueueReflectionJob(resolvedBackendCtx.context, enqueueInput)
-            .then((enqueue) => {
-              api.logger.info(
-                `memory-reflection: ${commandName} enqueue accepted; jobId=${enqueue.jobId}; status=${enqueue.status}; items=${captureItems.length}`
-              );
-            })
-            .catch((err) => {
-              const msg = err instanceof Error ? err.message : String(err);
-              api.logger.warn(`memory-reflection: ${commandName} enqueue failed: ${msg}`);
-            });
-        } catch (err) {
-          api.logger.warn(`memory-reflection: hook failed: ${String(err)}`);
-        } finally {
-          if (sessionKey) {
-            reflectionPromptPlanner.clearSession({
-              sessionKey,
-              sessionId: clearSessionId,
-            });
-          }
-          reflectionPromptPlanner.pruneSessionState();
-        }
-      };
-
-      const memoryReflectionNewHookOptions = {
-        name: "openclaw-chronicle-engine.memory-reflection.command-new",
-        description: "Run reflection pipeline before /new",
-      } as const;
-      const memoryReflectionResetHookOptions = {
-        name: "openclaw-chronicle-engine.memory-reflection.command-reset",
-        description: "Run reflection pipeline before /reset",
-      } as const;
-      registerDurableCommandHook("command:new", runMemoryReflection, memoryReflectionNewHookOptions, "memory-reflection");
-      registerDurableCommandHook("command:reset", runMemoryReflection, memoryReflectionResetHookOptions, "memory-reflection");
-      api.on("gateway_start", () => {
-        registerDurableCommandHook("command:new", runMemoryReflection, memoryReflectionNewHookOptions, "memory-reflection");
-        registerDurableCommandHook("command:reset", runMemoryReflection, memoryReflectionResetHookOptions, "memory-reflection");
-        api.logger.info("memory-reflection: command hooks refreshed after gateway_start");
+      api.on("before_reset", (_event, ctx) => {
+        const sessionKey = typeof ctx.sessionKey === "string" ? ctx.sessionKey.trim() : "";
+        if (!sessionKey) return;
+        reflectionPromptPlanner.clearSession({
+          sessionKey,
+          sessionId: typeof ctx.sessionId === "string" ? ctx.sessionId : undefined,
+        });
+        reflectionPromptPlanner.pruneSessionState();
       }, { priority: 12 });
-      api.on("before_reset", async (event, ctx) => {
-        try {
-          const trigger = normalizeReflectionTrigger(event.reason);
-          await runMemoryReflection({
-            action: trigger,
-            sessionKey: typeof ctx.sessionKey === "string" ? ctx.sessionKey : "",
-            sessionId: typeof ctx.sessionId === "string" ? ctx.sessionId : "unknown",
-            timestamp: Date.now(),
-            messages: Array.isArray(event.messages) ? event.messages : [],
-            context: {
-              cfg: api.config,
-              workspaceDir: ctx.workspaceDir,
-              commandSource: `lifecycle:before_reset:${trigger}`,
-              sessionEntry: {
-                sessionId: typeof ctx.sessionId === "string" ? ctx.sessionId : "unknown",
-              },
-            },
-          });
-        } catch (err) {
-          api.logger.warn(`memory-reflection: before_reset fallback failed: ${String(err)}`);
-        }
-      }, { priority: 12 });
-      api.logger.info("memory-reflection: integrated hooks registered (command:new, command:reset, after_tool_call, before_prompt_build[inherited-rules,error-detected])");
+      api.logger.info("memory-reflection: integrated hooks registered (after_tool_call, before_prompt_build[inherited-rules,error-detected], before_reset cleanup)");
     }
 
     if (config.sessionStrategy === "systemSessionMemory") {
@@ -1364,10 +1194,10 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     ? cfg.distill as Record<string, unknown>
     : null;
   if (hasOwnKey(cfg as Record<string, unknown>, "sessionMemory")) {
-    rejectRemovedConfigField("sessionMemory", "sessionStrategy and memoryReflection.messageCount");
+    rejectRemovedConfigField("sessionMemory", "sessionStrategy");
   }
   if (memoryReflectionRaw) {
-    for (const field of ["agentId", "maxInputChars", "timeoutMs", "thinkLevel"]) {
+    for (const field of ["agentId", "maxInputChars", "timeoutMs", "thinkLevel", "messageCount"]) {
       if (hasOwnKey(memoryReflectionRaw, field)) {
         rejectRemovedConfigField(`memoryReflection.${field}`);
       }
@@ -1378,7 +1208,6 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     sessionStrategyRaw === "systemSessionMemory" || sessionStrategyRaw === "memoryReflection" || sessionStrategyRaw === "none"
       ? sessionStrategyRaw
       : "systemSessionMemory";
-  const reflectionMessageCount = parsePositiveInt(memoryReflectionRaw?.messageCount) ?? DEFAULT_REFLECTION_MESSAGE_COUNT;
   const injectModeRaw = memoryReflectionRaw?.injectMode;
   const reflectionInjectMode: ReflectionInjectMode =
     injectModeRaw === "inheritance-only" || injectModeRaw === "inheritance+derived"
@@ -1463,7 +1292,6 @@ export function parsePluginConfig(value: unknown): PluginConfig {
       ? {
         enabled: sessionStrategy === "memoryReflection",
         injectMode: reflectionInjectMode,
-        messageCount: reflectionMessageCount,
         errorReminderMaxEntries: parsePositiveInt(memoryReflectionRaw.errorReminderMaxEntries) ?? DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES,
         dedupeErrorSignals: memoryReflectionRaw.dedupeErrorSignals !== false,
         recall: {
@@ -1480,7 +1308,6 @@ export function parsePluginConfig(value: unknown): PluginConfig {
       : {
         enabled: sessionStrategy === "memoryReflection",
         injectMode: "inheritance+derived",
-        messageCount: reflectionMessageCount,
         errorReminderMaxEntries: DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES,
         dedupeErrorSignals: DEFAULT_REFLECTION_DEDUPE_ERROR_SIGNALS,
         recall: {

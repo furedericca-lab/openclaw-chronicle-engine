@@ -55,7 +55,7 @@
       "enableManagementTools": {
         "type": "boolean",
         "default": false,
-        "description": "Enable caller-scoped management/debug tools such as memory_list, memory_stats, memory_reflection_status, memory_distill_enqueue, memory_distill_status, memory_recall_debug, and governance-oriented self-improvement review/extract actions."
+        "description": "Enable caller-scoped management/debug tools such as memory_list, memory_stats, memory_distill_enqueue, memory_distill_status, memory_recall_debug, and governance-oriented self-improvement review/extract actions."
       },
       "sessionStrategy": {
         "type": "string",
@@ -65,7 +65,7 @@
           "none"
         ],
         "default": "systemSessionMemory",
-        "description": "Choose session pipeline: plugin memory-reflection prompt planning, built-in session-memory, or none."
+        "description": "Choose session pipeline: plugin memory-reflection recall/injection planning, built-in session-memory, or none."
       },
       "autoCapture": {
         "type": "boolean"
@@ -230,7 +230,7 @@
       "memoryReflection": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Prompt-local reflection planning knobs. messageCount, injectMode, and recall.* affect active runtime behavior in the backend-owned runtime.",
+        "description": "Prompt-local reflection recall/injection planning knobs. injectMode and recall.* affect active runtime behavior.",
         "properties": {
           "injectMode": {
             "type": "string",
@@ -239,13 +239,6 @@
               "inheritance+derived"
             ],
             "default": "inheritance+derived"
-          },
-          "messageCount": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 500,
-            "default": 120,
-            "description": "Recent messages included in plugin-side reflection enqueue input."
           },
           "errorReminderMaxEntries": {
             "type": "integer",
@@ -456,7 +449,7 @@
     },
     "sessionStrategy": {
       "label": "Session Strategy",
-      "help": "memoryReflection / systemSessionMemory / none. memoryReflection keeps plugin-side prompt planning while backend remains recall/enqueue authority.",
+      "help": "memoryReflection / systemSessionMemory / none. memoryReflection keeps plugin-side recall/injection planning while backend remains memory authority.",
       "advanced": true
     },
     "selfImprovement.enabled": {
@@ -481,11 +474,6 @@
     "memoryReflection.injectMode": {
       "label": "Reflection Inject Mode",
       "help": "inheritance-only or inheritance+derived",
-      "advanced": true
-    },
-    "memoryReflection.messageCount": {
-      "label": "Reflection Message Count",
-      "help": "Recent messages included in plugin-side reflection enqueue input.",
       "advanced": true
     },
     "memoryReflection.errorReminderMaxEntries": {
@@ -540,7 +528,7 @@
     },
     "enableManagementTools": {
       "label": "Management Tools",
-      "help": "Enable caller-scoped management/debug tools such as memory_list, memory_stats, memory_reflection_status, memory_distill_enqueue, memory_distill_status, memory_recall_debug, and governance-oriented self-improvement review/extract actions.",
+      "help": "Enable caller-scoped management/debug tools such as memory_list, memory_stats, memory_distill_enqueue, memory_distill_status, memory_recall_debug, and governance-oriented self-improvement review/extract actions.",
       "advanced": true
     }
   }

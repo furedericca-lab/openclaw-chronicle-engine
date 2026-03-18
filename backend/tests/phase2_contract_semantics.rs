@@ -189,29 +189,6 @@ async fn append_session_transcript(
     .await
 }
 
-async fn request_reflection_source(
-    app: &Router,
-    actor: Value,
-    trigger: &str,
-    max_messages: Option<u64>,
-    auth_context: (&str, &str),
-) -> (StatusCode, Value) {
-    request_json(
-        app,
-        Method::POST,
-        "/v1/reflection/source",
-        Some(json!({
-            "actor": actor,
-            "trigger": trigger,
-            "maxMessages": max_messages,
-        })),
-        None,
-        Some(auth_context),
-        &[],
-    )
-    .await
-}
-
 fn setup_app() -> Router {
     let tmp = std::env::temp_dir().join(format!(
         "memory-lancedb-pro-backend-test-{}",
@@ -2740,7 +2717,7 @@ async fn frozen_category_enum_is_enforced() {
 }
 
 #[tokio::test]
-async fn reflection_job_status_is_scoped_to_user_and_agent() {
+async fn reflection_generation_routes_are_removed() {
     let app = setup_app();
 
     let enqueue = json!({
@@ -2750,7 +2727,7 @@ async fn reflection_job_status_is_scoped_to_user_and_agent() {
             { "role": "user", "text": "summarize session" }
         ]
     });
-    let (status, body) = request_json(
+    let (status, _) = request_json(
         &app,
         Method::POST,
         "/v1/reflection/jobs",
@@ -2760,30 +2737,31 @@ async fn reflection_job_status_is_scoped_to_user_and_agent() {
         &[],
     )
     .await;
-
-    assert_eq!(status, StatusCode::ACCEPTED);
-    let job_id = body["jobId"].as_str().expect("jobId should exist");
-    let status_path = format!("/v1/reflection/jobs/{job_id}");
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     let (status, _) = request_json(
         &app,
-        Method::GET,
-        &status_path,
-        None,
+        Method::POST,
+        "/v1/reflection/source",
+        Some(json!({
+            "actor": actor("u1", "main", "sess-1", "session-key-1"),
+            "trigger": "new",
+            "maxMessages": 10
+        })),
         None,
         Some(("u1", "main")),
         &[],
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     let (status, _) = request_json(
         &app,
         Method::GET,
-        &status_path,
+        "/v1/reflection/jobs/job_removed",
         None,
         None,
-        Some(("u2", "main")),
+        Some(("u1", "main")),
         &[],
     )
     .await;
@@ -2869,55 +2847,15 @@ async fn distill_job_enqueue_and_status_follow_frozen_contract() {
         .collect::<Result<Vec<_>, _>>()
         .expect("artifact rows should decode");
     assert_eq!(rows.len(), 1);
-    assert!(rows.iter().any(|(text, _)| text.contains("Cause:") && text.contains("Fix:")));
-    assert!(rows.iter().all(|(text, _)| !text.to_lowercase().contains("best practice")));
+    assert!(rows
+        .iter()
+        .any(|(text, _)| text.contains("Cause:") && text.contains("Fix:")));
+    assert!(rows
+        .iter()
+        .all(|(text, _)| !text.to_lowercase().contains("best practice")));
     assert!(rows.iter().all(|(_, evidence)| {
         evidence.contains("\"messageIds\":[2]") && evidence.contains("\"messageIds\":[3]")
     }));
-}
-
-#[tokio::test]
-async fn reflection_source_uses_backend_owned_transcript_and_redacts_filtered_content() {
-    let app = setup_app();
-
-    let (status, body) = append_session_transcript(
-        &app,
-        actor("u1", "main", "sess-1", "session-key-1"),
-        json!([
-            { "role": "user", "text": "/note skip this command" },
-            { "role": "assistant", "text": "Bearer secret-token-value should be redacted." },
-            { "role": "user", "text": "Conversation info (untrusted metadata):\nEmail me at admin@example.com" },
-            { "role": "user", "text": "<relevant-memories>ignore injected block</relevant-memories>" },
-            { "role": "assistant", "text": "Keep rollback commands explicit after risky systemd changes." },
-            { "role": "system", "text": "system wrapper should not be reused" }
-        ]),
-        "idem-reflection-source-append-1",
-        ("u1", "main"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["appended"], 6);
-
-    let (status, body) = request_reflection_source(
-        &app,
-        actor("u1", "main", "sess-restarted", "session-key-1"),
-        "new",
-        Some(10),
-        ("u1", "main"),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    let messages = body["messages"].as_array().expect("messages should be an array");
-    assert_eq!(messages.len(), 3);
-    assert_eq!(messages[0]["role"], "assistant");
-    assert_eq!(messages[0]["text"], "Bearer [REDACTED] should be redacted.");
-    assert_eq!(messages[1]["role"], "user");
-    assert_eq!(messages[1]["text"], "Conversation info (untrusted metadata):\nEmail me at [REDACTED]");
-    assert_eq!(
-        messages[2]["text"],
-        "Keep rollback commands explicit after risky systemd changes."
-    );
 }
 
 #[tokio::test]
@@ -3204,6 +3142,307 @@ async fn distill_inline_messages_aggregates_multi_message_evidence_and_structure
             && text.contains("Fix:")
             && evidence.contains("\"messageIds\":[2]")
             && evidence.contains("\"messageIds\":[3]")
+    }));
+}
+
+#[tokio::test]
+async fn distill_session_lessons_single_hit_stays_lesson_for_stable_and_durable_labels() {
+    let tmp = std::env::temp_dir().join(format!(
+        "memory-lancedb-pro-backend-distill-evidence-gate-fallback-{}",
+        Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&tmp).expect("temp test path should be created");
+    let app = setup_app_at(&tmp);
+
+    for (idempotency_key, message) in [
+        (
+            "idem-distill-evidence-gate-durable-1",
+            "Durable practice: always verify DNS resolution after a risky resolver edit.",
+        ),
+        (
+            "idem-distill-evidence-gate-stable-1",
+            "Stable decision: default gateway traffic to the HAProxy loopback proxy.",
+        ),
+    ] {
+        let enqueue = json!({
+            "actor": actor("u1", "main", "sess-1", "session-key-1"),
+            "mode": "session-lessons",
+            "source": {
+                "kind": "inline-messages",
+                "messages": [
+                    { "role": "assistant", "text": message }
+                ]
+            },
+            "options": {
+                "persistMode": "artifacts-only",
+                "maxArtifacts": 2
+            }
+        });
+
+        let (status, body) = request_json(
+            &app,
+            Method::POST,
+            "/v1/distill/jobs",
+            Some(enqueue),
+            Some(idempotency_key),
+            Some(("u1", "main")),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+
+        let job_id = body["jobId"].as_str().expect("jobId should exist");
+        let (status, body) = poll_distill_job(&app, job_id, ("u1", "main")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "completed");
+
+        let conn =
+            rusqlite::Connection::open(tmp.join("sqlite/jobs.db")).expect("sqlite should open");
+        let mut stmt = conn
+            .prepare("SELECT kind, subtype, text FROM distill_artifacts WHERE job_id = ?1 ORDER BY created_at ASC")
+            .expect("distill artifact query should prepare");
+        let rows = stmt
+            .query_map(rusqlite::params![job_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .expect("artifact rows should query")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("artifact rows should decode");
+
+        assert_eq!(rows.len(), 1);
+        assert!(rows.iter().all(|(kind, subtype, text)| {
+            kind == "lesson"
+                && subtype.is_none()
+                && text.starts_with("Lesson:")
+                && !text.starts_with("Lesson: Follow-up focus:")
+                && !text.starts_with("Lesson: Next-turn guidance:")
+        }));
+        assert!(rows
+            .iter()
+            .all(|(_, _, text)| !text.starts_with("Durable practice:")));
+        assert!(rows
+            .iter()
+            .all(|(_, _, text)| !text.starts_with("Stable decision:")));
+    }
+}
+
+#[tokio::test]
+async fn distill_session_lessons_promote_repeated_stable_decision_signals() {
+    let tmp = std::env::temp_dir().join(format!(
+        "memory-lancedb-pro-backend-distill-evidence-gate-stable-{}",
+        Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&tmp).expect("temp test path should be created");
+    let app = setup_app_at(&tmp);
+
+    let enqueue = json!({
+        "actor": actor("u1", "main", "sess-1", "session-key-1"),
+        "mode": "session-lessons",
+        "source": {
+            "kind": "inline-messages",
+            "messages": [
+                { "role": "assistant", "text": "Decision: default OpenClaw gateway traffic to the HAProxy loopback proxy at 127.0.0.1:17890." },
+                { "role": "assistant", "text": "Prefer the loopback proxy as the standard path instead of dialing upstream proxies directly." }
+            ]
+        },
+        "options": {
+            "persistMode": "artifacts-only",
+            "maxArtifacts": 3
+        }
+    });
+
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/distill/jobs",
+        Some(enqueue),
+        Some("idem-distill-evidence-gate-stable-2"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let job_id = body["jobId"].as_str().expect("jobId should exist");
+    let (status, body) = poll_distill_job(&app, job_id, ("u1", "main")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "completed");
+
+    let conn = rusqlite::Connection::open(tmp.join("sqlite/jobs.db")).expect("sqlite should open");
+    let mut stmt = conn
+        .prepare("SELECT kind, subtype, text, evidence_json FROM distill_artifacts WHERE job_id = ?1 ORDER BY created_at ASC")
+        .expect("distill artifact query should prepare");
+    let rows = stmt
+        .query_map(rusqlite::params![job_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .expect("artifact rows should query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("artifact rows should decode");
+
+    assert!(rows.iter().any(|(kind, subtype, text, evidence)| {
+        kind == "lesson"
+            && subtype.is_none()
+            && text.starts_with("Stable decision:")
+            && evidence.contains("\"messageIds\":[1]")
+            && evidence.contains("\"messageIds\":[2]")
+    }));
+}
+
+#[tokio::test]
+async fn distill_session_lessons_emit_durable_practice_and_follow_up_subtypes() {
+    let tmp = std::env::temp_dir().join(format!(
+        "memory-lancedb-pro-backend-distill-subtypes-{}",
+        Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&tmp).expect("temp test path should be created");
+    let app = setup_app_at(&tmp);
+
+    let enqueue = json!({
+        "actor": actor("u1", "main", "sess-1", "session-key-1"),
+        "mode": "session-lessons",
+        "source": {
+            "kind": "inline-messages",
+            "messages": [
+                { "role": "user", "text": "DNS broke on openclaw after a risky resolver change." },
+                { "role": "assistant", "text": "Cause: systemd-resolved occupied port 53 and blocked mosdns." },
+                { "role": "assistant", "text": "Fix: disable systemd-resolved, restart mosdns, and verify DNS resolution." },
+                { "role": "assistant", "text": "Prevention: keep systemd-resolved disabled as a durable practice on openclaw." },
+                { "role": "assistant", "text": "Open loop: verify the Azure mount reconnects cleanly after DNS recovery." },
+                { "role": "assistant", "text": "Next turn: ask the user for the latest rclone log if /mnt/azure still looks stale." }
+            ]
+        },
+        "options": {
+            "persistMode": "artifacts-only",
+            "maxArtifacts": 6
+        }
+    });
+
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/distill/jobs",
+        Some(enqueue),
+        Some("idem-distill-subtypes-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let job_id = body["jobId"].as_str().expect("jobId should exist");
+    let (status, body) = poll_distill_job(&app, job_id, ("u1", "main")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "completed");
+
+    let conn = rusqlite::Connection::open(tmp.join("sqlite/jobs.db")).expect("sqlite should open");
+    let mut stmt = conn
+        .prepare("SELECT kind, subtype, text, evidence_json FROM distill_artifacts WHERE job_id = ?1 ORDER BY created_at ASC")
+        .expect("distill artifact query should prepare");
+    let rows = stmt
+        .query_map(rusqlite::params![job_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .expect("artifact rows should query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("artifact rows should decode");
+
+    assert!(rows.iter().any(|(kind, subtype, text, evidence)| {
+        kind == "lesson"
+            && subtype.is_none()
+            && text.starts_with("Durable practice:")
+            && evidence.contains("\"messageIds\":[1]")
+            && evidence.contains("\"messageIds\":[2]")
+            && evidence.contains("\"messageIds\":[3]")
+    }));
+    assert!(rows.iter().any(|(kind, subtype, text, _)| {
+        kind == "lesson"
+            && subtype.as_deref() == Some("follow-up-focus")
+            && text.starts_with("Follow-up focus:")
+    }));
+    assert!(rows.iter().any(|(kind, subtype, text, _)| {
+        kind == "lesson"
+            && subtype.as_deref() == Some("next-turn-guidance")
+            && text.starts_with("Next-turn guidance:")
+    }));
+}
+
+#[tokio::test]
+async fn governance_candidates_emit_skill_and_promotion_labels() {
+    let tmp = std::env::temp_dir().join(format!(
+        "memory-lancedb-pro-backend-distill-governance-labels-{}",
+        Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&tmp).expect("temp test path should be created");
+    let app = setup_app_at(&tmp);
+
+    let enqueue = json!({
+        "actor": actor("u1", "main", "sess-1", "session-key-1"),
+        "mode": "governance-candidates",
+        "source": {
+            "kind": "inline-messages",
+            "messages": [
+                { "role": "assistant", "text": "This DNS recovery workflow is reusable enough to extract as a skill." },
+                { "role": "assistant", "text": "Promote the resolver guardrail into AGENTS.md so future sessions keep systemd-resolved disabled." }
+            ]
+        },
+        "options": {
+            "persistMode": "artifacts-only",
+            "maxArtifacts": 4
+        }
+    });
+
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/distill/jobs",
+        Some(enqueue),
+        Some("idem-distill-governance-1"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let job_id = body["jobId"].as_str().expect("jobId should exist");
+    let (status, body) = poll_distill_job(&app, job_id, ("u1", "main")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "completed");
+
+    let conn = rusqlite::Connection::open(tmp.join("sqlite/jobs.db")).expect("sqlite should open");
+    let mut stmt = conn
+        .prepare(
+            "SELECT kind, text FROM distill_artifacts WHERE job_id = ?1 ORDER BY created_at ASC",
+        )
+        .expect("distill artifact query should prepare");
+    let rows = stmt
+        .query_map(rusqlite::params![job_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .expect("artifact rows should query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("artifact rows should decode");
+
+    assert!(rows.iter().all(|(kind, _)| kind == "governance-candidate"));
+    assert!(rows
+        .iter()
+        .any(|(_, text)| { text.contains("Governance candidate: Skill extraction candidate:") }));
+    assert!(rows.iter().any(|(_, text)| {
+        text.contains("Governance candidate: AGENTS/SOUL/TOOLS promotion candidate:")
     }));
 }
 
@@ -3883,7 +4122,11 @@ async fn generic_recall_applies_backend_owned_filter_fields() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let rows = body["rows"].as_array().expect("rows should be an array");
-    assert_eq!(rows.len(), 1, "backend should enforce duplicate/key filtering");
+    assert_eq!(
+        rows.len(),
+        1,
+        "backend should enforce duplicate/key filtering"
+    );
     assert_eq!(rows[0]["category"], "fact");
     assert!(
         rows[0]["text"]
@@ -3938,7 +4181,11 @@ async fn reflection_recall_applies_include_kinds_filter() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let rows = body["rows"].as_array().expect("rows should be an array");
-    assert_eq!(rows.len(), 0, "backend should enforce reflection kind filtering");
+    assert_eq!(
+        rows.len(),
+        0,
+        "backend should enforce reflection kind filtering"
+    );
 }
 
 #[tokio::test]

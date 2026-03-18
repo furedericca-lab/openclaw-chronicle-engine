@@ -7,7 +7,7 @@ export async function runEmbeddedPiAgent() {
           "- Current session reflection test fixture.",
           "",
           "## Decisions (durable)",
-          "- Keep reflection handoff note assembly centralized in runMemoryReflection.",
+          "- Keep reflection prompt planning localized to the prompt builder integration.",
           "",
           "## User model deltas (about the human)",
           "- (none captured)",

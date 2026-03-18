@@ -22,6 +22,8 @@ Interpretation:
 
 Archived scopes:
 
+- `turns-stage-distill-unification-2026-03-18/`: phased contract, implementation, follow-up blocker closeout, and reviewer-audited archive for removing command-triggered reflection generation, consolidating trajectory-derived writes under cadence-driven distill, and introducing evidence-gated `stable decision` / `durable practice` promotion plus distill-owned `follow-up-focus` / `next-turn-guidance` subtypes. Collected: `2026-03-18`. Reference value: `9/10`.
+  Why: high implementation and audit value because it records the semantic ownership reset from reflection-generation to distill-only writes, the exact deletion of `/new`/`/reset` reflection generation surfaces, and the post-review evidence gate added before acceptance.
 - `distill-iteration-runtime-2026-03-18/`: phased implementation and closeout record for strengthening deterministic Rust distill quality with multi-message span aggregation, English-only rule-based summaries, stronger reduction heuristics, and cadence-based automatic `session-transcript` distill enqueue every configured user-turn interval. Collected: `2026-03-18`. Reference value: `8/10`.
   Why: high implementation and audit value because it records the point where backend-native distill moved beyond message-level truncation, and where runtime gained a bounded automatic distill trigger without reintroducing any sidecar or local transcript authority.
 - `src-root-boundary-cleanup-2026-03-17/`: single-contract cleanup record for consolidating self-improvement support into one module, deleting the last thin local recall DTO shell, and moving prompt-time recall helpers fully under `src/context/` to match the context-engine split boundary. Collected: `2026-03-17`. Reference value: `7/10`.

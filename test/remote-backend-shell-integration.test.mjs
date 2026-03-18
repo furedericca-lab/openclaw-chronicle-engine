@@ -408,7 +408,7 @@ describe("remote backend shell integration", () => {
     for (const toolName of ["memory_recall", "memory_store", "memory_forget", "memory_update"]) {
       assert.ok(harness.toolFactories.has(toolName), `expected tool registration: ${toolName}`);
     }
-    for (const toolName of ["memory_reflection_status", "memory_distill_enqueue", "memory_distill_status", "memory_recall_debug"]) {
+    for (const toolName of ["memory_distill_enqueue", "memory_distill_status", "memory_recall_debug"]) {
       assert.equal(harness.toolFactories.has(toolName), false, `management tool should stay gated: ${toolName}`);
     }
 
@@ -492,16 +492,6 @@ describe("remote backend shell integration", () => {
         reply: () => jsonResponse({
           jobId: "distill-job-1",
           status: "queued",
-        }),
-      },
-      {
-        method: "GET",
-        path: /\/v1\/reflection\/jobs\/.+$/,
-        reply: () => jsonResponse({
-          jobId: "reflection-job-1",
-          status: "completed",
-          persisted: true,
-          memoryCount: 2,
         }),
       },
       {
@@ -595,7 +585,7 @@ describe("remote backend shell integration", () => {
     });
     chronicleEnginePlugin.register(harness.api);
 
-    for (const toolName of ["memory_reflection_status", "memory_distill_enqueue", "memory_distill_status", "memory_recall_debug", "memory_list", "memory_stats"]) {
+    for (const toolName of ["memory_distill_enqueue", "memory_distill_status", "memory_recall_debug", "memory_list", "memory_stats"]) {
       assert.ok(harness.toolFactories.has(toolName), `expected management tool registration: ${toolName}`);
     }
 
@@ -605,15 +595,6 @@ describe("remote backend shell integration", () => {
       sessionId: "session-management",
       sessionKey: "agent:agent-management:session:stable-management",
     };
-
-    const reflectionStatusTool = harness.instantiateTool("memory_reflection_status", toolCtx);
-    const reflectionStatusResult = await reflectionStatusTool.execute("call-reflection-status", {
-      jobId: "reflection-job-1",
-    });
-    assert.equal(reflectionStatusResult.details.jobId, "reflection-job-1");
-    assert.equal(reflectionStatusResult.details.status, "completed");
-    assert.equal(reflectionStatusResult.details.persisted, true);
-    assert.equal(reflectionStatusResult.details.memoryCount, 2);
 
     const enqueue = harness.instantiateTool("memory_distill_enqueue", toolCtx);
     const enqueueResult = await enqueue.execute("call-distill-enqueue", {
@@ -658,28 +639,24 @@ describe("remote backend shell integration", () => {
     assert.equal(reflectionDebugResult.details.trace.kind, "reflection");
     assert.equal(reflectionDebugResult.details.trace.mode, "invariant-only");
 
-    assert.equal(fetchMock.calls.length, 5);
-    const reflectionStatusCall = fetchMock.calls[0];
-    assert.match(reflectionStatusCall.path, /\/v1\/reflection\/jobs\/reflection-job-1$/);
-    assert.equal(reflectionStatusCall.headers["idempotency-key"], undefined);
-
-    const distillEnqueueCall = fetchMock.calls[1];
+    assert.equal(fetchMock.calls.length, 4);
+    const distillEnqueueCall = fetchMock.calls[0];
     assert.equal(distillEnqueueCall.path, "/v1/distill/jobs");
     assert.deepEqual(Object.keys(distillEnqueueCall.body).sort(), ["actor", "mode", "options", "source"]);
     assert.equal(distillEnqueueCall.body.source.kind, "inline-messages");
     assert.equal(distillEnqueueCall.body.options.persistMode, "artifacts-only");
     assert.ok(typeof distillEnqueueCall.headers["idempotency-key"] === "string");
 
-    const distillStatusCall = fetchMock.calls[2];
+    const distillStatusCall = fetchMock.calls[1];
     assert.match(distillStatusCall.path, /\/v1\/distill\/jobs\/distill-job-1$/);
     assert.equal(distillStatusCall.headers["idempotency-key"], undefined);
 
-    const genericDebugCall = fetchMock.calls[3];
+    const genericDebugCall = fetchMock.calls[2];
     assert.equal(genericDebugCall.path, "/v1/debug/recall/generic");
     assert.deepEqual(Object.keys(genericDebugCall.body).sort(), ["actor", "limit", "query"]);
     assert.equal(genericDebugCall.headers["idempotency-key"], undefined);
 
-    const reflectionDebugCall = fetchMock.calls[4];
+    const reflectionDebugCall = fetchMock.calls[3];
     assert.equal(reflectionDebugCall.path, "/v1/debug/recall/reflection");
     assert.deepEqual(Object.keys(reflectionDebugCall.body).sort(), ["actor", "limit", "mode", "query"]);
     assert.equal(reflectionDebugCall.body.mode, "invariant-only");
@@ -1408,7 +1385,6 @@ describe("remote backend shell integration", () => {
             includeKinds: ["invariant", "derived"],
           },
           injectMode: "inheritance-only",
-          messageCount: 12,
         },
       }),
       resolveRoot: root,
@@ -1545,198 +1521,7 @@ describe("remote backend shell integration", () => {
     );
   });
 
-  it("enqueues command:new reflection jobs asynchronously and returns without waiting for backend completion", async () => {
-    const root = makeTempRoot();
-
-    const pending = deferred();
-    const fetchMock = installFetchMock([
-      {
-        method: "POST",
-        path: "/v1/reflection/source",
-        reply: () => ({
-          messages: [
-            { role: "user", text: "Keep reflection enqueue non-blocking." },
-          ],
-        }),
-      },
-      {
-        method: "POST",
-        path: "/v1/reflection/jobs",
-        reply: async () => await pending.promise,
-      },
-    ]);
-
-    const harness = createPluginApiHarness({
-      pluginConfig: makeRemoteConfig(root, {
-        sessionStrategy: "memoryReflection",
-      }),
-      resolveRoot: root,
-    });
-    chronicleEnginePlugin.register(harness.api);
-
-    const commandNewHook = getLatestHandler(harness.commandHooks, "command:new");
-    const event = {
-      action: "new",
-      agentId: "agent-cmd",
-      sessionKey: "agent:agent-cmd:session:stable-cmd",
-      sessionId: "event-session-id",
-      userId: "user-cmd",
-      messages: [
-        { role: "user", content: [{ type: "text", text: "Keep reflection enqueue non-blocking." }] },
-      ],
-      context: {
-        sessionEntry: { sessionId: "context-session-id" },
-        commandSource: "unit-test",
-      },
-    };
-
-    const hookPromise = commandNewHook(event);
-    const race = await Promise.race([
-      hookPromise.then(() => "resolved"),
-      sleep(200).then(() => "timed_out"),
-    ]);
-    assert.equal(race, "resolved", "command:new hook should return before enqueue job completion");
-
-    assert.equal(fetchMock.calls.length, 2);
-    const sourceCall = fetchMock.calls[0];
-    assert.equal(sourceCall.path, "/v1/reflection/source");
-    assert.deepEqual(Object.keys(sourceCall.body).sort(), ["actor", "maxMessages", "trigger"]);
-    assert.equal(sourceCall.body.trigger, "new");
-    assert.equal(sourceCall.body.actor.sessionId, "context-session-id");
-
-    const call = fetchMock.calls[1];
-    assert.equal(call.path, "/v1/reflection/jobs");
-    assert.deepEqual(Object.keys(call.body).sort(), ["actor", "messages", "trigger"]);
-    assert.equal(call.body.trigger, "new");
-    assert.equal(call.body.actor.userId, "user-cmd");
-    assert.equal(call.body.actor.agentId, "agent-cmd");
-    assert.equal(call.body.actor.sessionId, "context-session-id");
-    assert.equal(call.body.actor.sessionKey, "agent:agent-cmd:session:stable-cmd");
-    assert.equal(call.body.messages.length, 1);
-
-    pending.resolve(jsonResponse({ jobId: "job-new-1", status: "queued" }, 200));
-    await sleep(0);
-  });
-
-  it("keeps reflection enqueue non-blocking and logs enqueue failures", async () => {
-    const root = makeTempRoot();
-
-    const pending = deferred();
-    const fetchMock = installFetchMock([
-      {
-        method: "POST",
-        path: "/v1/reflection/source",
-        reply: () => ({
-          messages: [
-            { role: "user", text: "force async failure path" },
-          ],
-        }),
-      },
-      {
-        method: "POST",
-        path: "/v1/reflection/jobs",
-        reply: async () => await pending.promise,
-      },
-    ]);
-
-    const harness = createPluginApiHarness({
-      pluginConfig: makeRemoteConfig(root, {
-        sessionStrategy: "memoryReflection",
-      }),
-      resolveRoot: root,
-    });
-    chronicleEnginePlugin.register(harness.api);
-
-    const commandNewHook = getLatestHandler(harness.commandHooks, "command:new");
-    const hookPromise = commandNewHook({
-      action: "new",
-      agentId: "agent-cmd-fail",
-      sessionKey: "agent:agent-cmd-fail:session:stable-cmd-fail",
-      userId: "user-cmd-fail",
-      messages: [{ role: "user", content: [{ type: "text", text: "force async failure path" }] }],
-      context: {
-        sessionEntry: { sessionId: "context-session-fail" },
-      },
-    });
-    const race = await Promise.race([
-      hookPromise.then(() => "resolved"),
-      sleep(200).then(() => "timed_out"),
-    ]);
-    assert.equal(race, "resolved", "enqueue failures should not block command hook completion");
-
-    pending.reject(new Error("simulated enqueue transport failure"));
-    await sleep(20);
-
-    assert.equal(fetchMock.calls.length, 2);
-    assert.ok(
-      harness.logs.some(
-        (entry) =>
-          entry.level === "warn" &&
-          entry.message.includes("command:new enqueue failed")
-      ),
-      "enqueue failures should remain visible to operators"
-    );
-  });
-
-  it("enqueues command:reset reflection jobs with reset trigger and explicit runtime actor identity", async () => {
-    const root = makeTempRoot();
-
-    const fetchMock = installFetchMock([
-      {
-        method: "POST",
-        path: "/v1/reflection/source",
-        reply: () => ({
-          messages: [
-            { role: "user", text: "Reset the session and keep lessons." },
-          ],
-        }),
-      },
-      {
-        method: "POST",
-        path: "/v1/reflection/jobs",
-        reply: () => ({ jobId: "job-reset-1", status: "queued" }),
-      },
-    ]);
-
-    const harness = createPluginApiHarness({
-      pluginConfig: makeRemoteConfig(root, {
-        sessionStrategy: "memoryReflection",
-      }),
-      resolveRoot: root,
-    });
-    chronicleEnginePlugin.register(harness.api);
-
-    const commandResetHook = getLatestHandler(harness.commandHooks, "command:reset");
-    await commandResetHook({
-      action: "reset",
-      agentId: "agent-reset",
-      sessionKey: "agent:agent-reset:session:stable-reset",
-      userId: "user-reset",
-      messages: [
-        { role: "user", content: [{ type: "text", text: "Reset the session and keep lessons." }] },
-      ],
-      context: {
-        sessionEntry: { sessionId: "reset-session-id" },
-      },
-    });
-
-    assert.equal(fetchMock.calls.length, 2);
-    const sourceCall = fetchMock.calls[0];
-    assert.equal(sourceCall.path, "/v1/reflection/source");
-    assert.equal(sourceCall.body.trigger, "reset");
-
-    const call = fetchMock.calls[1];
-    assert.equal(call.path, "/v1/reflection/jobs");
-    assert.equal(call.body.trigger, "reset");
-    assert.equal(call.body.actor.userId, "user-reset");
-    assert.equal(call.body.actor.agentId, "agent-reset");
-    assert.equal(call.body.actor.sessionId, "reset-session-id");
-    assert.equal(call.body.actor.sessionKey, "agent:agent-reset:session:stable-reset");
-    assert.equal("scope" in call.body, false);
-    assert.equal("scopeFilter" in call.body, false);
-  });
-
-  it("fails reflection job enqueue closed when runtime principal identity is unavailable", async () => {
+  it("removes command-triggered reflection generation hooks when no other command-hook feature is enabled", async () => {
     const root = makeTempRoot();
     const fetchMock = installFetchMock([]);
 
@@ -1748,26 +1533,10 @@ describe("remote backend shell integration", () => {
     });
     chronicleEnginePlugin.register(harness.api);
 
-    const commandResetHook = getLatestHandler(harness.commandHooks, "command:reset");
-    await commandResetHook({
-      action: "reset",
-      sessionKey: "agent:agent-reset:session:stable-reset",
-      messages: [
-        { role: "user", content: [{ type: "text", text: "Reset without runtime user principal." }] },
-      ],
-      context: {
-        sessionEntry: { sessionId: "reset-session-id" },
-      },
-    });
-
+    const commandNewHooks = harness.commandHooks.get("command:new") || [];
+    const commandResetHooks = harness.commandHooks.get("command:reset") || [];
+    assert.equal(commandNewHooks.length, 0);
+    assert.equal(commandResetHooks.length, 0);
     assert.equal(fetchMock.calls.length, 0);
-    assert.ok(
-      harness.logs.some(
-        (entry) =>
-          entry.level === "warn" &&
-          entry.message.includes("enqueue blocked (missing runtime principal")
-      ),
-      "missing principal should block enqueue and remain observable in logs"
-    );
   });
 });

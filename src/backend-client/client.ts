@@ -7,9 +7,6 @@ import type {
   BackendDistillJobStatusResponse,
   BackendListInput,
   BackendMemoryMutationResult,
-  BackendReflectionJobResponse,
-  BackendReflectionJobStatusResponse,
-  BackendReflectionSourceResponse,
   BackendRecallGenericDebugResponse,
   BackendRecallGenericRow,
   BackendRecallReflectionDebugResponse,
@@ -368,46 +365,6 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
         path: "/v1/memories/stats",
         ctx,
         body: withActor(ctx),
-      });
-      return response;
-    },
-
-    async enqueueReflectionJob(ctx, input) {
-      const response = await requestJson<BackendReflectionJobResponse>({
-        method: "POST",
-        path: "/v1/reflection/jobs",
-        ctx,
-        idempotencyKey: input.idempotencyKey || randomUUID(),
-        body: {
-          ...withActor(ctx),
-          trigger: input.trigger,
-          messages: input.messages,
-        },
-      });
-      return response;
-    },
-
-    async loadReflectionSource(ctx, input) {
-      const response = await requestJson<BackendReflectionSourceResponse>({
-        method: "POST",
-        path: "/v1/reflection/source",
-        ctx,
-        body: {
-          ...withActor(ctx),
-          trigger: input.trigger,
-          maxMessages: Number.isFinite(input.maxMessages) ? clampInt(Number(input.maxMessages), 1, 200) : undefined,
-        },
-      });
-      return {
-        messages: Array.isArray(response.messages) ? response.messages : [],
-      };
-    },
-
-    async getReflectionJobStatus(ctx, input) {
-      const response = await requestJson<BackendReflectionJobStatusResponse>({
-        method: "GET",
-        path: `/v1/reflection/jobs/${encodeURIComponent(input.jobId)}`,
-        ctx,
       });
       return response;
     },

@@ -62,9 +62,10 @@ Chronicle Engine 已经不是“插件内嵌一个本地记忆数据库”的形
 | ranking / rerank / MMR / decay | 负责 | 不负责 |
 | scope derivation / ACL | 负责 | 不允许本地重建 |
 | auto-capture 写入接收与持久化 | 负责 | 只负责转发运行时 payload |
-| reflection job 执行 | 负责 | 只负责 enqueue |
+| reflection recall / injection 检索 | 负责 | 只负责 prompt-time recall / injection 规划 |
 | distill job 执行 | 负责 | 只负责 enqueue / poll |
 | distill source 清洗与 artifact 持久化 | 负责 | 不负责 |
+| distill lesson / governance derivation | 负责 | 不负责 |
 | debug recall / distill status 接口面 | 负责 | 只负责调用 typed client adapter |
 | hook 注册 | 不负责 | 负责 |
 | backend DTO 传输适配 | 不负责 | 负责 |
@@ -98,15 +99,16 @@ Chronicle Engine 已经不是“插件内嵌一个本地记忆数据库”的形
                 -> 注入 <relevant-memories>
 ```
 
-### `/new` / `/reset` 的 reflection 流
+### cadence 驱动的 distill 流
 
 ```text
-/new 或 /reset
-  -> 插件归一化 trigger
-    -> POST /v1/reflection/jobs
-      -> backend 异步排队 reflection 任务
-        -> 命令立即返回
-          -> 后续 recall 再读取已持久化的 reflection rows
+agent_end
+  -> 插件追加有序 transcript rows
+    -> backend 持久化 session transcript
+      -> 每累计 distill.everyTurns 个 user turn
+        -> 插件发起 POST /v1/distill/jobs
+          -> backend 从 session trajectory 提炼 distill artifacts
+            -> 后续 recall / injection 再读取已持久化 rows 与 artifacts
 ```
 
 ### distill job 流
@@ -138,8 +140,8 @@ distill 请求
 | Recency / decay / length weighting | 本地 TS 实现 | Rust backend | 已替换 |
 | Access reinforcement time-decay | 历史 TS 能力 | Rust backend | 已具备 |
 | Diversity / MMR | 历史 TS 能力 | Rust backend | 已具备 |
-| Reflection recall 权威 | 本地 TS + 本地持久化路径 | Rust backend recall 路径 | 已替换 |
-| Reflection async jobs | 本地 / 插件耦合执行 | Rust backend enqueue + job tracking | 已替换 |
+| Reflection recall 权威 | 本地 TS + 本地持久化路径 | Rust backend recall 路径 + 插件侧 prompt 渲染 | 已替换 |
+| 命令触发的 reflection generation | 本地 / 插件耦合执行 | 已移除；当前只保留 cadence 驱动的 distill 生成 | 已移除 |
 | Distill async jobs | 历史 sidecar / example 流水线 | Rust backend distill jobs | 已是 backend-native deterministic runtime |
 | Scope derivation / ACL | 历史上本地 TS 有参与 | 仅 Rust backend | 已替换 |
 | 可检查 retrieval trace | 历史 TS 有更厚 telemetry 对象 | Rust backend debug trace routes | 达到可接受 parity，但不是 1:1 复刻 |
@@ -208,7 +210,7 @@ distill 请求
 | Write / update / delete | 明确失败，fail-closed |
 | Auto-capture | 明确失败，fail-closed |
 | List / stats | 明确失败，fail-closed |
-| Reflection enqueue | 操作失败关闭，但对话流在适用场景下仍保持非阻塞 |
+| Distill enqueue | 明确失败，fail-closed |
 
 ### Scope 约束
 
@@ -231,15 +233,16 @@ distill 请求
 | time decay + access reinforcement | 支持 | backend 权威 |
 | diversity / MMR | 支持 | backend 权威 |
 | auto-recall prompt 注入 | 支持 | 本地编排 + backend recall |
-| reflection recall + enqueue | 支持 | backend recall/jobs + 本地 prompt 规划 |
-| reflection enqueue source | 支持 | backend 持有的 transcript-backed source resolution |
+| reflection recall + injection planning | 支持 | 只读 recall 在 backend，prompt 注入规划在插件 |
 | distill job enqueue + 轮询 | 支持 | backend 权威异步 job 面 |
 | distill inline-messages 清洗 + artifact 持久化 | 支持 | backend 权威执行路径 |
 | distill `session-transcript` source | 支持 | backend 持久化 transcript + 异步 distill 执行 |
 | 每 N 个 user turn 自动 distill | 支持 | runtime cadence + backend-native `session-transcript` jobs |
+| `session-lessons` 模式 | 支持 | 负责 lesson、cause、fix、prevention、stable decision、durable practice |
+| `governance-candidates` 模式 | 支持 | 负责值得提升的 learnings、skill extraction candidates、AGENTS/SOUL/TOOLS promotion candidates |
+| distill artifact 子类型 | 支持 | `follow-up-focus` 和 `next-turn-guidance` 取代独立 derived/open-loop reflection 持久化 |
 | `memory_store` / `memory_update` / `memory_forget` | 支持 | 远程后端工具 |
 | `memory_list` / `memory_stats` | 支持 | 可选管理工具 |
-| `memory_reflection_status` | 支持 | 可选管理工具，用于 caller-scoped 的 backend reflection job |
 | `memory_distill_enqueue` / `memory_distill_status` | 支持 | 可选管理工具，用于 caller-scoped 的 backend distill job |
 | `memory_recall_debug` | 支持 | 可选管理/debug 工具，用于显式 recall trace 检查 |
 | 本地 `memory-pro` CLI | 不支持 | 已移除 |
@@ -251,7 +254,7 @@ distill 请求
 |---|---|---|
 | Job ownership | 外部脚本 + worker | Rust backend job surface |
 | Source preprocessing | 脚本本地过滤 / 清洗 | backend cleanup / filtering pipeline |
-| Reduction quality | model-backed sidecar map/reduce | deterministic Rust span/window reducer |
+| Reduction quality | sidecar reduction pipeline | deterministic Rust turns-stage lesson reducer |
 | Persistence | 外部再导回存储 | backend 自己持久化 artifacts，并可选写 memory |
 | 状态检查 | 队列文件 / worker 日志 | `GET /v1/distill/jobs/{jobId}` |
 | Runtime authority | 已不是 canonical path | backend-native 才是 canonical direction |
@@ -273,14 +276,15 @@ distill 请求
 
 当前 distill 擅长的事：
 
-- 不依赖 sidecar 基础设施的 deterministic incident/decision extraction
+- 不依赖 sidecar 基础设施的 deterministic turns-stage lesson extraction
 - 在 backend reduction window 内做多消息 evidence 聚合
 - 在同一 caller-scoped backend authority 模型下稳定产出 artifact，并可选继续持久化 memory
+- 把所有新学习写入统一收敛到 `session-lessons` 和 `governance-candidates`
 
 当前 distill 明确不做的事：
 
 - 语言自适应抽取
-- model-backed map-stage lesson extraction
+- 单独的 reflection-generation pipeline
 - 恢复 queue-file / worker / `memory-pro import` 这一套旧架构
 
 ## 10. 调试与可观测性
@@ -369,7 +373,8 @@ cutover 说明：
 
 - `1.0.0-beta.0` 已移除只为迁移保留的 config alias。
 - 请直接使用 `sessionStrategy`，不要再使用 `sessionMemory.*`。
-- `memoryReflection.*` 只保留当前 schema 里仍然列出的有效 prompt-planning 字段。
+- `memoryReflection.*` 只保留当前 schema 里仍然列出的 recall / injection 字段。
+- 已移除的 generation-era 字段，例如 `agentId`、`maxInputChars`、`timeoutMs`、`thinkLevel`、`messageCount`，现在会直接报错。
 
 ## 13. 工具
 
@@ -387,7 +392,6 @@ cutover 说明：
 
 - `memory_list`
 - `memory_stats`
-- `memory_reflection_status`
 - `memory_distill_enqueue`
 - `memory_distill_status`
 - `memory_recall_debug`
@@ -400,8 +404,6 @@ cutover 说明：
 
 插件侧 backend client 还提供：
 
-- reflection source loading
-- reflection jobs
 - distill jobs
 - recall debug traces
 
@@ -450,6 +452,8 @@ cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -
 ### “旧的 `sessionMemory.*` 或被移除的 `memoryReflection.*` 字段现在还能用吗？”
 
 不能。`1.0.0-beta.0` 已删除这些只用于迁移的 alias。请只使用当前 schema 中仍然保留的有效字段。
+
+现在 `memoryReflection` 只负责 recall / injection。像 `messageCount` 这样的旧生成字段不会被静默忽略，而是会被直接拒绝。
 
 ### “distill 现在是不是还靠旧的 `jsonl_distill.py` sidecar？”
 

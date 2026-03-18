@@ -10,13 +10,11 @@ use crate::{
     config::AppConfig,
     models::{
         validate_append_session_transcript_request, validate_delete_request,
-        validate_enqueue_distill_job_request, validate_enqueue_reflection_job_request,
-        validate_list_request, validate_recall_generic_request,
-        validate_recall_reflection_request, validate_stats_request, validate_store_request,
-        validate_reflection_source_request, validate_update_request, Actor,
-        AppendSessionTranscriptRequest, DeleteRequest, EnqueueDistillJobRequest,
-        EnqueueReflectionJobRequest, HealthResponse, ListRequest, ReflectionSourceRequest,
-        Principal, RecallGenericDebugResponse, RecallGenericRequest,
+        validate_enqueue_distill_job_request, validate_list_request,
+        validate_recall_generic_request, validate_recall_reflection_request,
+        validate_stats_request, validate_store_request, validate_update_request, Actor,
+        AppendSessionTranscriptRequest, DeleteRequest, EnqueueDistillJobRequest, HealthResponse,
+        ListRequest, Principal, RecallGenericDebugResponse, RecallGenericRequest,
         RecallReflectionDebugResponse, RecallReflectionRequest, StatsRequest, StoreRequest,
         UpdateRequest,
     },
@@ -51,18 +49,15 @@ pub fn build_app(config: AppConfig) -> anyhow::Result<Router> {
         .route("/v1/debug/recall/generic", post(recall_generic_debug))
         .route("/v1/debug/recall/reflection", post(recall_reflection_debug))
         .route("/v1/memories/store", post(store_memories))
-        .route("/v1/session-transcripts/append", post(append_session_transcript))
+        .route(
+            "/v1/session-transcripts/append",
+            post(append_session_transcript),
+        )
         .route("/v1/memories/update", post(update_memory))
         .route("/v1/memories/delete", post(delete_memories))
         .route("/v1/memories/list", post(list_memories))
         .route("/v1/memories/stats", post(memory_stats))
-        .route("/v1/reflection/source", post(load_reflection_source))
-        .route("/v1/reflection/jobs", post(enqueue_reflection_job))
         .route("/v1/distill/jobs", post(enqueue_distill_job))
-        .route(
-            "/v1/reflection/jobs/:job_id",
-            get(get_reflection_job_status),
-        )
         .route("/v1/distill/jobs/:job_id", get(get_distill_job_status))
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
@@ -248,56 +243,6 @@ async fn memory_stats(
     ensure_actor_matches_context(&req.actor, &auth)?;
     let response = state.memory_repo.stats(&req.actor).await?;
     Ok(Json(response))
-}
-
-async fn load_reflection_source(
-    State(state): State<AppState>,
-    Extension(auth): Extension<RuntimeAuthContext>,
-    payload: Result<Json<ReflectionSourceRequest>, JsonRejection>,
-) -> AppResult<Json<crate::models::ReflectionSourceResponse>> {
-    let req = decode_json(payload)?;
-    validate_reflection_source_request(&req)?;
-    ensure_actor_matches_context(&req.actor, &auth)?;
-    let response = state.job_store.load_reflection_source(&req)?;
-    Ok(Json(response))
-}
-
-async fn enqueue_reflection_job(
-    State(state): State<AppState>,
-    Extension(auth): Extension<RuntimeAuthContext>,
-    headers: HeaderMap,
-    payload: Result<Json<EnqueueReflectionJobRequest>, JsonRejection>,
-) -> AppResult<(
-    StatusCode,
-    Json<crate::models::EnqueueReflectionJobResponse>,
-)> {
-    let idempotency_key = require_idempotency_key(&headers)?.to_string();
-    let req = decode_json(payload)?;
-    validate_enqueue_reflection_job_request(&req)?;
-    ensure_actor_matches_context(&req.actor, &auth)?;
-    let response = run_idempotent_operation(
-        &state,
-        &auth.principal,
-        "POST /v1/reflection/jobs",
-        &idempotency_key,
-        &fingerprint_request(&req)?,
-        async { state.job_store.enqueue(&req.actor, req.trigger) },
-    )
-    .await?;
-    Ok((StatusCode::ACCEPTED, Json(response)))
-}
-
-async fn get_reflection_job_status(
-    State(state): State<AppState>,
-    Extension(auth): Extension<RuntimeAuthContext>,
-    Path(job_id): Path<String>,
-) -> AppResult<Json<crate::models::ReflectionJobStatusResponse>> {
-    let status = state
-        .job_store
-        .get_scoped(&job_id, &auth.principal.user_id, &auth.principal.agent_id)?
-        .ok_or_else(|| AppError::not_found("reflection job not found"))?;
-
-    Ok(Json(status))
 }
 
 async fn enqueue_distill_job(

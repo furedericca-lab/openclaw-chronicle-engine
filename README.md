@@ -62,9 +62,10 @@ In practical terms:
 | Ranking / rerank / MMR / decay | Owns | Does not own |
 | Scope derivation / ACL | Owns | Must not reconstruct |
 | Auto-capture write acceptance + persistence | Owns | Only forwards runtime payloads |
-| Reflection job execution | Owns | Only enqueues |
+| Reflection recall / injection retrieval | Owns | Only plans prompt-time recall/injection |
 | Distill job execution | Owns | Only enqueues / polls |
 | Distill source cleaning / artifact persistence | Owns | Does not own |
+| Distill lesson/governance derivation | Owns | Does not own |
 | Debug recall / distill status surfaces | Owns | Only calls typed client adapters |
 | Hook registration | Does not own | Owns |
 | Backend DTO transport adapters | Does not own | Owns |
@@ -98,15 +99,16 @@ User prompt
                 -> <relevant-memories> injected into prompt
 ```
 
-### Reflection flow for `/new` and `/reset`
+### Cadence-driven distill flow
 
 ```text
-/new or /reset
-  -> plugin normalizes trigger
-    -> POST /v1/reflection/jobs
-      -> backend enqueues async reflection work
-        -> command returns immediately
-          -> later recall reads persisted reflection rows
+agent_end
+  -> plugin appends ordered transcript rows
+    -> backend persists session transcript
+      -> every distill.everyTurns user turns
+        -> plugin enqueues POST /v1/distill/jobs
+          -> backend derives distill artifacts from session trajectory
+            -> later recall/injection can read persisted rows and artifacts
 ```
 
 ### Distill job flow
@@ -138,8 +140,8 @@ distill request
 | Recency / decay / length weighting | Local TS implementation | Rust backend | Replaced |
 | Access reinforcement time-decay | Historical TS-side capability | Rust backend | Present |
 | Diversity / MMR | Historical TS-side capability | Rust backend | Present |
-| Reflection recall authority | Local TS + local persistence path | Rust backend recall path | Replaced |
-| Reflection async jobs | Local/plugin-coupled execution | Rust backend enqueue + job tracking | Replaced |
+| Reflection recall authority | Local TS + local persistence path | Rust backend recall path with plugin-side prompt rendering | Replaced |
+| Command-triggered reflection generation | Local/plugin-coupled execution | Removed; cadence-driven distill is the only supported generation path | Removed |
 | Distill async jobs | Historical sidecar/example pipeline | Rust backend distill jobs | Present, backend-native deterministic runtime |
 | Scope derivation / ACL | Local TS participation existed historically | Rust backend only | Replaced |
 | Inspectable retrieval trace | Historical TS had thicker telemetry objects | Rust backend debug trace routes | Acceptable parity, not 1:1 shape recreation |
@@ -208,7 +210,7 @@ Behavior by path:
 | Write / update / delete | Fail closed |
 | Auto-capture | Fail closed |
 | List / stats | Fail closed |
-| Reflection enqueue | Fail closed for the operation, conversation stays non-blocking where applicable |
+| Distill enqueue | Fail closed |
 
 ### Scope contract
 
@@ -231,16 +233,16 @@ That means:
 | Time decay + access reinforcement | Yes | Backend-owned |
 | Diversity / MMR | Yes | Backend-owned |
 | Auto-recall prompt injection | Yes | Local orchestration over backend recall |
-| Reflection recall + enqueue | Yes | Backend-owned recall/jobs, local prompt planning |
-| Reflection enqueue source | Yes | Backend-owned transcript-backed source resolution |
+| Reflection recall + injection planning | Yes | Read-only recall in backend, prompt-local injection planning in plugin |
 | Distill job enqueue + polling | Yes | Backend-owned async job surface |
 | Distill inline-message cleaning + artifact persistence | Yes | Backend-owned execution path |
 | Distill `session-transcript` source | Yes | Backend-owned transcript persistence + async distill execution |
 | Automatic distill every N user turns | Yes | Runtime cadence over backend-native `session-transcript` jobs |
-| Automatic distill every N user turns | Yes | Runtime cadence over backend-native `session-transcript` jobs |
+| `session-lessons` mode | Yes | Owns lesson, cause, fix, prevention, stable decision, and durable practice extraction |
+| `governance-candidates` mode | Yes | Owns worth-promoting learnings, skill extraction candidates, and AGENTS/SOUL/TOOLS promotion candidates |
+| Distill artifact subtypes | Yes | `follow-up-focus` and `next-turn-guidance` replace separate derived/open-loop reflection persistence |
 | `memory_store` / `memory_update` / `memory_forget` | Yes | Remote-backed |
 | `memory_list` / `memory_stats` | Yes | Optional management tools |
-| `memory_reflection_status` | Yes | Optional management tool for caller-scoped backend reflection jobs |
 | `memory_distill_enqueue` / `memory_distill_status` | Yes | Optional management tools for caller-scoped backend distill jobs |
 | `memory_recall_debug` | Yes | Optional management/debug tool for explicit recall trace inspection |
 | Local `memory-pro` CLI | No | Removed |
@@ -252,7 +254,7 @@ That means:
 |---|---|---|
 | Job ownership | External script + worker | Rust backend job surface |
 | Source preprocessing | Script-local filtering/cleanup | Backend cleanup/filtering pipeline |
-| Reduction quality | Model-backed sidecar map/reduce | Deterministic Rust span/window reducer |
+| Reduction quality | Sidecar reduction pipeline | Deterministic Rust turns-stage lesson reducer |
 | Persistence | External import back into storage | Backend-owned artifacts and optional memory persistence |
 | Status inspection | Queue files / external worker logs | `GET /v1/distill/jobs/{jobId}` |
 | Runtime authority | Not canonical anymore | Canonical direction |
@@ -274,14 +276,15 @@ Current behavior boundary:
 
 What current distill is good at:
 
-- deterministic incident/decision extraction without sidecar infrastructure
+- deterministic turns-stage lesson extraction without sidecar infrastructure
 - multi-message evidence aggregation inside backend reduction windows
 - stable artifacts and optional memory persistence under the same caller-scoped backend authority model
+- keeping all new-learning writes under `session-lessons` and `governance-candidates`
 
 What current distill is intentionally not:
 
 - language-adaptive extraction
-- model-backed map-stage lesson extraction
+- a separate reflection-generation pipeline
 - a restored queue-file / worker / `memory-pro import` architecture
 
 ## 10. Debuggability
@@ -370,7 +373,8 @@ Cutover note:
 
 - `1.0.0-beta.0` removes migration-only config aliases.
 - Use `sessionStrategy` directly instead of `sessionMemory.*`.
-- Supported `memoryReflection.*` fields are the active prompt-planning knobs documented in the schema and examples.
+- Supported `memoryReflection.*` fields are the active recall/injection knobs documented in the schema and examples.
+- Removed `memoryReflection.*` generation fields such as `agentId`, `maxInputChars`, `timeoutMs`, `thinkLevel`, and `messageCount` are rejected.
 
 ## 13. Tools
 
@@ -388,7 +392,6 @@ Enable `enableManagementTools: true` to expose:
 
 - `memory_list`
 - `memory_stats`
-- `memory_reflection_status`
 - `memory_distill_enqueue`
 - `memory_distill_status`
 - `memory_recall_debug`
@@ -401,8 +404,6 @@ Management/debug tools stay caller-scoped and require runtime principal identity
 
 The plugin client also has backend job adapters for:
 
-- reflection source loading
-- reflection jobs
 - distill jobs
 - recall debug traces
 
@@ -451,6 +452,8 @@ It is not backend ownership.
 ### “Do old `sessionMemory.*` or removed `memoryReflection.*` fields still work?”
 
 No. `1.0.0-beta.0` removes those migration-only aliases. Use the active schema fields only.
+
+`memoryReflection` is now recall/injection only. Removed generation-era fields such as `messageCount` are rejected instead of silently ignored.
 
 ### “Does distill still mean running the old `jsonl_distill.py` sidecar?”
 

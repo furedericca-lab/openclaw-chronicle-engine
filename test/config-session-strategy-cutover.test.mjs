@@ -74,8 +74,22 @@ describe("sessionStrategy cutover contract", () => {
           memoryReflection: {
             agentId: "memory-distiller",
           },
-        }),
+      }),
       /memoryReflection\.agentId is no longer supported in 1\.0\.0-beta\.0/
+    );
+  });
+
+  it("rejects removed reflection-generation source window fields", () => {
+    assert.throws(
+      () =>
+        parsePluginConfig({
+          ...baseConfig(),
+          sessionStrategy: "memoryReflection",
+          memoryReflection: {
+            messageCount: 12,
+          },
+        }),
+      /memoryReflection\.messageCount is no longer supported in 1\.0\.0-beta\.0/
     );
   });
 });

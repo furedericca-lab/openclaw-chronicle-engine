@@ -2,15 +2,14 @@ use crate::{
     config::AppConfig,
     error::{AppError, AppResult},
     models::{
-        clamped_limit, validate_non_empty, Actor, CaptureItem, Category, DeleteRequest,
-        DistillArtifact, DistillArtifactEvidence, DistillArtifactKind, DistillArtifactPersistence,
-        DistillJobResultSummary, DistillJobStatus, DistillJobStatusResponse, DistillMode,
-        DistillPersistMode, DistillSource, DistillSourceKind, EnqueueDistillJobRequest,
-        EnqueueDistillJobResponse, EnqueueReflectionJobResponse, ListRequest, ListResponse,
-        ListRow, MemoryAction, MemoryMutationResult, MessageRole, Principal, RecallGenericRequest,
-        RecallGenericResponse, RecallGenericRow, RecallReflectionRequest, RecallReflectionResponse,
-        ReflectionJobStatus, ReflectionJobStatusResponse, ReflectionKind, ReflectionMetadata,
-        ReflectionRecallMode, ReflectionSourceRequest, ReflectionSourceResponse, ReflectionTrigger,
+        clamped_limit, validate_non_empty, Actor, Category, DeleteRequest, DistillArtifact,
+        DistillArtifactEvidence, DistillArtifactKind, DistillArtifactPersistence,
+        DistillArtifactSubtype, DistillJobResultSummary, DistillJobStatus,
+        DistillJobStatusResponse, DistillMode, DistillPersistMode, DistillSource,
+        DistillSourceKind, EnqueueDistillJobRequest, EnqueueDistillJobResponse, ListRequest,
+        ListResponse, ListRow, MemoryAction, MemoryMutationResult, MessageRole, Principal,
+        RecallGenericRequest, RecallGenericResponse, RecallGenericRow, RecallReflectionRequest,
+        RecallReflectionResponse, ReflectionKind, ReflectionMetadata, ReflectionRecallMode,
         RetrievalTrace, RetrievalTraceKind, RetrievalTraceQuery, RetrievalTraceStage,
         RetrievalTraceStageStatus, RowMetadata, StatsResponse, StoreRequest, StoreResponse,
         ToolStoreMemory, UpdateRequest, UpdateResponse, DEFAULT_IMPORTANCE,
@@ -29,14 +28,13 @@ use lancedb::{
     Connection as LanceConnection, DistanceType, Error as LanceError, Table as LanceTable,
 };
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
-use regex::Regex;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     fs,
     path::PathBuf,
-    sync::{OnceLock,
+    sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
@@ -54,7 +52,6 @@ const ACCESS_DECAY_HALF_LIFE_DAYS: f64 = 30.0;
 const MAX_ACCESS_COUNT: i64 = 10_000;
 const ACCESS_UPDATE_MAX_ROWS: usize = 64;
 const DISTILL_MAX_QUOTE_LEN: usize = 160;
-const REFLECTION_SOURCE_DEFAULT_MAX_MESSAGES: u64 = 120;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -331,6 +328,8 @@ struct SessionTranscriptStoredMessage {
 
 #[derive(Clone)]
 struct DistillCandidate {
+    kind: DistillArtifactKind,
+    subtype: Option<DistillArtifactSubtype>,
     category: Category,
     importance: f64,
     text: String,
@@ -2788,7 +2787,12 @@ fn apply_generic_recall_filters(
         .categories
         .as_ref()
         .filter(|items| !items.is_empty())
-        .map(|items| items.iter().copied().collect::<std::collections::BTreeSet<_>>());
+        .map(|items| {
+            items
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+        });
     let exclude_reflection = req.exclude_reflection.unwrap_or(false);
     let max_age_ms = req.max_age_days.map(|days| days.saturating_mul(86_400_000));
     let now = now_millis();
@@ -2827,7 +2831,12 @@ fn apply_reflection_recall_filters(
         .include_kinds
         .as_ref()
         .filter(|items| !items.is_empty())
-        .map(|items| items.iter().copied().collect::<std::collections::BTreeSet<_>>());
+        .map(|items| {
+            items
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+        });
     let min_score = req.min_score.unwrap_or(0.0);
 
     ranked
@@ -3232,51 +3241,6 @@ impl JobStore {
         Ok(this)
     }
 
-    pub fn enqueue(
-        &self,
-        actor: &Actor,
-        trigger: ReflectionTrigger,
-    ) -> AppResult<EnqueueReflectionJobResponse> {
-        validate_non_empty("actor.userId", &actor.user_id)?;
-        validate_non_empty("actor.agentId", &actor.agent_id)?;
-
-        let status = ReflectionJobStatus::Queued;
-        let now = now_millis();
-        let job_id = format!("job_{}", Uuid::new_v4().simple());
-        let conn = self.open_conn().map_err(AppError::from)?;
-        conn.execute(
-            "INSERT INTO reflection_jobs (
-                job_id,
-                user_id,
-                agent_id,
-                session_key,
-                session_id,
-                trigger,
-                status,
-                persisted,
-                memory_count,
-                error_code,
-                error_message,
-                error_retryable,
-                created_at,
-                updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, NULL, NULL, NULL, ?8, ?8)",
-            params![
-                &job_id,
-                &actor.user_id,
-                &actor.agent_id,
-                &actor.session_key,
-                &actor.session_id,
-                trigger_to_str(trigger),
-                status_to_str(status),
-                now,
-            ],
-        )
-        .map_err(|err| AppError::internal(format!("failed to enqueue reflection job: {err}")))?;
-
-        Ok(EnqueueReflectionJobResponse { job_id, status })
-    }
-
     pub fn enqueue_distill(
         &self,
         req: &EnqueueDistillJobRequest,
@@ -3347,9 +3311,9 @@ impl JobStore {
         }
 
         let mut conn = self.open_conn().map_err(AppError::from)?;
-        let tx = conn
-            .transaction()
-            .map_err(|err| AppError::internal(format!("failed to open transcript transaction: {err}")))?;
+        let tx = conn.transaction().map_err(|err| {
+            AppError::internal(format!("failed to open transcript transaction: {err}"))
+        })?;
         let next_seq: i64 = tx
             .query_row(
                 "SELECT COALESCE(MAX(seq), 0) FROM session_transcript_messages
@@ -3436,17 +3400,26 @@ impl JobStore {
             })?;
             let mapped = stmt
                 .query_map(
-                    params![&principal.user_id, &principal.agent_id, session_key, session_id],
-                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+                    params![
+                        &principal.user_id,
+                        &principal.agent_id,
+                        session_key,
+                        session_id
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    },
                 )
                 .map_err(|err| {
                     AppError::internal(format!("failed to query session transcript rows: {err}"))
                 })?;
             for row in mapped {
                 let (message_id, role, text) = row.map_err(|err| {
-                    AppError::internal(format!(
-                        "failed to decode session transcript row: {err}"
-                    ))
+                    AppError::internal(format!("failed to decode session transcript row: {err}"))
                 })?;
                 rows.push(SessionTranscriptStoredMessage {
                     message_id: message_id as u64,
@@ -3459,17 +3432,22 @@ impl JobStore {
                 AppError::internal(format!("failed to prepare session transcript query: {err}"))
             })?;
             let mapped = stmt
-                .query_map(params![&principal.user_id, &principal.agent_id, session_key], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
-                })
+                .query_map(
+                    params![&principal.user_id, &principal.agent_id, session_key],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    },
+                )
                 .map_err(|err| {
                     AppError::internal(format!("failed to query session transcript rows: {err}"))
                 })?;
             for row in mapped {
                 let (message_id, role, text) = row.map_err(|err| {
-                    AppError::internal(format!(
-                        "failed to decode session transcript row: {err}"
-                    ))
+                    AppError::internal(format!("failed to decode session transcript row: {err}"))
                 })?;
                 rows.push(SessionTranscriptStoredMessage {
                     message_id: message_id as u64,
@@ -3493,145 +3471,6 @@ impl JobStore {
         }
 
         Ok(rows)
-    }
-
-    pub fn load_reflection_source(
-        &self,
-        req: &ReflectionSourceRequest,
-    ) -> AppResult<ReflectionSourceResponse> {
-        let principal = req.actor.principal();
-        let requested_limit = req
-            .max_messages
-            .unwrap_or(REFLECTION_SOURCE_DEFAULT_MAX_MESSAGES);
-        let max_messages = Some(clamped_limit(requested_limit));
-
-        let rows = match self.load_session_transcript(
-            &principal,
-            &req.actor.session_key,
-            Some(req.actor.session_id.as_str()),
-            max_messages,
-        ) {
-            Ok(rows) => rows,
-            Err(_) => self.load_session_transcript(
-                &principal,
-                &req.actor.session_key,
-                None,
-                max_messages,
-            )?,
-        };
-
-        let messages = rows
-            .into_iter()
-            .filter_map(|row| session_transcript_row_to_reflection_item(&row))
-            .collect::<Vec<_>>();
-
-        if messages.is_empty() {
-            return Err(AppError::invalid_request(
-                "reflection source has no usable persisted messages for the requested session",
-            ));
-        }
-
-        Ok(ReflectionSourceResponse { messages })
-    }
-
-    pub fn get_scoped(
-        &self,
-        job_id: &str,
-        user_id: &str,
-        agent_id: &str,
-    ) -> AppResult<Option<ReflectionJobStatusResponse>> {
-        let conn = self.open_conn().map_err(AppError::from)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT
-                    user_id,
-                    agent_id,
-                    status,
-                    persisted,
-                    memory_count,
-                    error_code,
-                    error_message,
-                    error_retryable
-                 FROM reflection_jobs
-                 WHERE job_id = ?1",
-            )
-            .map_err(|err| AppError::internal(format!("failed to prepare query: {err}")))?;
-
-        let mut rows = stmt
-            .query(params![job_id])
-            .map_err(|err| AppError::internal(format!("failed to query reflection job: {err}")))?;
-
-        let Some(row) = rows.next().map_err(|err| {
-            AppError::internal(format!("failed to fetch reflection job row: {err}"))
-        })?
-        else {
-            return Ok(None);
-        };
-
-        let owner_user_id: String = row
-            .get(0)
-            .map_err(|err| AppError::internal(format!("failed to read owner user_id: {err}")))?;
-        let owner_agent_id: String = row
-            .get(1)
-            .map_err(|err| AppError::internal(format!("failed to read owner agent_id: {err}")))?;
-
-        if owner_user_id != user_id || owner_agent_id != agent_id {
-            return Ok(None);
-        }
-
-        let status_raw: String = row
-            .get(2)
-            .map_err(|err| AppError::internal(format!("failed to read status: {err}")))?;
-        let status = parse_status(&status_raw)?;
-
-        let persisted_raw: i64 = row
-            .get(3)
-            .map_err(|err| AppError::internal(format!("failed to read persisted: {err}")))?;
-        let memory_count_raw: i64 = row
-            .get(4)
-            .map_err(|err| AppError::internal(format!("failed to read memory_count: {err}")))?;
-        let error_code: Option<String> = row
-            .get(5)
-            .map_err(|err| AppError::internal(format!("failed to read error_code: {err}")))?;
-        let error_message: Option<String> = row
-            .get(6)
-            .map_err(|err| AppError::internal(format!("failed to read error_message: {err}")))?;
-        let error_retryable: Option<i64> = row
-            .get(7)
-            .map_err(|err| AppError::internal(format!("failed to read error_retryable: {err}")))?;
-
-        let response = match status {
-            ReflectionJobStatus::Queued | ReflectionJobStatus::Running => {
-                ReflectionJobStatusResponse {
-                    job_id: job_id.to_string(),
-                    status,
-                    persisted: None,
-                    memory_count: None,
-                    error: None,
-                }
-            }
-            ReflectionJobStatus::Completed => ReflectionJobStatusResponse {
-                job_id: job_id.to_string(),
-                status,
-                persisted: Some(persisted_raw != 0),
-                memory_count: Some(memory_count_raw.max(0) as u64),
-                error: None,
-            },
-            ReflectionJobStatus::Failed => ReflectionJobStatusResponse {
-                job_id: job_id.to_string(),
-                status,
-                persisted: None,
-                memory_count: None,
-                error: Some(crate::models::JobStatusError {
-                    code: error_code.unwrap_or_else(|| "UPSTREAM_REFLECTION_ERROR".to_string()),
-                    message: error_message.unwrap_or_else(|| "reflection job failed".to_string()),
-                    retryable: error_retryable.unwrap_or(0) != 0,
-                    details: serde_json::json!({}),
-                }),
-            },
-        };
-
-        Ok(Some(response))
     }
 
     pub fn get_scoped_distill(
@@ -3819,6 +3658,7 @@ impl JobStore {
                     artifact_id,
                     job_id,
                     kind,
+                    subtype,
                     category,
                     importance,
                     text,
@@ -3826,11 +3666,12 @@ impl JobStore {
                     tags_json,
                     persistence_json,
                     created_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     &artifact.artifact_id,
                     job_id,
                     distill_artifact_kind_to_str(artifact.kind),
+                    artifact.subtype.map(distill_artifact_subtype_to_str),
                     artifact.category.as_str(),
                     artifact.importance,
                     &artifact.text,
@@ -3887,23 +3728,7 @@ impl JobStore {
     fn init_schema(&self) -> anyhow::Result<()> {
         let conn = self.open_conn()?;
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS reflection_jobs (
-                job_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
-                session_key TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                trigger TEXT NOT NULL,
-                status TEXT NOT NULL,
-                persisted INTEGER NOT NULL DEFAULT 0,
-                memory_count INTEGER NOT NULL DEFAULT 0,
-                error_code TEXT,
-                error_message TEXT,
-                error_retryable INTEGER,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS distill_jobs (
+            "CREATE TABLE IF NOT EXISTS distill_jobs (
                 job_id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
                 agent_id TEXT NOT NULL,
@@ -3921,6 +3746,7 @@ impl JobStore {
                 artifact_id TEXT PRIMARY KEY,
                 job_id TEXT NOT NULL,
                 kind TEXT NOT NULL,
+                subtype TEXT,
                 category TEXT NOT NULL,
                 importance REAL NOT NULL,
                 text TEXT NOT NULL,
@@ -3946,6 +3772,12 @@ impl JobStore {
             "CREATE INDEX IF NOT EXISTS idx_session_transcript_lookup
              ON session_transcript_messages (user_id, agent_id, session_key, session_id, seq)",
             [],
+        )?;
+        ensure_column(
+            &conn,
+            "distill_artifacts",
+            "subtype",
+            "ALTER TABLE distill_artifacts ADD COLUMN subtype TEXT",
         )?;
         Ok(())
     }
@@ -4231,9 +4063,7 @@ fn prepare_stored_session_transcript_messages(
 ) -> Vec<DistillPreparedMessage> {
     messages
         .iter()
-        .filter(|message| {
-            matches!(message.role, MessageRole::User | MessageRole::Assistant)
-        })
+        .filter(|message| matches!(message.role, MessageRole::User | MessageRole::Assistant))
         .filter_map(|message| {
             prepare_distill_message(message.message_id, message.role, &message.text)
         })
@@ -4363,23 +4193,24 @@ fn build_distill_artifacts(
     options: &crate::models::DistillOptions,
     max_artifacts: usize,
 ) -> Vec<DistillArtifact> {
-    reduce_distill_candidates(build_distill_candidates(prepared, mode, options), max_artifacts)
-        .into_iter()
-        .map(|candidate| DistillArtifact {
-            artifact_id: format!("art_{}", Uuid::new_v4().simple()),
-            job_id: job_id.to_string(),
-            kind: match mode {
-                DistillMode::SessionLessons => DistillArtifactKind::Lesson,
-                DistillMode::GovernanceCandidates => DistillArtifactKind::GovernanceCandidate,
-            },
-            category: candidate.category,
-            importance: candidate.importance,
-            text: candidate.text,
-            evidence: candidate.evidence,
-            tags: candidate.tags,
-            persistence: None,
-        })
-        .collect()
+    reduce_distill_candidates(
+        build_distill_candidates(prepared, mode, options),
+        max_artifacts,
+    )
+    .into_iter()
+    .map(|candidate| DistillArtifact {
+        artifact_id: format!("art_{}", Uuid::new_v4().simple()),
+        job_id: job_id.to_string(),
+        kind: candidate.kind,
+        subtype: candidate.subtype,
+        category: candidate.category,
+        importance: candidate.importance,
+        text: candidate.text,
+        evidence: candidate.evidence,
+        tags: candidate.tags,
+        persistence: None,
+    })
+    .collect()
 }
 
 fn build_distill_candidates(
@@ -4387,14 +4218,11 @@ fn build_distill_candidates(
     mode: DistillMode,
     options: &crate::models::DistillOptions,
 ) -> Vec<DistillCandidate> {
-    let chunk_chars = options
-        .chunk_chars
-        .unwrap_or(12_000)
-        .clamp(400, 24_000) as usize;
+    let chunk_chars = options.chunk_chars.unwrap_or(12_000).clamp(400, 24_000) as usize;
     let overlap_messages = options.chunk_overlap_messages.unwrap_or(10).min(32) as usize;
     let mut candidates = Vec::new();
     for window in build_distill_windows(prepared, chunk_chars, overlap_messages) {
-        for span in build_distill_spans(window) {
+        for span in build_distill_spans(window, mode) {
             if let Some(candidate) = build_distill_candidate(span, mode) {
                 candidates.push(candidate);
             }
@@ -4443,7 +4271,10 @@ fn distill_message_window_len(message: &DistillPreparedMessage) -> usize {
     message.text.chars().count() + 16
 }
 
-fn build_distill_spans(window: &[DistillPreparedMessage]) -> Vec<&[DistillPreparedMessage]> {
+fn build_distill_spans(
+    window: &[DistillPreparedMessage],
+    mode: DistillMode,
+) -> Vec<&[DistillPreparedMessage]> {
     if window.is_empty() {
         return Vec::new();
     }
@@ -4454,43 +4285,20 @@ fn build_distill_spans(window: &[DistillPreparedMessage]) -> Vec<&[DistillPrepar
         let mut end = start + 1;
         while end < window.len()
             && end - start < 4
-            && should_extend_distill_span(&window[start..end], &window[end])
+            && should_extend_distill_span(&window[start..end], &window[end], mode)
         {
             end += 1;
         }
         spans.push(&window[start..end]);
         start = end;
     }
-    let has_multi_message_span = spans.iter().any(|span| span.len() > 1);
-    let whole_window_text = window
-        .iter()
-        .map(|message| message.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    if window.len() > 1
-        && (detect_distill_signal_count(&whole_window_text) >= 2
-            || (!has_multi_message_span && window_has_shared_distill_entities(window)))
-    {
-        spans.push(window);
-    }
     spans
-}
-
-fn window_has_shared_distill_entities(window: &[DistillPreparedMessage]) -> bool {
-    let mut seen = HashSet::new();
-    for message in window {
-        for entity in select_distill_entities(&message.text, 4) {
-            if !seen.insert(entity) {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 fn should_extend_distill_span(
     current: &[DistillPreparedMessage],
     next: &DistillPreparedMessage,
+    mode: DistillMode,
 ) -> bool {
     let current_text = current
         .iter()
@@ -4513,9 +4321,17 @@ fn should_extend_distill_span(
         .last()
         .map(|message| message.role != next.role)
         .unwrap_or(false);
-    shared_tags > 0
-        || (role_bridge && (current_signals > 0 || next_signals > 0))
-        || (current_signals > 0 && next_signals > 0)
+    if matches!(mode, DistillMode::SessionLessons)
+        && session_lessons_prefix_conflicts(&current_text, &next.text)
+    {
+        return false;
+    }
+    if matches!(mode, DistillMode::GovernanceCandidates)
+        && governance_label_conflicts(&current_text, &next.text)
+    {
+        return false;
+    }
+    shared_tags > 0 || (role_bridge && (current_signals > 0 || next_signals > 0))
 }
 
 fn build_distill_candidate(
@@ -4528,6 +4344,7 @@ fn build_distill_candidate(
         .collect::<Vec<_>>()
         .join("\n");
     let summary = normalize_distill_candidate_text(&summarize_distill_text(&span_text, span, mode));
+    let (kind, subtype) = infer_distill_artifact_metadata(mode, &summary);
     let evidence = normalize_distill_evidence(
         span.iter()
             .take(3)
@@ -4537,11 +4354,20 @@ fn build_distill_candidate(
             })
             .collect(),
     );
-    let tags = normalize_distill_tags(extract_distill_tags(&span_text));
+    let mut raw_tags = extract_distill_tags(&span_text);
+    if matches!(kind, DistillArtifactKind::GovernanceCandidate) {
+        raw_tags.push("governance-candidate".to_string());
+    }
+    if let Some(subtype) = subtype {
+        raw_tags.push(distill_artifact_subtype_to_str(subtype).to_string());
+    }
+    let tags = normalize_distill_tags(raw_tags);
     let mut candidate = DistillCandidate {
+        kind,
+        subtype,
         category: normalize_distill_category(infer_distill_category(&span_text, mode)),
         importance: normalize_distill_importance(infer_distill_importance(&span_text, span)),
-        dedupe_key: normalize_distill_candidate_key(&summary),
+        dedupe_key: build_distill_candidate_dedupe_key(kind, subtype, &summary),
         text: summary,
         evidence,
         tags,
@@ -4598,6 +4424,21 @@ fn normalize_distill_candidate_key(text: &str) -> String {
     normalize_recall_text(text)
 }
 
+fn build_distill_candidate_dedupe_key(
+    kind: DistillArtifactKind,
+    subtype: Option<DistillArtifactSubtype>,
+    text: &str,
+) -> String {
+    let base = normalize_distill_candidate_key(text);
+    match (kind, subtype) {
+        (_, Some(subtype)) => format!("{}::{base}", distill_artifact_subtype_to_str(subtype)),
+        (DistillArtifactKind::GovernanceCandidate, None) => {
+            format!("governance-candidate::{base}")
+        }
+        _ => base,
+    }
+}
+
 fn normalize_distill_category(category: Category) -> Category {
     match category {
         Category::Preference | Category::Fact | Category::Decision | Category::Other => category,
@@ -4628,7 +4469,9 @@ fn normalize_distill_tags(tags: Vec<String>) -> Vec<String> {
     normalized
 }
 
-fn normalize_distill_evidence(evidence: Vec<DistillArtifactEvidence>) -> Vec<DistillArtifactEvidence> {
+fn normalize_distill_evidence(
+    evidence: Vec<DistillArtifactEvidence>,
+) -> Vec<DistillArtifactEvidence> {
     let mut normalized = Vec::new();
     for row in evidence {
         let mut message_ids = row.message_ids;
@@ -4643,11 +4486,15 @@ fn normalize_distill_evidence(evidence: Vec<DistillArtifactEvidence>) -> Vec<Dis
     normalized
 }
 
-fn should_merge_distill_candidate(existing: &DistillCandidate, incoming: &DistillCandidate) -> bool {
-    existing.dedupe_key == incoming.dedupe_key
-        || (existing.category == incoming.category
-            && distill_evidence_overlaps(&existing.evidence, &incoming.evidence)
-            && distill_tag_overlap(&existing.tags, &incoming.tags) > 0)
+fn should_merge_distill_candidate(
+    existing: &DistillCandidate,
+    incoming: &DistillCandidate,
+) -> bool {
+    (existing.kind == incoming.kind && existing.subtype == incoming.subtype)
+        && (existing.dedupe_key == incoming.dedupe_key
+            || (existing.category == incoming.category
+                && distill_evidence_overlaps(&existing.evidence, &incoming.evidence)
+                && distill_tag_overlap(&existing.tags, &incoming.tags) > 0))
 }
 
 fn merge_distill_candidate(target: &mut DistillCandidate, incoming: DistillCandidate) {
@@ -4669,7 +4516,8 @@ fn merge_distill_candidate(target: &mut DistillCandidate, incoming: DistillCandi
             .chain(incoming.evidence.iter().cloned())
             .collect(),
     );
-    target.dedupe_key = normalize_distill_candidate_key(&target.text);
+    target.dedupe_key =
+        build_distill_candidate_dedupe_key(target.kind, target.subtype, &target.text);
 }
 
 fn select_preferred_distill_text(left: &str, right: &str) -> String {
@@ -4688,10 +4536,12 @@ fn distill_evidence_overlaps(
 ) -> bool {
     left.iter().any(|left_row| {
         right.iter().any(|right_row| {
-            left_row
-                .message_ids
-                .iter()
-                .any(|message_id| right_row.message_ids.iter().any(|candidate| candidate == message_id))
+            left_row.message_ids.iter().any(|message_id| {
+                right_row
+                    .message_ids
+                    .iter()
+                    .any(|candidate| candidate == message_id)
+            })
         })
     })
 }
@@ -4710,25 +4560,19 @@ fn should_keep_distill_candidate(candidate: &DistillCandidate) -> bool {
     if normalized.chars().count() < 20 {
         return false;
     }
-    if contains_vague_advice(&normalized) && !contains_structured_lesson_signal(&normalized) {
+    if contains_vague_advice(&normalized) && !contains_distill_structure_signal(&normalized) {
         return false;
     }
     true
 }
 
 fn contains_vague_advice(text: &str) -> bool {
-    [
-        "be careful",
-        "best practice",
-        "should",
-        "建议",
-        "注意",
-    ]
-    .iter()
-    .any(|pattern| text.contains(pattern))
+    ["be careful", "best practice", "should", "建议", "注意"]
+        .iter()
+        .any(|pattern| text.contains(pattern))
 }
 
-fn contains_structured_lesson_signal(text: &str) -> bool {
+fn contains_distill_structure_signal(text: &str) -> bool {
     [
         "cause",
         "fix",
@@ -4736,6 +4580,14 @@ fn contains_structured_lesson_signal(text: &str) -> bool {
         "trigger",
         "action",
         "decision principle",
+        "stable decision",
+        "durable practice",
+        "follow-up focus",
+        "next-turn guidance",
+        "governance candidate",
+        "worth promoting",
+        "skill extraction candidate",
+        "agents/soul/tools promotion candidate",
         "原因",
         "修复",
         "预防",
@@ -4762,10 +4614,20 @@ fn score_distill_candidate(candidate: &DistillCandidate) -> f64 {
     if normalized.contains("decision principle")
         || normalized.contains("trigger")
         || normalized.contains("action")
+        || normalized.contains("stable decision")
+        || normalized.contains("durable practice")
         || normalized.contains("触发")
         || normalized.contains("动作")
     {
         score += 2.0;
+    }
+    if normalized.contains("follow-up focus")
+        || normalized.contains("next-turn guidance")
+        || normalized.contains("worth promoting")
+        || normalized.contains("skill extraction candidate")
+        || normalized.contains("agents/soul/tools promotion candidate")
+    {
+        score += 1.5;
     }
     if normalized.contains("openclaw")
         || normalized.contains("docker")
@@ -4781,6 +4643,9 @@ fn score_distill_candidate(candidate: &DistillCandidate) -> f64 {
         || normalized.contains("proxy")
     {
         score += 1.0;
+    }
+    if candidate.subtype.is_some() {
+        score += 0.25;
     }
     if candidate.text.chars().count() < 120 {
         score += 0.5;
@@ -4799,54 +4664,417 @@ fn summarize_distill_text(
     span: &[DistillPreparedMessage],
     mode: DistillMode,
 ) -> String {
-    let prefix = match mode {
-        DistillMode::SessionLessons => "Lesson",
-        DistillMode::GovernanceCandidates => "Governance candidate",
-    };
     let sentences = distill_sentences(text);
     let primary = select_primary_distill_sentence(&sentences);
     let cause = select_signal_sentence(&sentences, &["cause", "because", "root cause", "原因"]);
     let fix = select_signal_sentence(
         &sentences,
-        &["fix", "restart", "disable", "enable", "rollback", "migrate", "修复"],
+        &[
+            "fix", "restart", "disable", "enable", "rollback", "migrate", "修复",
+        ],
     );
-    let prevention = select_signal_sentence(
-        &sentences,
-        &["prevention", "avoid", "guard", "verify", "预防"],
-    );
+    let prevention = select_signal_sentence(&sentences, &["prevention", "avoid", "guard", "预防"]);
     let trigger = select_signal_sentence(
         &sentences,
         &["trigger", "action", "decision", "must", "动作", "触发"],
     );
+    let stable_decision = select_signal_sentence(
+        &sentences,
+        &[
+            "decision",
+            "decide",
+            "default",
+            "prefer",
+            "standardize",
+            "must",
+            "keep",
+        ],
+    );
+    let durable_practice = select_signal_sentence(
+        &sentences,
+        &[
+            "durable practice",
+            "always",
+            "every time",
+            "baseline",
+            "guardrail",
+            "keep",
+            "verify",
+        ],
+    );
+    let follow_up = select_signal_sentence(
+        &sentences,
+        &[
+            "follow up",
+            "follow-up",
+            "open loop",
+            "pending",
+            "still need",
+            "investigate",
+            "confirm",
+            "audit",
+        ],
+    );
+    let next_turn = select_signal_sentence(
+        &sentences,
+        &[
+            "next turn",
+            "next-turn",
+            "next step",
+            "ask the user",
+            "clarify",
+            "request",
+            "before proceeding",
+        ],
+    );
 
-    let mut parts = Vec::new();
-    if let Some(primary) = primary {
-        parts.push(compact_distill_sentence(&primary));
-    }
-    if let Some(cause) = cause {
-        parts.push(format!("Cause: {}", compact_distill_clause(&cause)));
-    }
-    if let Some(fix) = fix {
-        parts.push(format!("Fix: {}", compact_distill_clause(&fix)));
-    }
-    if let Some(prevention) = prevention {
-        parts.push(format!("Prevention: {}", compact_distill_clause(&prevention)));
-    }
-    if let Some(trigger) = trigger {
-        parts.push(format!("Action: {}", compact_distill_clause(&trigger)));
-    }
-    if parts.is_empty() {
-        parts.push(compact_distill_sentence(&truncate_for_error(text, 360)));
-    }
-
-    let mut summary = format!("{prefix}: {}", parts.join(" "));
+    let mut summary = match mode {
+        DistillMode::SessionLessons => {
+            let prefix = select_session_lessons_prefix_with_evidence(text, span);
+            let mut parts = Vec::new();
+            match prefix {
+                "Follow-up focus" => {
+                    let focus = follow_up
+                        .or(prevention)
+                        .or(trigger.clone())
+                        .or(primary.clone())
+                        .unwrap_or_else(|| truncate_for_error(text, 360));
+                    format!("{prefix}: {}", compact_distill_signal_clause(&focus))
+                }
+                "Next-turn guidance" => {
+                    let guidance = next_turn
+                        .or(trigger.clone())
+                        .or(primary.clone())
+                        .unwrap_or_else(|| truncate_for_error(text, 360));
+                    format!("{prefix}: {}", compact_distill_signal_clause(&guidance))
+                }
+                "Durable practice" => {
+                    let practice = durable_practice
+                        .or(prevention.clone())
+                        .or(primary.clone())
+                        .unwrap_or_else(|| truncate_for_error(text, 360));
+                    parts.push(compact_distill_signal_clause(&practice));
+                    if let Some(cause) = cause {
+                        parts.push(format!("Cause: {}", compact_distill_signal_clause(&cause)));
+                    }
+                    if let Some(fix) = fix {
+                        parts.push(format!("Fix: {}", compact_distill_signal_clause(&fix)));
+                    }
+                    if let Some(prevention) = prevention {
+                        parts.push(format!(
+                            "Prevention: {}",
+                            compact_distill_signal_clause(&prevention)
+                        ));
+                    }
+                    format!("{prefix}: {}", parts.join(" "))
+                }
+                "Stable decision" => {
+                    let decision = stable_decision
+                        .or(trigger.clone())
+                        .or(primary.clone())
+                        .unwrap_or_else(|| truncate_for_error(text, 360));
+                    parts.push(compact_distill_signal_clause(&decision));
+                    if let Some(cause) = cause {
+                        parts.push(format!("Cause: {}", compact_distill_signal_clause(&cause)));
+                    }
+                    if let Some(fix) = fix {
+                        parts.push(format!("Fix: {}", compact_distill_signal_clause(&fix)));
+                    }
+                    if let Some(prevention) = prevention {
+                        parts.push(format!(
+                            "Prevention: {}",
+                            compact_distill_signal_clause(&prevention)
+                        ));
+                    }
+                    format!("{prefix}: {}", parts.join(" "))
+                }
+                _ => {
+                    if let Some(primary) = primary {
+                        parts.push(compact_distill_signal_clause(&primary));
+                    }
+                    if let Some(cause) = cause {
+                        parts.push(format!("Cause: {}", compact_distill_signal_clause(&cause)));
+                    }
+                    if let Some(fix) = fix {
+                        parts.push(format!("Fix: {}", compact_distill_signal_clause(&fix)));
+                    }
+                    if let Some(prevention) = prevention {
+                        parts.push(format!(
+                            "Prevention: {}",
+                            compact_distill_signal_clause(&prevention)
+                        ));
+                    }
+                    if let Some(trigger) = trigger {
+                        parts.push(format!(
+                            "Action: {}",
+                            compact_distill_signal_clause(&trigger)
+                        ));
+                    }
+                    if parts.is_empty() {
+                        parts.push(compact_distill_sentence(&truncate_for_error(text, 360)));
+                    }
+                    format!("{prefix}: {}", parts.join(" "))
+                }
+            }
+        }
+        DistillMode::GovernanceCandidates => {
+            let label = select_governance_label(text);
+            let body = primary
+                .or(stable_decision)
+                .or(durable_practice)
+                .unwrap_or_else(|| truncate_for_error(text, 360));
+            let mut governance_parts =
+                vec![format!("{label}: {}", compact_distill_signal_clause(&body))];
+            if let Some(trigger) = trigger {
+                governance_parts.push(format!("Why: {}", compact_distill_signal_clause(&trigger)));
+            } else if let Some(prevention) = prevention {
+                governance_parts.push(format!(
+                    "Why: {}",
+                    compact_distill_signal_clause(&prevention)
+                ));
+            }
+            format!("Governance candidate: {}", governance_parts.join(" "))
+        }
+    };
     if span.len() > 1 {
         let entities = select_distill_entities(text, 2);
-        if !entities.is_empty() && !entities.iter().all(|entity| summary.to_lowercase().contains(entity)) {
+        if !entities.is_empty()
+            && !entities
+                .iter()
+                .all(|entity| summary.to_lowercase().contains(entity))
+        {
             summary.push_str(&format!(" Context: {}.", entities.join(", ")));
         }
     }
     truncate_for_error(&summary, 440)
+}
+
+fn select_session_lessons_prefix(text: &str) -> &'static str {
+    let lowered = text.to_lowercase();
+    if contains_any_distill_pattern(
+        &lowered,
+        &[
+            "next turn",
+            "next-turn",
+            "next step",
+            "ask the user",
+            "clarify",
+            "before proceeding",
+        ],
+    ) {
+        "Next-turn guidance"
+    } else if contains_any_distill_pattern(
+        &lowered,
+        &[
+            "follow up",
+            "follow-up",
+            "open loop",
+            "pending",
+            "still need",
+            "remaining",
+            "investigate",
+            "audit",
+        ],
+    ) {
+        "Follow-up focus"
+    } else if contains_any_distill_pattern(
+        &lowered,
+        &["durable practice", "always", "every time", "guardrail"],
+    ) {
+        "Durable practice"
+    } else if contains_any_distill_pattern(
+        &lowered,
+        &[
+            "stable decision",
+            "decision",
+            "decide",
+            "default",
+            "prefer",
+            "standardize",
+        ],
+    ) {
+        "Stable decision"
+    } else {
+        "Lesson"
+    }
+}
+
+fn select_session_lessons_prefix_with_evidence(
+    text: &str,
+    span: &[DistillPreparedMessage],
+) -> &'static str {
+    let prefix = select_session_lessons_prefix(text);
+    match prefix {
+        "Stable decision" | "Durable practice"
+            if !session_lessons_promotion_has_evidence(prefix, span) =>
+        {
+            "Lesson"
+        }
+        _ => prefix,
+    }
+}
+
+fn session_lessons_promotion_has_evidence(prefix: &str, span: &[DistillPreparedMessage]) -> bool {
+    if distinct_distill_message_count(span) < 2 {
+        return false;
+    }
+
+    let target_patterns = match prefix {
+        "Durable practice" => &[
+            "durable practice",
+            "always",
+            "every time",
+            "baseline",
+            "guardrail",
+        ][..],
+        "Stable decision" => &[
+            "stable decision",
+            "decision",
+            "decide",
+            "default",
+            "prefer",
+            "standardize",
+        ][..],
+        _ => return true,
+    };
+
+    let target_message_count = count_distill_messages_with_patterns(span, target_patterns);
+    if target_message_count >= 2 {
+        return true;
+    }
+
+    target_message_count >= 1
+        && count_distill_messages_with_patterns(
+            span,
+            &[
+                "cause",
+                "because",
+                "root cause",
+                "fix",
+                "restart",
+                "disable",
+                "enable",
+                "rollback",
+                "migrate",
+                "prevention",
+                "avoid",
+                "guard",
+                "verify",
+                "原因",
+                "修复",
+                "预防",
+            ],
+        ) >= 2
+        && count_distill_corroborating_signal_groups(span) >= 2
+}
+
+fn distinct_distill_message_count(span: &[DistillPreparedMessage]) -> usize {
+    span.iter()
+        .map(|message| message.message_id)
+        .collect::<HashSet<_>>()
+        .len()
+}
+
+fn count_distill_messages_with_patterns(
+    span: &[DistillPreparedMessage],
+    patterns: &[&str],
+) -> usize {
+    span.iter()
+        .filter(|message| {
+            let lowered = message.text.to_lowercase();
+            contains_any_distill_pattern(&lowered, patterns)
+        })
+        .count()
+}
+
+fn count_distill_corroborating_signal_groups(span: &[DistillPreparedMessage]) -> usize {
+    [
+        &["cause", "because", "root cause", "原因"][..],
+        &[
+            "fix", "restart", "disable", "enable", "rollback", "migrate", "修复",
+        ][..],
+        &["prevention", "avoid", "guard", "verify", "预防"][..],
+    ]
+    .iter()
+    .filter(|patterns| count_distill_messages_with_patterns(span, patterns) > 0)
+    .count()
+}
+
+fn session_lessons_prefix_conflicts(current_text: &str, next_text: &str) -> bool {
+    let current_prefix = select_session_lessons_prefix(current_text);
+    let next_prefix = select_session_lessons_prefix(next_text);
+    matches!(
+        (current_prefix, next_prefix),
+        ("Follow-up focus", "Next-turn guidance") | ("Next-turn guidance", "Follow-up focus")
+    )
+}
+
+fn select_governance_label(text: &str) -> &'static str {
+    let lowered = text.to_lowercase();
+    if contains_any_distill_pattern(
+        &lowered,
+        &[
+            "skill",
+            "playbook",
+            "runbook",
+            "workflow",
+            "extract",
+            "automation",
+        ],
+    ) {
+        "Skill extraction candidate"
+    } else if contains_any_distill_pattern(
+        &lowered,
+        &[
+            "agents.md",
+            "soul.md",
+            "tools.md",
+            "guardrail",
+            "policy",
+            "checklist",
+            "standard",
+        ],
+    ) {
+        "AGENTS/SOUL/TOOLS promotion candidate"
+    } else {
+        "Worth promoting"
+    }
+}
+
+fn governance_label_conflicts(current_text: &str, next_text: &str) -> bool {
+    let current_label = select_governance_label(current_text);
+    let next_label = select_governance_label(next_text);
+    current_label != next_label
+        && (current_label != "Worth promoting" || next_label != "Worth promoting")
+}
+
+fn infer_distill_artifact_metadata(
+    mode: DistillMode,
+    summary: &str,
+) -> (DistillArtifactKind, Option<DistillArtifactSubtype>) {
+    match mode {
+        DistillMode::GovernanceCandidates => (DistillArtifactKind::GovernanceCandidate, None),
+        DistillMode::SessionLessons => {
+            let lowered = summary.to_lowercase();
+            if lowered.starts_with("follow-up focus:") {
+                (
+                    DistillArtifactKind::Lesson,
+                    Some(DistillArtifactSubtype::FollowUpFocus),
+                )
+            } else if lowered.starts_with("next-turn guidance:") {
+                (
+                    DistillArtifactKind::Lesson,
+                    Some(DistillArtifactSubtype::NextTurnGuidance),
+                )
+            } else {
+                (DistillArtifactKind::Lesson, None)
+            }
+        }
+    }
+}
+
+fn contains_any_distill_pattern(text: &str, patterns: &[&str]) -> bool {
+    patterns.iter().any(|pattern| text.contains(pattern))
 }
 
 fn infer_distill_category(text: &str, mode: DistillMode) -> Category {
@@ -4864,6 +5092,10 @@ fn infer_distill_category(text: &str, mode: DistillMode) -> Category {
         || lowered.contains("action")
         || lowered.contains("rollback")
         || lowered.contains("migrate")
+        || lowered.contains("follow up")
+        || lowered.contains("follow-up")
+        || lowered.contains("next turn")
+        || lowered.contains("next-turn")
     {
         Category::Decision
     } else if lowered.contains("error")
@@ -4895,7 +5127,22 @@ fn infer_distill_importance(text: &str, span: &[DistillPreparedMessage]) -> f64 
     if lowered.contains("trigger") || lowered.contains("action") {
         score += 0.05;
     }
-    if span.iter().any(|message| matches!(message.role, MessageRole::Assistant)) {
+    if lowered.contains("stable decision") || lowered.contains("durable practice") {
+        score += 0.1;
+    }
+    if lowered.contains("follow-up")
+        || lowered.contains("follow up")
+        || lowered.contains("next turn")
+    {
+        score += 0.05;
+    }
+    if lowered.contains("skill") || lowered.contains("agents.md") || lowered.contains("tools.md") {
+        score += 0.1;
+    }
+    if span
+        .iter()
+        .any(|message| matches!(message.role, MessageRole::Assistant))
+    {
         score += 0.05;
     }
     if span.len() >= 2 {
@@ -4967,6 +5214,27 @@ fn compact_distill_clause(input: &str) -> String {
     truncate_for_error(&out, 180)
 }
 
+fn compact_distill_signal_clause(input: &str) -> String {
+    let mut out = compact_distill_clause(input);
+    for prefix in [
+        "cause:",
+        "fix:",
+        "prevention:",
+        "stable decision:",
+        "durable practice:",
+        "open loop:",
+        "follow-up:",
+        "follow up:",
+        "next turn:",
+        "next-turn:",
+    ] {
+        if out.to_lowercase().starts_with(prefix) {
+            out = out[prefix.len()..].trim().to_string();
+        }
+    }
+    out
+}
+
 fn select_primary_distill_sentence(sentences: &[String]) -> Option<String> {
     sentences
         .iter()
@@ -4999,6 +5267,13 @@ fn detect_distill_signal_count(text: &str) -> usize {
         "decision principle",
         "trigger",
         "action",
+        "stable decision",
+        "durable practice",
+        "follow-up",
+        "next turn",
+        "skill",
+        "agents.md",
+        "tools.md",
         "rollback",
         "migrate",
         "restart",
@@ -5063,27 +5338,6 @@ fn is_distill_entity_token(token: &str) -> bool {
             | "azure"
             | "token"
     )
-}
-
-fn parse_status(raw: &str) -> AppResult<ReflectionJobStatus> {
-    match raw {
-        "queued" => Ok(ReflectionJobStatus::Queued),
-        "running" => Ok(ReflectionJobStatus::Running),
-        "completed" => Ok(ReflectionJobStatus::Completed),
-        "failed" => Ok(ReflectionJobStatus::Failed),
-        _ => Err(AppError::internal(format!(
-            "unknown reflection job status persisted: {raw}"
-        ))),
-    }
-}
-
-fn status_to_str(status: ReflectionJobStatus) -> &'static str {
-    match status {
-        ReflectionJobStatus::Queued => "queued",
-        ReflectionJobStatus::Running => "running",
-        ReflectionJobStatus::Completed => "completed",
-        ReflectionJobStatus::Failed => "failed",
-    }
 }
 
 fn parse_distill_status(raw: &str) -> AppResult<DistillJobStatus> {
@@ -5158,6 +5412,13 @@ fn distill_artifact_kind_to_str(kind: DistillArtifactKind) -> &'static str {
     }
 }
 
+fn distill_artifact_subtype_to_str(subtype: DistillArtifactSubtype) -> &'static str {
+    match subtype {
+        DistillArtifactSubtype::FollowUpFocus => "follow-up-focus",
+        DistillArtifactSubtype::NextTurnGuidance => "next-turn-guidance",
+    }
+}
+
 fn parse_message_role(raw: &str) -> AppResult<MessageRole> {
     match raw {
         "user" => Ok(MessageRole::User),
@@ -5169,72 +5430,11 @@ fn parse_message_role(raw: &str) -> AppResult<MessageRole> {
     }
 }
 
-fn session_transcript_row_to_reflection_item(
-    row: &SessionTranscriptStoredMessage,
-) -> Option<CaptureItem> {
-    match row.role {
-        MessageRole::User | MessageRole::Assistant => {}
-        MessageRole::System => return None,
-    }
-
-    let trimmed = row.text.trim();
-    if trimmed.is_empty() || trimmed.starts_with('/') {
-        return None;
-    }
-    if matches!(row.role, MessageRole::User)
-        && (trimmed.contains("<relevant-memories>")
-            || trimmed.contains("UNTRUSTED DATA")
-            || trimmed.contains("END UNTRUSTED DATA"))
-    {
-        return None;
-    }
-
-    Some(CaptureItem {
-        role: row.role,
-        text: redact_reflection_source_secrets(trimmed),
-    })
-}
-
-fn redact_reflection_source_secrets(text: &str) -> String {
-    static REDACTION_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
-    let patterns = REDACTION_PATTERNS.get_or_init(|| {
-        vec![
-            Regex::new(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*").expect("valid bearer regex"),
-            Regex::new(r#"\b(?:token|api[_-]?key|secret|password)\s*[:=]\s*["']?[^\s"',;)}\]]{6,}["']?"#)
-                .expect("valid key-value secret regex"),
-            Regex::new(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-                .expect("valid email regex"),
-        ]
-    });
-
-    let mut out = text.to_string();
-    for re in patterns {
-        out = re
-            .replace_all(&out, |caps: &regex::Captures| {
-                let matched = caps.get(0).map(|m| m.as_str()).unwrap_or_default();
-                if matched.starts_with("Bearer ") {
-                    "Bearer [REDACTED]".to_string()
-                } else {
-                    "[REDACTED]".to_string()
-                }
-            })
-            .into_owned();
-    }
-    out
-}
-
 fn message_role_to_str(role: MessageRole) -> &'static str {
     match role {
         MessageRole::User => "user",
         MessageRole::Assistant => "assistant",
         MessageRole::System => "system",
-    }
-}
-
-fn trigger_to_str(trigger: ReflectionTrigger) -> &'static str {
-    match trigger {
-        ReflectionTrigger::New => "new",
-        ReflectionTrigger::Reset => "reset",
     }
 }
 

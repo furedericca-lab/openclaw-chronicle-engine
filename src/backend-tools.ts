@@ -53,7 +53,6 @@ export function registerRemoteMemoryTools(
   registerMemoryUpdateTool(api, context);
 
   if (options.enableManagementTools) {
-    registerMemoryReflectionStatusTool(api, context);
     registerMemoryDistillEnqueueTool(api, context);
     registerMemoryDistillStatusTool(api, context);
     registerMemoryRecallDebugTool(api, context);
@@ -533,48 +532,6 @@ function registerMemoryDistillEnqueueTool(
       },
     }),
     { name: "memory_distill_enqueue" }
-  );
-}
-
-function registerMemoryReflectionStatusTool(
-  api: OpenClawPluginApi,
-  context: BackendToolRegistrationContext
-) {
-  api.registerTool(
-    (toolCtx) => ({
-      name: "memory_reflection_status",
-      label: "Memory Reflection Status",
-      description: "Inspect a caller-scoped backend reflection job by id.",
-      parameters: Type.Object({
-        jobId: Type.String({ description: "Reflection job id returned by the reflection enqueue path." }),
-      }),
-      async execute(_toolCallId, params) {
-        const { jobId } = params as { jobId: string };
-        try {
-          const ctx = buildToolCallContext(toolCtx, context.runtimeDefaults);
-          const status = await context.backendClient.getReflectionJobStatus(ctx, { jobId });
-          const lines = [
-            `Reflection job ${status.jobId}: ${status.status}`,
-          ];
-          if (status.persisted !== undefined) {
-            lines.push(`Persisted: ${status.persisted ? "yes" : "no"}`);
-          }
-          if (status.memoryCount !== undefined) {
-            lines.push(`Memory rows: ${status.memoryCount}`);
-          }
-          if (status.error) {
-            lines.push(`Error: ${status.error.code} (${status.error.retryable ? "retryable" : "non-retryable"})`);
-          }
-          return {
-            content: [{ type: "text", text: lines.join("\n") }],
-            details: status,
-          };
-        } catch (error) {
-          return backendToolError("Reflection status lookup failed", error);
-        }
-      },
-    }),
-    { name: "memory_reflection_status" }
   );
 }
 

@@ -7,7 +7,6 @@ export type MemoryCategory =
   | "other";
 
 export type ReflectionRecallMode = "invariant-only" | "invariant+derived";
-export type ReflectionTrigger = "new" | "reset";
 export type MessageRole = "user" | "assistant" | "system";
 export type DistillMode = "session-lessons" | "governance-candidates";
 export type DistillPersistMode = "artifacts-only" | "persist-memory-rows";
@@ -149,28 +148,8 @@ export interface BackendStatsResponse {
   categories: Record<string, number>;
 }
 
-export interface BackendReflectionJobResponse {
-  jobId: string;
-  status: "queued" | "running" | "completed" | "failed";
-}
-
-export interface BackendReflectionSourceResponse {
-  messages: BackendCaptureItem[];
-}
-
 export interface BackendSessionTranscriptAppendResponse {
   appended: number;
-}
-
-export interface BackendReflectionJobStatusResponse extends BackendReflectionJobResponse {
-  persisted?: boolean;
-  memoryCount?: number;
-  error?: {
-    code: string;
-    message: string;
-    retryable: boolean;
-    details: Record<string, unknown>;
-  };
 }
 
 export interface BackendDistillInlineSource {
@@ -279,18 +258,6 @@ export interface MemoryBackendClient {
     input: BackendListInput
   ) => Promise<{ rows: BackendListRow[]; nextOffset: number | null }>;
   stats: (ctx: BackendCallContext) => Promise<BackendStatsResponse>;
-  enqueueReflectionJob: (
-    ctx: BackendCallContext,
-    input: { trigger: ReflectionTrigger; messages: BackendCaptureItem[]; idempotencyKey?: string }
-  ) => Promise<BackendReflectionJobResponse>;
-  loadReflectionSource: (
-    ctx: BackendCallContext,
-    input: { trigger: ReflectionTrigger; maxMessages?: number }
-  ) => Promise<BackendReflectionSourceResponse>;
-  getReflectionJobStatus: (
-    ctx: BackendCallContext,
-    input: { jobId: string }
-  ) => Promise<BackendReflectionJobStatusResponse>;
   enqueueDistillJob: (
     ctx: BackendCallContext,
     input: {

@@ -364,23 +364,6 @@ pub struct ReflectionMetadata {
     pub timestamp: i64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EnqueueReflectionJobRequest {
-    pub actor: Actor,
-    pub trigger: ReflectionTrigger,
-    pub messages: Vec<CaptureItem>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReflectionSourceRequest {
-    pub actor: Actor,
-    pub trigger: ReflectionTrigger,
-    #[serde(default)]
-    pub max_messages: Option<u64>,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppendSessionTranscriptRequest {
@@ -440,30 +423,10 @@ pub enum DistillPersistMode {
     PersistMemoryRows,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ReflectionTrigger {
-    New,
-    Reset,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EnqueueReflectionJobResponse {
-    pub job_id: String,
-    pub status: ReflectionJobStatus,
-}
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppendSessionTranscriptResponse {
     pub appended: u64,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReflectionSourceResponse {
-    pub messages: Vec<CaptureItem>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -473,15 +436,6 @@ pub struct EnqueueDistillJobResponse {
     pub status: DistillJobStatus,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ReflectionJobStatus {
-    Queued,
-    Running,
-    Completed,
-    Failed,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DistillJobStatus {
@@ -489,19 +443,6 @@ pub enum DistillJobStatus {
     Running,
     Completed,
     Failed,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReflectionJobStatusResponse {
-    pub job_id: String,
-    pub status: ReflectionJobStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub persisted: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub memory_count: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<JobStatusError>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -540,6 +481,8 @@ pub struct DistillArtifact {
     pub artifact_id: String,
     pub job_id: String,
     pub kind: DistillArtifactKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtype: Option<DistillArtifactSubtype>,
     pub category: Category,
     pub importance: f64,
     pub text: String,
@@ -549,11 +492,18 @@ pub struct DistillArtifact {
     pub persistence: Option<DistillArtifactPersistence>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum DistillArtifactKind {
     Lesson,
     GovernanceCandidate,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DistillArtifactSubtype {
+    FollowUpFocus,
+    NextTurnGuidance,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -695,29 +645,8 @@ pub fn validate_recall_reflection_request(req: &RecallReflectionRequest) -> AppR
     validate_limit("limit", req.limit)?;
     if let Some(min_score) = req.min_score {
         if !(0.0..=1.0).contains(&min_score) {
-            return Err(AppError::invalid_request(
-                "minScore must be within [0, 1]",
-            ));
+            return Err(AppError::invalid_request("minScore must be within [0, 1]"));
         }
-    }
-    Ok(())
-}
-
-pub fn validate_enqueue_reflection_job_request(req: &EnqueueReflectionJobRequest) -> AppResult<()> {
-    req.actor.validate()?;
-    if req.messages.is_empty() {
-        return Err(AppError::invalid_request("messages must be non-empty"));
-    }
-    for item in &req.messages {
-        validate_non_empty("messages[].text", &item.text)?;
-    }
-    Ok(())
-}
-
-pub fn validate_reflection_source_request(req: &ReflectionSourceRequest) -> AppResult<()> {
-    req.actor.validate()?;
-    if let Some(max_messages) = req.max_messages {
-        validate_limit("maxMessages", max_messages)?;
     }
     Ok(())
 }
