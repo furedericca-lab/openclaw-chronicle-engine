@@ -7,10 +7,11 @@ Snapshot note:
 - this file captures the refreshed 2026-03-17 decision framing after the backend-authority and `1.0.0-beta.0` cutover work;
 - it is kept as design context for current module placement, not as the canonical runtime contract.
 - any older mention of command-triggered reflection generation is superseded by `../runtime-architecture.md` and `../remote-memory-backend-2026-03-18/`.
+- current canonical naming for prompt-time orchestration is `autoRecall` context + behavioral-guidance and `governance`; older reflection/self-improvement wording in this snapshot is historical only.
 
 ## Problem
 
-`openclaw-chronicle-engine` still needs a cleaner boundary between backend/adapter work and turn-time context orchestration. The backend side is already Rust-owned for retrieval/ranking/scope authority, while the plugin still owns prompt gating, `<relevant-memories>` injection, `<inherited-rules>` injection, `<error-detected>` injection, and session-local dedupe/suppression/cleanup state. This makes the plugin harder to evolve toward a dedicated ContextEngine path unless the remaining orchestration files are kept visibly separated from backend/adapter modules.
+`openclaw-chronicle-engine` still needs a cleaner boundary between backend/adapter work and turn-time context orchestration. The backend side is already Rust-owned for retrieval/ranking/scope authority, while the plugin still owns prompt gating, `<relevant-memories>` injection, `<behavioral-guidance>` injection, `<error-detected>` injection, and session-local dedupe/suppression/cleanup state. This makes the plugin harder to evolve toward a dedicated ContextEngine path unless the remaining orchestration files are kept visibly separated from backend/adapter modules.
 
 Desired outcome: keep `openclaw-chronicle-engine` as a strong backend-authoritative memory plugin while keeping prompt-time orchestration behind a thin internal seam that could later move into a separate ContextEngine implementation. Success means backend retrieval/tool behavior stays stable, prompt orchestration stays modular and visibly grouped, and migration can be validated by active-path tests before any external contract switch.
 
@@ -18,7 +19,7 @@ Desired outcome: keep `openclaw-chronicle-engine` as a strong backend-authoritat
 
 In scope:
 - Separate backend row retrieval/authority from prompt/context assembly responsibilities.
-- Introduce internal seams for generic auto-recall, reflection recall, and error-signal prompt hints.
+- Introduce internal seams for generic auto-recall, behavioral-guidance recall, and error-signal prompt hints.
 - Reduce `index.ts` ownership of prompt orchestration by moving logic into dedicated modules that are ContextEngine-ready.
 - Preserve current public plugin kind (`memory`) and current config schema during this refactor.
 - Add docs and tests that make later extraction to a standalone ContextEngine auditable.
@@ -77,7 +78,7 @@ For v1, `agent_end` remains in the backend branch as ingestion logic; any furthe
 ## Risks
 
 - Hook parity risk: moving orchestration code may subtly change injection order or dedupe behavior.
-- Config compatibility risk: `autoRecallSelectionMode`, `memoryReflection.recall.*`, and session-strategy behavior must remain unchanged.
+- Config compatibility risk: `autoRecallSelectionMode`, `autoRecallBehavioral.recall.*`, and legacy `memoryReflection.recall.*` alias mapping must remain unchanged.
 - Test blind spots: if session cleanup or dynamic reflection paths are not re-verified, the refactor can silently regress.
 - Documentation drift: README architecture sections must not overclaim a shipped ContextEngine.
 

@@ -55,17 +55,17 @@
       "enableManagementTools": {
         "type": "boolean",
         "default": false,
-        "description": "Enable caller-scoped management/debug tools such as memory_list, memory_stats, memory_distill_enqueue, memory_distill_status, memory_recall_debug, and governance-oriented self-improvement review/extract actions."
+        "description": "Enable caller-scoped management/debug tools such as memory_list, memory_stats, memory_distill_enqueue, memory_distill_status, memory_recall_debug, and governance review/extract actions."
       },
       "sessionStrategy": {
         "type": "string",
         "enum": [
-          "memoryReflection",
+          "autoRecall",
           "systemSessionMemory",
           "none"
         ],
         "default": "systemSessionMemory",
-        "description": "Choose session pipeline: plugin memory-reflection recall/injection planning, built-in session-memory, or none."
+        "description": "Choose session pipeline: plugin autoRecall behavioral guidance, built-in session-memory, or none."
       },
       "autoCapture": {
         "type": "boolean"
@@ -112,8 +112,7 @@
             "fact",
             "decision",
             "entity",
-            "other",
-            "reflection"
+            "other"
           ]
         },
         "default": [
@@ -125,10 +124,10 @@
         ],
         "description": "Allowlist of memory categories eligible for generic Auto-Recall."
       },
-      "autoRecallExcludeReflection": {
+      "autoRecallExcludeBehavioral": {
         "type": "boolean",
         "default": true,
-        "description": "Exclude category=reflection rows from generic Auto-Recall."
+        "description": "Exclude behavioral-guidance rows from generic Auto-Recall."
       },
       "autoRecallMaxAgeDays": {
         "type": "integer",
@@ -205,11 +204,40 @@
           }
         }
       },
-      "selfImprovement": {
+      "governance": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "ensureBacklogFiles": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "autoRecallBehavioral": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Prompt-local behavioral guidance knobs for the autoRecall architecture. injectMode, recall.*, and reminder settings affect active runtime behavior.",
+        "properties": {
+          "injectMode": {
+            "type": "string",
+            "enum": [
+              "durable-only",
+              "durable+adaptive"
+            ],
+            "default": "durable+adaptive"
+          },
+          "errorReminderMaxEntries": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 3
+          },
+          "dedupeErrorSignals": {
             "type": "boolean",
             "default": true
           },
@@ -221,32 +249,7 @@
             "type": "boolean",
             "default": true
           },
-          "ensureLearningFiles": {
-            "type": "boolean",
-            "default": true
-          }
-        }
-      },
-      "memoryReflection": {
-        "type": "object",
-        "additionalProperties": false,
-        "description": "Prompt-local reflection recall/injection planning knobs. injectMode and recall.* affect active runtime behavior.",
-        "properties": {
-          "injectMode": {
-            "type": "string",
-            "enum": [
-              "inheritance-only",
-              "inheritance+derived"
-            ],
-            "default": "inheritance+derived"
-          },
-          "errorReminderMaxEntries": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 20,
-            "default": 3
-          },
-          "dedupeErrorSignals": {
+          "ensureGovernanceFiles": {
             "type": "boolean",
             "default": true
           },
@@ -273,12 +276,12 @@
                 "items": {
                   "type": "string",
                   "enum": [
-                    "invariant",
-                    "derived"
+                    "durable",
+                    "adaptive"
                   ]
                 },
                 "default": [
-                  "invariant"
+                  "durable"
                 ]
               },
               "maxAgeDays": {
@@ -387,9 +390,9 @@
       "help": "Allowlist of categories eligible for generic auto-recall.",
       "advanced": true
     },
-    "autoRecallExcludeReflection": {
-      "label": "Exclude Reflection From Auto-Recall",
-      "help": "Exclude category=reflection rows from <relevant-memories>.",
+    "autoRecallExcludeBehavioral": {
+      "label": "Exclude Behavioral Guidance",
+      "help": "Exclude behavioral-guidance rows from <relevant-memories>.",
       "advanced": true
     },
     "autoRecallMaxAgeDays": {
@@ -449,86 +452,91 @@
     },
     "sessionStrategy": {
       "label": "Session Strategy",
-      "help": "memoryReflection / systemSessionMemory / none. memoryReflection keeps plugin-side recall/injection planning while backend remains memory authority.",
+      "help": "autoRecall / systemSessionMemory / none. autoRecall keeps plugin-side behavioral guidance planning while backend remains memory authority.",
       "advanced": true
     },
-    "selfImprovement.enabled": {
-      "label": "Self-Improvement",
-      "help": "Enable self-improvement reminder and governance tools"
+    "governance.enabled": {
+      "label": "Governance",
+      "help": "Enable governance backlog tools"
     },
-    "selfImprovement.beforeResetNote": {
-      "label": "Reset Reminder Note",
-      "help": "Append /note reminder before /new and /reset",
+    "governance.ensureBacklogFiles": {
+      "label": "Ensure Governance Files",
+      "help": "Auto-create .governance backlog files when missing",
       "advanced": true
     },
-    "selfImprovement.skipSubagentBootstrap": {
+    "autoRecallBehavioral.beforeResetNote": {
+      "label": "Behavioral Reset Note",
+      "help": "Append a behavioral guidance /note before /new and /reset",
+      "advanced": true
+    },
+    "autoRecallBehavioral.skipSubagentBootstrap": {
       "label": "Skip Subagent Bootstrap",
       "help": "Do not inject reminder file into subagent bootstrap context",
       "advanced": true
     },
-    "selfImprovement.ensureLearningFiles": {
-      "label": "Ensure Learning Files",
-      "help": "Auto-create .learnings files when missing",
+    "autoRecallBehavioral.ensureGovernanceFiles": {
+      "label": "Ensure Governance Files",
+      "help": "Auto-create .governance files when reminder/bootstrap hooks need them",
       "advanced": true
     },
-    "memoryReflection.injectMode": {
-      "label": "Reflection Inject Mode",
-      "help": "inheritance-only or inheritance+derived",
+    "autoRecallBehavioral.injectMode": {
+      "label": "Behavioral Inject Mode",
+      "help": "durable-only or durable+adaptive",
       "advanced": true
     },
-    "memoryReflection.errorReminderMaxEntries": {
+    "autoRecallBehavioral.errorReminderMaxEntries": {
       "label": "Error Reminder Max Entries",
       "help": "Max recent error hints injected into prompt",
       "advanced": true
     },
-    "memoryReflection.dedupeErrorSignals": {
+    "autoRecallBehavioral.dedupeErrorSignals": {
       "label": "Dedupe Error Signals",
       "help": "Deduplicate repeated error signatures per session",
       "advanced": true
     },
-    "memoryReflection.recall.mode": {
-      "label": "Reflection-Recall Mode",
-      "help": "fixed keeps always-on inherited-rule injection; dynamic enables prompt-gated Reflection-Recall.",
+    "autoRecallBehavioral.recall.mode": {
+      "label": "Behavioral Recall Mode",
+      "help": "fixed keeps always-on durable guidance injection; dynamic enables prompt-gated behavioral recall.",
       "advanced": true
     },
-    "memoryReflection.recall.topK": {
-      "label": "Reflection-Recall Top K",
-      "help": "Maximum rows injected into <inherited-rules> in dynamic mode.",
+    "autoRecallBehavioral.recall.topK": {
+      "label": "Behavioral Recall Top K",
+      "help": "Maximum rows injected into <behavioral-guidance> in dynamic mode.",
       "advanced": true
     },
-    "memoryReflection.recall.includeKinds": {
-      "label": "Reflection-Recall Include Kinds",
-      "help": "Which reflection item kinds are considered in dynamic mode (invariant/derived).",
+    "autoRecallBehavioral.recall.includeKinds": {
+      "label": "Behavioral Recall Include Kinds",
+      "help": "Which behavioral guidance kinds are considered in dynamic mode (durable/adaptive).",
       "advanced": true
     },
-    "memoryReflection.recall.maxAgeDays": {
-      "label": "Reflection-Recall Max Age (days)",
-      "help": "Drop dynamic reflection candidates older than this many days.",
+    "autoRecallBehavioral.recall.maxAgeDays": {
+      "label": "Behavioral Recall Max Age (days)",
+      "help": "Drop dynamic behavioral candidates older than this many days.",
       "advanced": true
     },
-    "memoryReflection.recall.maxEntriesPerKey": {
-      "label": "Reflection-Recall Max Entries Per Key",
+    "autoRecallBehavioral.recall.maxEntriesPerKey": {
+      "label": "Behavioral Recall Max Entries Per Key",
       "help": "Per normalized key, keep only the most recent N rows before dynamic aggregation.",
       "advanced": true
     },
-    "memoryReflection.recall.minRepeated": {
-      "label": "Reflection-Recall Min Repeated",
-      "help": "Minimum turn gap before re-injecting the same dynamic reflection row in one session.",
+    "autoRecallBehavioral.recall.minRepeated": {
+      "label": "Behavioral Recall Min Repeated",
+      "help": "Minimum turn gap before re-injecting the same dynamic behavioral row in one session.",
       "advanced": true
     },
-    "memoryReflection.recall.minScore": {
-      "label": "Reflection-Recall Min Score",
-      "help": "Minimum aggregated score required for dynamic reflection injection.",
+    "autoRecallBehavioral.recall.minScore": {
+      "label": "Behavioral Recall Min Score",
+      "help": "Minimum aggregated score required for dynamic behavioral injection.",
       "advanced": true
     },
-    "memoryReflection.recall.minPromptLength": {
-      "label": "Reflection-Recall Min Prompt Length",
-      "help": "Prompts shorter than this are skipped in dynamic reflection mode.",
+    "autoRecallBehavioral.recall.minPromptLength": {
+      "label": "Behavioral Recall Min Prompt Length",
+      "help": "Prompts shorter than this are skipped in dynamic behavioral mode.",
       "advanced": true
     },
     "enableManagementTools": {
       "label": "Management Tools",
-      "help": "Enable caller-scoped management/debug tools such as memory_list, memory_stats, memory_distill_enqueue, memory_distill_status, memory_recall_debug, and governance-oriented self-improvement review/extract actions.",
+      "help": "Enable caller-scoped management/debug tools such as memory_list, memory_stats, memory_distill_enqueue, memory_distill_status, memory_recall_debug, and governance review/extract actions.",
       "advanced": true
     }
   }

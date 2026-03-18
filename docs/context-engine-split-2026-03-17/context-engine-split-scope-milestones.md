@@ -12,7 +12,7 @@ Snapshot note:
 - Refactor internal code so prompt/context orchestration is no longer owned directly by `index.ts`.
 - Introduce explicit structured seams for:
   - generic auto-recall row orchestration,
-  - reflection recall row orchestration,
+  - behavioral-guidance recall row orchestration,
   - error reminder exposure,
   - session-local recall suppression state,
   - prompt block rendering.
@@ -42,7 +42,7 @@ Acceptance gate:
 
 ### Milestone 3 — Behavior-parity verification
 Acceptance gate:
-- Tests covering auto-recall, reflection recall, session-strategy/config behavior for that snapshot, and self-improvement paths pass.
+- Tests covering auto-recall, behavioral recall, session-strategy/config behavior for that snapshot, and governance paths pass.
 - README/docs reflect internal architecture shift without claiming a completed external plugin-contract migration.
 
 ### Milestone 4 — ContextEngine handoff readiness

@@ -8,13 +8,14 @@ Snapshot note:
 - it reflects the current active file-layout judgment for context orchestration;
 - `runtime-architecture.md` remains the top-level runtime/source-of-truth boundary document.
 - command-triggered reflection-generation wording from older snapshots is superseded by `runtime-architecture.md` and `docs/remote-memory-backend-2026-03-18/`.
+- current canonical naming for prompt-time orchestration is `autoRecall` context + behavioral-guidance and `governance`; older reflection/self-improvement wording here is historical snapshot terminology only.
 
 ## Canonical Architecture
 
 Current runtime contract remains:
 - Plugin kind: `memory`
 - Slot ownership: OpenClaw memory slot
-- Public surfaces: memory tools, reflection/self-improvement tools, current config schema
+- Public surfaces: memory tools, governance tools, current config schema
 
 Current internal architecture in this snapshot:
 
@@ -29,7 +30,7 @@ Current internal architecture in this snapshot:
    - returns structured prompt prepend blocks and session-state updates
    - current active modules include:
      - `src/context/auto-recall-orchestrator.ts`
-     - `src/context/reflection-prompt-planner.ts`
+     - `src/context/reflection-prompt-planner.ts` (historical filename for the behavioral-guidance planner seam)
      - `src/context/prompt-block-renderer.ts`
      - `src/context/session-exposure-state.ts`
      - `src/context/recall-engine.ts`
@@ -65,11 +66,11 @@ Non-goals:
   - implementation seam: `src/context/auto-recall-orchestrator.ts` dependency contract (`recallGeneric`)
 - Generic recall provider output:
   - backend-authoritative rows + rendered `prependContext` plan for `<relevant-memories>`
-- Reflection/error provider input:
-  - query, actor identity, reflection recall mode/limits, sessionKey
+- Behavioral-guidance/error provider input:
+  - query, actor identity, behavioral recall mode/limits, sessionKey
   - implementation seam: `src/context/reflection-prompt-planner.ts` dependency contract (`recallReflection`, `sessionState`)
-- Reflection/error provider output:
-  - rendered `prependContext` for `<inherited-rules>` and `<error-detected>`
+- Behavioral-guidance/error provider output:
+  - rendered `prependContext` for `<behavioral-guidance>` and `<error-detected>`
   - session error-signal mutations via `src/context/session-exposure-state.ts`
 
 ### Orchestration-facing interfaces (implemented in the current repo)
@@ -78,7 +79,7 @@ Non-goals:
   - output: tagged prompt blocks with untrusted-data wrapping where required
 - Session state service:
   - implementation seam: `src/context/session-exposure-state.ts`
-  - output: dynamic-recall suppression state + reflection error-signal dedupe/TTL behavior
+  - output: dynamic-recall suppression state + behavioral-guidance error-signal dedupe/TTL behavior
 - Context orchestrators:
   - implementation seams: `src/context/auto-recall-orchestrator.ts`, `src/context/reflection-prompt-planner.ts`
   - output: hook-consumable plans returned to `index.ts`
@@ -91,7 +92,8 @@ Startup/bootstrap:
 
 Runtime modes:
 - `sessionStrategy: systemSessionMemory` keeps built-in OpenClaw session behavior and optional auto-recall.
-- `sessionStrategy: memoryReflection` enables reflection-specific hook flows.
+- `sessionStrategy: autoRecall` enables the canonical behavioral autoRecall hook flows.
+- `sessionStrategy: memoryReflection` is no longer supported; use `sessionStrategy: autoRecall`.
 - `sessionStrategy: none` disables session strategy hooks while preserving memory backend availability.
 
 Prompt-time data flow after refactor:
@@ -113,9 +115,9 @@ Prompt-time data flow after refactor:
   - on failure logs an auto-recall warning and continues without injected block
 - `after_tool_call` + `before_prompt_build`:
   - delegated to `createReflectionPromptPlanner(...)`
-  - reflection-recall injection failures log `memory-reflection: reflection-recall injection failed: ...`; prompt build continues
+  - behavioral-guidance injection failures log a non-blocking warning; prompt build continues
 - `session_end` + `before_reset`:
-  - clear reflection error state and dynamic recall session state
+  - clear behavioral-guidance error state and dynamic recall session state
   - do not enqueue or generate trajectory-derived knowledge
   - failures remain non-blocking for surrounding runtime flow
 - `agent_end`:
@@ -126,9 +128,9 @@ Prompt-time data flow after refactor:
 A later standalone ContextEngine adapter should stay thin and consume existing seams instead of re-implementing backend logic:
 - Consume from current seams:
   - `createAutoRecallPlanner` for generic recall planning
-  - `createReflectionPromptPlanner` for reflection/error prompt planning
+  - `createReflectionPromptPlanner` for behavioral-guidance/error prompt planning
   - `createSessionExposureState` for session-local dedupe/suppression state
-  - `prompt-block-renderer` helpers for `<relevant-memories>`, `<inherited-rules>`, `<error-detected>`
+  - `prompt-block-renderer` helpers for `<relevant-memories>`, `<behavioral-guidance>`, `<error-detected>`
 - Keep backend-owned in memory plugin:
   - LanceDB persistence and retrieval (`store.ts`, `retriever.ts`, `embedder.ts`)
   - scope resolution and access filtering (`scopes.ts`)
@@ -157,6 +159,6 @@ A later standalone ContextEngine adapter should stay thin and consume existing s
 ## Test strategy mapping
 
 - Full regression: `npm test`
-- Reflection-heavy paths: `node --test test/memory-reflection.test.mjs test/self-improvement.test.mjs`
+- Behavioral/governance-heavy paths: `node --test test/auto-recall-behavioral.test.mjs test/governance-tools.test.mjs`
 - Session-strategy cutover guard: `node --test test/config-session-strategy-cutover.test.mjs`
 - Doc hygiene: placeholder/residual scans under `docs/context-engine-split-2026-03-17`

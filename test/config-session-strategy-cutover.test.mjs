@@ -65,31 +65,66 @@ describe("sessionStrategy cutover contract", () => {
     );
   });
 
-  it("rejects removed local reflection-generation fields", () => {
+  it("defaults generic auto-recall to exclude behavioral guidance rows", () => {
+    const parsed = parsePluginConfig(baseConfig());
+    assert.equal(parsed.autoRecallExcludeBehavioral, true);
+  });
+
+  it("parses canonical autoRecall behavioral config", () => {
+    const parsed = parsePluginConfig({
+      ...baseConfig(),
+      sessionStrategy: "autoRecall",
+      autoRecallBehavioral: {
+        injectMode: "durable+adaptive",
+        recall: {
+          mode: "dynamic",
+          includeKinds: ["durable", "adaptive"],
+        },
+      },
+    });
+    assert.equal(parsed.sessionStrategy, "autoRecall");
+    assert.equal(parsed.autoRecallBehavioral.enabled, true);
+    assert.equal(parsed.autoRecallBehavioral.injectMode, "durable+adaptive");
+    assert.equal(parsed.autoRecallBehavioral.recall.mode, "dynamic");
+    assert.deepEqual(parsed.autoRecallBehavioral.recall.includeKinds, ["durable", "adaptive"]);
+  });
+
+  it("rejects removed legacy sessionStrategy value memoryReflection", () => {
     assert.throws(
       () =>
         parsePluginConfig({
           ...baseConfig(),
           sessionStrategy: "memoryReflection",
-          memoryReflection: {
-            agentId: "memory-distiller",
-          },
-      }),
-      /memoryReflection\.agentId is no longer supported in 1\.0\.0-beta\.0/
+        }),
+      /sessionStrategy=memoryReflection is no longer supported in 1\.0\.0-beta\.0; use sessionStrategy=autoRecall/
     );
   });
 
-  it("rejects removed reflection-generation source window fields", () => {
+  it("rejects removed legacy memoryReflection config namespace", () => {
     assert.throws(
       () =>
         parsePluginConfig({
           ...baseConfig(),
-          sessionStrategy: "memoryReflection",
           memoryReflection: {
-            messageCount: 12,
+            recall: {
+              mode: "dynamic",
+            },
           },
         }),
-      /memoryReflection\.messageCount is no longer supported in 1\.0\.0-beta\.0/
+      /memoryReflection is no longer supported in 1\.0\.0-beta\.0; use autoRecallBehavioral/
+    );
+  });
+
+  it("rejects removed legacy selfImprovement config namespace", () => {
+    assert.throws(
+      () =>
+        parsePluginConfig({
+          ...baseConfig(),
+          selfImprovement: {
+            enabled: true,
+          },
+        }),
+      /selfImprovement is no longer supported in 1\.0\.0-beta\.0; use governance or autoRecallBehavioral/
     );
   });
 });

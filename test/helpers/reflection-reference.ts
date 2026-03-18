@@ -269,6 +269,14 @@ export function parseSectionBullets(markdown: string, heading: string): string[]
   return collected;
 }
 
+function parseSectionBulletsAny(markdown: string, headings: string[]): string[] {
+  for (const heading of headings) {
+    const parsed = parseSectionBullets(markdown, heading);
+    if (parsed.length > 0) return parsed;
+  }
+  return [];
+}
+
 export function isPlaceholderReflectionSliceLine(line: string): boolean {
   const normalized = line.replace(/\*\*/g, "").trim();
   if (!normalized) return true;
@@ -276,7 +284,7 @@ export function isPlaceholderReflectionSliceLine(line: string): boolean {
   if (/^(invariants?|reflections?|derived)[:：]$/i.test(normalized)) return true;
   if (/apply this session'?s deltas next run/i.test(normalized)) return true;
   if (/apply this session'?s distilled changes next run/i.test(normalized)) return true;
-  if (/investigate why direct reflection generation failed/i.test(normalized)) return true;
+  if (/investigate why direct trajectory-derived generation failed/i.test(normalized)) return true;
   return false;
 }
 
@@ -318,7 +326,8 @@ export function extractReflectionLessons(reflectionText: string): string[] {
 }
 
 export function extractReflectionLearningGovernanceCandidates(reflectionText: string): ReflectionGovernanceEntry[] {
-  const section = extractSectionMarkdown(reflectionText, "Learning governance candidates (.learnings / promotion / skill extraction)");
+  const section = extractSectionMarkdown(reflectionText, "Learning governance candidates (.governance / promotion / skill extraction)") ||
+    extractSectionMarkdown(reflectionText, "Learning governance candidates (.learnings / promotion / skill extraction)");
   if (!section) return [];
 
   const entryBlocks = section
@@ -333,7 +342,10 @@ export function extractReflectionLearningGovernanceCandidates(reflectionText: st
   if (parsed.length > 0) return parsed;
 
   const fallbackBullets = sanitizeReflectionSliceLines(
-    parseSectionBullets(reflectionText, "Learning governance candidates (.learnings / promotion / skill extraction)")
+    parseSectionBulletsAny(reflectionText, [
+      "Learning governance candidates (.governance / promotion / skill extraction)",
+      "Learning governance candidates (.learnings / promotion / skill extraction)",
+    ])
   );
   if (fallbackBullets.length === 0) return [];
 
@@ -417,8 +429,8 @@ export function extractReflectionMappedMemoryItems(reflectionText: string): Refl
 }
 
 export function extractReflectionSlices(reflectionText: string): ReflectionSlices {
-  const invariantSection = parseSectionBullets(reflectionText, "Invariants");
-  const derivedSection = parseSectionBullets(reflectionText, "Derived");
+  const invariantSection = parseSectionBulletsAny(reflectionText, ["Durable guidance", "Invariants"]);
+  const derivedSection = parseSectionBulletsAny(reflectionText, ["Adaptive guidance", "Derived"]);
   const mergedSection = parseSectionBullets(reflectionText, "Invariants & Reflections");
 
   const invariantsPrimary = sanitizeReflectionSliceLines(invariantSection).filter(isInvariantRuleLike);

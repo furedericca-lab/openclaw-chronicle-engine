@@ -62,7 +62,7 @@ In practical terms:
 | Ranking / rerank / MMR / decay | Owns | Does not own |
 | Scope derivation / ACL | Owns | Must not reconstruct |
 | Auto-capture write acceptance + persistence | Owns | Only forwards runtime payloads |
-| Reflection recall / injection retrieval | Owns | Only plans prompt-time recall/injection |
+| Behavioral-guidance recall retrieval | Owns | Only plans prompt-time autoRecall guidance injection |
 | Distill job execution | Owns | Only enqueues / polls |
 | Distill source cleaning / artifact persistence | Owns | Does not own |
 | Distill lesson/governance derivation | Owns | Does not own |
@@ -140,8 +140,8 @@ distill request
 | Recency / decay / length weighting | Local TS implementation | Rust backend | Replaced |
 | Access reinforcement time-decay | Historical TS-side capability | Rust backend | Present |
 | Diversity / MMR | Historical TS-side capability | Rust backend | Present |
-| Reflection recall authority | Local TS + local persistence path | Rust backend recall path with plugin-side prompt rendering | Replaced |
-| Command-triggered reflection generation | Local/plugin-coupled execution | Removed; cadence-driven distill is the only supported generation path | Removed |
+| Behavioral-guidance recall authority | Local TS + local persistence path | Rust backend recall path with plugin-side autoRecall behavioral rendering | Replaced |
+| Command-triggered trajectory-derived generation | Local/plugin-coupled execution | Removed; cadence-driven distill is the only supported generation path | Removed |
 | Distill async jobs | Historical sidecar/example pipeline | Rust backend distill jobs | Present, backend-native deterministic runtime |
 | Scope derivation / ACL | Local TS participation existed historically | Rust backend only | Replaced |
 | Inspectable retrieval trace | Historical TS had thicker telemetry objects | Rust backend debug trace routes | Acceptable parity, not 1:1 shape recreation |
@@ -191,7 +191,7 @@ No, but the answer needs precision:
 If the question is:
 
 - “Is the old TS authority chain still alive?” -> **No**
-- “Does the repo still contain TS files related to recall/reflection?” -> **Yes, intentionally, for prompt-local orchestration and tests**
+- “Does the repo still contain TS files related to recall/behavioral guidance?” -> **Yes, intentionally, for prompt-local orchestration and tests**
 
 ## 7. Runtime Rules That Matter
 
@@ -233,7 +233,7 @@ That means:
 | Time decay + access reinforcement | Yes | Backend-owned |
 | Diversity / MMR | Yes | Backend-owned |
 | Auto-recall prompt injection | Yes | Local orchestration over backend recall |
-| Reflection recall + injection planning | Yes | Read-only recall in backend, prompt-local injection planning in plugin |
+| AutoRecall behavioral-guidance planning | Yes | Read-only behavioral recall in backend, prompt-local guidance injection in plugin |
 | Distill job enqueue + polling | Yes | Backend-owned async job surface |
 | Distill inline-message cleaning + artifact persistence | Yes | Backend-owned execution path |
 | Distill `session-transcript` source | Yes | Backend-owned transcript persistence + async distill execution |
@@ -285,7 +285,7 @@ What current distill is good at:
 What current distill is intentionally not:
 
 - language-adaptive extraction
-- a separate reflection-generation pipeline
+- a separate non-distill generation pipeline
 - a restored queue-file / worker / `memory-pro import` architecture
 
 ## 10. Debuggability
@@ -374,8 +374,10 @@ Cutover note:
 
 - `1.0.0-beta.0` removes migration-only config aliases.
 - Use `sessionStrategy` directly instead of `sessionMemory.*`.
-- Supported `memoryReflection.*` fields are the active recall/injection knobs documented in the schema and examples.
-- Removed `memoryReflection.*` generation fields such as `agentId`, `maxInputChars`, `timeoutMs`, `thinkLevel`, and `messageCount` are rejected.
+- Only `sessionStrategy: "autoRecall" | "systemSessionMemory" | "none"` is supported.
+- Use `autoRecallBehavioral.*` as the canonical behavioral-guidance config surface.
+- Use `governance.*` for backlog/review workflow configuration.
+- `memoryReflection.*`, `selfImprovement.*`, and `sessionStrategy: "memoryReflection"` are rejected.
 
 ## 13. Tools
 
@@ -385,7 +387,7 @@ Cutover note:
 - `memory_store`
 - `memory_forget`
 - `memory_update`
-- `self_improvement_log`
+- `governance_log`
 
 ### Optional management tools
 
@@ -396,10 +398,18 @@ Enable `enableManagementTools: true` to expose:
 - `memory_distill_enqueue`
 - `memory_distill_status`
 - `memory_recall_debug`
+- `governance_review`
+- `governance_extract_skill`
+
+Management/debug tools stay caller-scoped and require runtime principal identity. They are not available as anonymous local fallbacks.
+
+Transitional aliases:
+
+- `self_improvement_log`
 - `self_improvement_review`
 - `self_improvement_extract_skill`
 
-Management/debug tools stay caller-scoped and require runtime principal identity. They are not available as anonymous local fallbacks.
+These legacy names currently call the same governance implementations and should be treated as compatibility aliases only.
 
 ### Backend client management/debug surfaces
 
@@ -450,11 +460,15 @@ No. `src/context/*` is prompt-time orchestration:
 
 It is not backend ownership.
 
-### “Do old `sessionMemory.*` or removed `memoryReflection.*` fields still work?”
+### “Do old `sessionMemory.*` or legacy `memoryReflection.*` fields still work?”
 
-No. `1.0.0-beta.0` removes those migration-only aliases. Use the active schema fields only.
+`sessionMemory.*` does not work. Use `sessionStrategy` directly.
 
-`memoryReflection` is now recall/injection only. Removed generation-era fields such as `messageCount` are rejected instead of silently ignored.
+`memoryReflection.*` does not work. Use `autoRecallBehavioral.*` instead.
+
+`selfImprovement.*` also does not work. Use `governance.*` for governance workflow knobs and `autoRecallBehavioral.*` for behavioral reminder/bootstrap knobs.
+
+`sessionStrategy: "memoryReflection"` is rejected. Use `sessionStrategy: "autoRecall"` instead.
 
 ### “Does distill still mean running the old `jsonl_distill.py` sidecar?”
 

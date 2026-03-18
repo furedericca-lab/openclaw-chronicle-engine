@@ -11,7 +11,8 @@
     "memory",
     "remote-backend",
     "context-orchestration",
-    "reflection",
+    "autorecall",
+    "governance",
     "distill",
     "retrieval"
   ],
@@ -30,7 +31,7 @@
     ]
   },
   "scripts": {
-    "test": "node --test --test-name-pattern='.' test/backend-client-retry-idempotency.test.mjs test/config-session-strategy-cutover.test.mjs test/memory-reflection.test.mjs test/noise-filter-chinese.mjs test/remote-backend-shell-integration.test.mjs test/self-improvement.test.mjs"
+    "test": "node --test --test-name-pattern='.' test/backend-client-retry-idempotency.test.mjs test/config-session-strategy-cutover.test.mjs test/auto-recall-behavioral.test.mjs test/noise-filter-chinese.mjs test/remote-backend-shell-integration.test.mjs test/governance-tools.test.mjs"
   },
   "devDependencies": {
     "commander": "^14.0.0",

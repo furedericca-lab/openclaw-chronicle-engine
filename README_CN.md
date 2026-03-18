@@ -62,7 +62,7 @@ Chronicle Engine 已经不是“插件内嵌一个本地记忆数据库”的形
 | ranking / rerank / MMR / decay | 负责 | 不负责 |
 | scope derivation / ACL | 负责 | 不允许本地重建 |
 | auto-capture 写入接收与持久化 | 负责 | 只负责转发运行时 payload |
-| reflection recall / injection 检索 | 负责 | 只负责 prompt-time recall / injection 规划 |
+| behavioral-guidance recall 检索 | 负责 | 只负责 prompt-time autoRecall guidance 注入规划 |
 | distill job 执行 | 负责 | 只负责 enqueue / poll |
 | distill source 清洗与 artifact 持久化 | 负责 | 不负责 |
 | distill lesson / governance derivation | 负责 | 不负责 |
@@ -140,8 +140,8 @@ distill 请求
 | Recency / decay / length weighting | 本地 TS 实现 | Rust backend | 已替换 |
 | Access reinforcement time-decay | 历史 TS 能力 | Rust backend | 已具备 |
 | Diversity / MMR | 历史 TS 能力 | Rust backend | 已具备 |
-| Reflection recall 权威 | 本地 TS + 本地持久化路径 | Rust backend recall 路径 + 插件侧 prompt 渲染 | 已替换 |
-| 命令触发的 reflection generation | 本地 / 插件耦合执行 | 已移除；当前只保留 cadence 驱动的 distill 生成 | 已移除 |
+| behavioral-guidance recall 权威 | 本地 TS + 本地持久化路径 | Rust backend recall 路径 + 插件侧 autoRecall behavioral 渲染 | 已替换 |
+| 命令触发的 trajectory-derived generation | 本地 / 插件耦合执行 | 已移除；当前只保留 cadence 驱动的 distill 生成 | 已移除 |
 | Distill async jobs | 历史 sidecar / example 流水线 | Rust backend distill jobs | 已是 backend-native deterministic runtime |
 | Scope derivation / ACL | 历史上本地 TS 有参与 | 仅 Rust backend | 已替换 |
 | 可检查 retrieval trace | 历史 TS 有更厚 telemetry 对象 | Rust backend debug trace routes | 达到可接受 parity，但不是 1:1 复刻 |
@@ -191,7 +191,7 @@ distill 请求
 如果问题是：
 
 - “旧 TS authority 链路还活着吗？” -> **没有**
-- “仓库里还有没有与 recall/reflection 相关的 TS 文件？” -> **有，而且是有意保留，用于 prompt-local 编排和测试**
+- “仓库里还有没有与 recall/behavioral guidance 相关的 TS 文件？” -> **有，而且是有意保留，用于 prompt-local 编排和测试**
 
 ## 7. 运行时规则
 
@@ -233,7 +233,7 @@ distill 请求
 | time decay + access reinforcement | 支持 | backend 权威 |
 | diversity / MMR | 支持 | backend 权威 |
 | auto-recall prompt 注入 | 支持 | 本地编排 + backend recall |
-| reflection recall + injection planning | 支持 | 只读 recall 在 backend，prompt 注入规划在插件 |
+| autoRecall behavioral-guidance planning | 支持 | behavioral recall 只读检索在 backend，prompt guidance 注入规划在插件 |
 | distill job enqueue + 轮询 | 支持 | backend 权威异步 job 面 |
 | distill inline-messages 清洗 + artifact 持久化 | 支持 | backend 权威执行路径 |
 | distill `session-transcript` source | 支持 | backend 持久化 transcript + 异步 distill 执行 |
@@ -284,7 +284,7 @@ distill 请求
 当前 distill 明确不做的事：
 
 - 语言自适应抽取
-- 单独的 reflection-generation pipeline
+- 单独的非 distill 生成流水线
 - 恢复 queue-file / worker / `memory-pro import` 这一套旧架构
 
 ## 10. 调试与可观测性
@@ -373,8 +373,10 @@ cutover 说明：
 
 - `1.0.0-beta.0` 已移除只为迁移保留的 config alias。
 - 请直接使用 `sessionStrategy`，不要再使用 `sessionMemory.*`。
-- `memoryReflection.*` 只保留当前 schema 里仍然列出的 recall / injection 字段。
-- 已移除的 generation-era 字段，例如 `agentId`、`maxInputChars`、`timeoutMs`、`thinkLevel`、`messageCount`，现在会直接报错。
+- 只支持 `sessionStrategy: "autoRecall" | "systemSessionMemory" | "none"`。
+- `autoRecallBehavioral.*` 是当前行为指导配置的 canonical surface。
+- backlog/review 工作流配置请使用 `governance.*`。
+- `memoryReflection.*`、`selfImprovement.*` 和 `sessionStrategy: "memoryReflection"` 都会被直接拒绝。
 
 ## 13. 工具
 
@@ -384,7 +386,7 @@ cutover 说明：
 - `memory_store`
 - `memory_forget`
 - `memory_update`
-- `self_improvement_log`
+- `governance_log`
 
 ### 可选管理工具
 
@@ -395,10 +397,18 @@ cutover 说明：
 - `memory_distill_enqueue`
 - `memory_distill_status`
 - `memory_recall_debug`
+- `governance_review`
+- `governance_extract_skill`
+
+这些 management/debug 工具仍然受 caller scope 和运行时主体身份约束，不提供匿名本地 fallback。
+
+过渡兼容 alias：
+
+- `self_improvement_log`
 - `self_improvement_review`
 - `self_improvement_extract_skill`
 
-这些 management/debug 工具仍然受 caller scope 和运行时主体身份约束，不提供匿名本地 fallback。
+这些旧名字当前仍调用同一套 governance 实现，但应视为兼容层而不是规范接口。
 
 ### Backend client 管理/调试面
 
@@ -449,11 +459,15 @@ cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -
 
 它不负责 backend 权威。
 
-### “旧的 `sessionMemory.*` 或被移除的 `memoryReflection.*` 字段现在还能用吗？”
+### “旧的 `sessionMemory.*` 或遗留的 `memoryReflection.*` 字段现在还能用吗？”
 
-不能。`1.0.0-beta.0` 已删除这些只用于迁移的 alias。请只使用当前 schema 中仍然保留的有效字段。
+`sessionMemory.*` 不能用。请直接使用 `sessionStrategy`。
 
-现在 `memoryReflection` 只负责 recall / injection。像 `messageCount` 这样的旧生成字段不会被静默忽略，而是会被直接拒绝。
+`memoryReflection.*` 不能用。请改用 `autoRecallBehavioral.*`。
+
+`selfImprovement.*` 也不能用。governance 工作流相关配置请改用 `governance.*`，行为提醒 / bootstrap 相关配置请改用 `autoRecallBehavioral.*`。
+
+`sessionStrategy: "memoryReflection"` 也会被拒绝。请改用 `sessionStrategy: "autoRecall"`。
 
 ### “distill 现在是不是还靠旧的 `jsonl_distill.py` sidecar？”
 

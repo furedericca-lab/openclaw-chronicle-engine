@@ -35,7 +35,7 @@ const {
 const { renderTaggedPromptBlock, renderErrorDetectedBlock } = jiti("../src/context/prompt-block-renderer.ts");
 const { createSessionExposureState } = jiti("../src/context/session-exposure-state.ts");
 const { createAutoRecallPlanner } = jiti("../src/context/auto-recall-orchestrator.ts");
-const { createReflectionPromptPlanner } = jiti("../src/context/reflection-prompt-planner.ts");
+const { createAutoRecallBehavioralPlanner } = jiti("../src/context/auto-recall-orchestrator.ts");
 const { shouldSkipRetrieval } = jiti("../src/context/adaptive-retrieval.ts");
 
 function makeEntry({ timestamp, metadata, category = "reflection", scope = "global" }) {
@@ -107,7 +107,7 @@ function createPluginApiHarness({ pluginConfig, resolveRoot }) {
   };
 }
 
-describe("memory reflection", () => {
+describe("auto recall orchestration", () => {
   describe("adaptive retrieval control prompt skip gate", () => {
     it("skips session-start boilerplate containing /new or /reset", () => {
       const prompt = "A new session was started via /new or /reset. Keep this in mind.";
@@ -120,7 +120,7 @@ describe("memory reflection", () => {
     });
 
     it("skips /note handoff/control prompts", () => {
-      const prompt = "Control wrapper line\n/note self-improvement (before reset): preserve incident timeline.";
+      const prompt = "Control wrapper line\n/note behavioral-guidance (before reset): preserve incident timeline.";
       assert.equal(shouldSkipRetrieval(prompt), true);
     });
 
@@ -422,23 +422,23 @@ describe("memory reflection", () => {
       assert.equal(parsed.autoRecallExcludeReflection, true);
     });
 
-    it("defaults Reflection-Recall mode to fixed", () => {
+    it("defaults behavioral autoRecall mode to fixed", () => {
       const parsed = parsePluginConfig({
         ...baseConfig(),
-        sessionStrategy: "memoryReflection",
+        sessionStrategy: "autoRecall",
       });
-      assert.equal(parsed.memoryReflection.recall.mode, "fixed");
-      assert.equal(parsed.memoryReflection.recall.topK, 6);
+      assert.equal(parsed.autoRecallBehavioral.recall.mode, "fixed");
+      assert.equal(parsed.autoRecallBehavioral.recall.topK, 6);
     });
 
-    it("parses dynamic Reflection-Recall config fields", () => {
+    it("parses dynamic behavioral autoRecall config fields", () => {
       const parsed = parsePluginConfig({
         ...baseConfig(),
-        memoryReflection: {
+        autoRecallBehavioral: {
           recall: {
             mode: "dynamic",
             topK: 9,
-            includeKinds: ["invariant", "derived"],
+            includeKinds: ["durable", "adaptive"],
             maxAgeDays: 14,
             maxEntriesPerKey: 7,
             minRepeated: 3,
@@ -447,14 +447,14 @@ describe("memory reflection", () => {
           },
         },
       });
-      assert.equal(parsed.memoryReflection.recall.mode, "dynamic");
-      assert.equal(parsed.memoryReflection.recall.topK, 9);
-      assert.deepEqual(parsed.memoryReflection.recall.includeKinds, ["invariant", "derived"]);
-      assert.equal(parsed.memoryReflection.recall.maxAgeDays, 14);
-      assert.equal(parsed.memoryReflection.recall.maxEntriesPerKey, 7);
-      assert.equal(parsed.memoryReflection.recall.minRepeated, 3);
-      assert.equal(parsed.memoryReflection.recall.minScore, 0.22);
-      assert.equal(parsed.memoryReflection.recall.minPromptLength, 12);
+      assert.equal(parsed.autoRecallBehavioral.recall.mode, "dynamic");
+      assert.equal(parsed.autoRecallBehavioral.recall.topK, 9);
+      assert.deepEqual(parsed.autoRecallBehavioral.recall.includeKinds, ["durable", "adaptive"]);
+      assert.equal(parsed.autoRecallBehavioral.recall.maxAgeDays, 14);
+      assert.equal(parsed.autoRecallBehavioral.recall.maxEntriesPerKey, 7);
+      assert.equal(parsed.autoRecallBehavioral.recall.minRepeated, 3);
+      assert.equal(parsed.autoRecallBehavioral.recall.minScore, 0.22);
+      assert.equal(parsed.autoRecallBehavioral.recall.minPromptLength, 12);
     });
   });
 
@@ -489,10 +489,10 @@ describe("memory reflection", () => {
         signatureHash: "deadbeef",
       };
 
-      state.addReflectionErrorSignal(sessionKey, signal, true);
-      state.addReflectionErrorSignal(sessionKey, signal, true);
-      const first = state.getPendingReflectionErrorSignalsForPrompt(sessionKey, 5);
-      const second = state.getPendingReflectionErrorSignalsForPrompt(sessionKey, 5);
+      state.addBehavioralGuidanceErrorSignal(sessionKey, signal, true);
+      state.addBehavioralGuidanceErrorSignal(sessionKey, signal, true);
+      const first = state.getPendingBehavioralGuidanceErrorSignalsForPrompt(sessionKey, 5);
+      const second = state.getPendingBehavioralGuidanceErrorSignalsForPrompt(sessionKey, 5);
       assert.equal(first.length, 1);
       assert.equal(second.length, 0);
     });
@@ -508,7 +508,7 @@ describe("memory reflection", () => {
           topK: 2,
           selectionMode: "mmr",
           categories: ["fact", "reflection"],
-          excludeReflection: true,
+          excludeBehavioral: true,
           maxEntriesPerKey: 5,
           maxAgeDays: 30,
         },
@@ -517,7 +517,7 @@ describe("memory reflection", () => {
           recallGeneric: async (params) => {
             recallCalls.push(params);
             assert.deepEqual(params.categories, ["fact", "reflection"]);
-            assert.equal(params.excludeReflection, true);
+            assert.equal(params.excludeBehavioral, true);
             assert.equal(params.maxAgeDays, 30);
             assert.equal(params.maxEntriesPerKey, 5);
             return [
@@ -583,19 +583,20 @@ describe("memory reflection", () => {
       );
     });
 
-    it("plans reflection inherited-rules and error reminders via dedicated planner module", async () => {
+    it("plans behavioral guidance and error reminders via dedicated planner module", async () => {
       const sessionState = createSessionExposureState();
       const recallCalls = [];
-      const planner = createReflectionPromptPlanner(
+      const planner = createAutoRecallBehavioralPlanner(
         {
-          injectMode: "inheritance+derived",
+          enabled: true,
+          injectMode: "durable+adaptive",
           dedupeErrorSignals: true,
           errorReminderMaxEntries: 3,
           errorScanMaxChars: 8000,
           recall: {
             mode: "fixed",
             topK: 4,
-            includeKinds: ["invariant"],
+            includeKinds: ["durable"],
             maxAgeDays: 45,
             maxEntriesPerKey: 10,
             minRepeated: 2,
@@ -605,7 +606,7 @@ describe("memory reflection", () => {
         },
         {
           sessionState,
-          recallReflection: async (params) => {
+          recallBehavioral: async (params) => {
             recallCalls.push(params);
             return [{
               id: "invariant-1",
@@ -632,11 +633,11 @@ describe("memory reflection", () => {
         sessionKey,
       });
       assert.ok(first);
-      assert.match(first, /<inherited-rules>/);
+      assert.match(first, /<behavioral-guidance>/);
       assert.match(first, /Always verify scope and post-check results before concluding\./);
       assert.match(first, /<error-detected>/);
       assert.equal(recallCalls.length, 1);
-      assert.deepEqual(recallCalls[0].includeKinds, ["invariant"]);
+      assert.deepEqual(recallCalls[0].includeKinds, ["durable"]);
 
       const second = await planner.buildBeforePromptPrependContext({
         prompt: "continue with rollout",
@@ -645,24 +646,25 @@ describe("memory reflection", () => {
         sessionKey,
       });
       assert.ok(second);
-      assert.match(second, /<inherited-rules>/);
+      assert.match(second, /<behavioral-guidance>/);
       assert.doesNotMatch(second, /<error-detected>/);
     });
 
-    it("rejects missing remote recall dependency for reflection planner", () => {
+    it("rejects missing remote recall dependency for behavioral planner", () => {
       const sessionState = createSessionExposureState();
       assert.throws(
         () =>
-          createReflectionPromptPlanner(
+          createAutoRecallBehavioralPlanner(
             {
-              injectMode: "inheritance-only",
+              enabled: true,
+              injectMode: "durable-only",
               dedupeErrorSignals: true,
               errorReminderMaxEntries: 3,
               errorScanMaxChars: 8000,
               recall: {
                 mode: "fixed",
                 topK: 3,
-                includeKinds: ["invariant"],
+                includeKinds: ["durable"],
                 maxAgeDays: 45,
                 maxEntriesPerKey: 10,
                 minRepeated: 1,
@@ -675,23 +677,24 @@ describe("memory reflection", () => {
               sanitizeForContext: (text) => text,
             }
           ),
-        /requires remote recallReflection dependency/
+        /requires remote recallBehavioral dependency/
       );
     });
 
-    it("passes dynamic reflection candidate filters to backend recall", async () => {
+    it("passes dynamic behavioral candidate filters to backend recall", async () => {
       const sessionState = createSessionExposureState();
       const recallCalls = [];
-      const planner = createReflectionPromptPlanner(
+      const planner = createAutoRecallBehavioralPlanner(
         {
-          injectMode: "inheritance+derived",
+          enabled: true,
+          injectMode: "durable+adaptive",
           dedupeErrorSignals: true,
           errorReminderMaxEntries: 2,
           errorScanMaxChars: 8000,
           recall: {
             mode: "dynamic",
             topK: 2,
-            includeKinds: ["invariant", "derived"],
+            includeKinds: ["durable", "adaptive"],
             maxAgeDays: 45,
             maxEntriesPerKey: 10,
             minRepeated: 1,
@@ -701,7 +704,7 @@ describe("memory reflection", () => {
         },
         {
           sessionState,
-          recallReflection: async (params) => {
+          recallBehavioral: async (params) => {
             recallCalls.push(params);
             return [
               {
@@ -730,23 +733,24 @@ describe("memory reflection", () => {
       assert.ok(output);
       assert.equal(recallCalls.length, 1);
       assert.equal(recallCalls[0].limit, 2);
-      assert.deepEqual(recallCalls[0].includeKinds, ["invariant", "derived"]);
+      assert.deepEqual(recallCalls[0].includeKinds, ["durable", "adaptive"]);
       assert.equal(recallCalls[0].minScore, 0.4);
     });
 
-    it("uses one shared session-clear contract for reflection errors and dynamic recall state", () => {
+    it("uses one shared session-clear contract for behavioral guidance errors and dynamic recall state", () => {
       const clearedReflectionErrors = [];
       const clearedDynamicContext = [];
-      const planner = createReflectionPromptPlanner(
+      const planner = createAutoRecallBehavioralPlanner(
         {
-          injectMode: "inheritance-only",
+          enabled: true,
+          injectMode: "durable-only",
           dedupeErrorSignals: true,
           errorReminderMaxEntries: 3,
           errorScanMaxChars: 8000,
           recall: {
             mode: "fixed",
             topK: 3,
-            includeKinds: ["invariant"],
+            includeKinds: ["durable"],
             maxAgeDays: 45,
             maxEntriesPerKey: 10,
             minRepeated: 1,
@@ -757,23 +761,23 @@ describe("memory reflection", () => {
         {
           sessionState: {
             autoRecallState: {},
-            reflectionRecallState: {},
+            behavioralRecallState: {},
             clearDynamicRecallForContext: (ctx) => {
               clearedDynamicContext.push(ctx);
             },
-            addReflectionErrorSignal() { },
-            getPendingReflectionErrorSignalsForPrompt() {
+            addBehavioralGuidanceErrorSignal() { },
+            getPendingBehavioralGuidanceErrorSignalsForPrompt() {
               return [];
             },
-            getRecentReflectionErrorSignals() {
+            getRecentBehavioralGuidanceErrorSignals() {
               return [];
             },
-            clearReflectionErrorSignalsForSession(sessionKey) {
+            clearBehavioralGuidanceErrorSignalsForSession(sessionKey) {
               clearedReflectionErrors.push(sessionKey);
             },
-            pruneReflectionSessionState() { },
+            pruneBehavioralGuidanceSessionState() { },
           },
-          recallReflection: async () => [],
+          recallBehavioral: async () => [],
           sanitizeForContext: (text) => text,
         }
       );

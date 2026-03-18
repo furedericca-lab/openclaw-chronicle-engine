@@ -15,10 +15,10 @@ const jiti = jitiFactory(import.meta.url, {
   },
 });
 const {
-  registerSelfImprovementLogTool,
-  registerSelfImprovementExtractSkillTool,
-  appendSelfImprovementEntry,
-} = jiti("../src/self-improvement-tools.ts");
+  registerGovernanceLogTool,
+  registerGovernanceExtractSkillTool,
+  appendGovernanceEntry,
+} = jiti("../src/governance-tools.ts");
 const {
   extractReflectionLearningGovernanceCandidates,
   extractReflectionLessons,
@@ -35,8 +35,8 @@ function createToolHarness(workspaceDir) {
 
   const context = { workspaceDir };
 
-  registerSelfImprovementLogTool(api, context);
-  registerSelfImprovementExtractSkillTool(api, context);
+  registerGovernanceLogTool(api, context);
+  registerGovernanceExtractSkillTool(api, context);
 
   return {
     tool(name, toolCtx = {}) {
@@ -47,12 +47,12 @@ function createToolHarness(workspaceDir) {
   };
 }
 
-describe("self-improvement", () => {
+describe("governance", () => {
   describe("tool file-write flow", () => {
     let workspaceDir;
 
     beforeEach(() => {
-      workspaceDir = mkdtempSync(path.join(tmpdir(), "self-improvement-test-"));
+      workspaceDir = mkdtempSync(path.join(tmpdir(), "governance-test-"));
     });
 
     afterEach(() => {
@@ -76,7 +76,7 @@ describe("self-improvement", () => {
         "## Lessons & pitfalls (symptom / cause / fix / prevention)",
         "- Symptom: empty-state status looked like a failure. Cause: no explicit triage label. Fix: classify empty-state as triage first. Prevention: avoid calling it breakage without reproduction.",
         "",
-        "## Learning governance candidates (.learnings / promotion / skill extraction)",
+        "## Learning governance candidates (.governance / promotion / skill extraction)",
         "- LRN candidate: require file evidence before saying a skill was updated.",
       ].join("\n");
       const mapped = extractReflectionMappedMemories(reflectionText);
@@ -113,7 +113,7 @@ describe("self-improvement", () => {
         "- Symptom: empty-state status looked like a failure. Cause: no explicit triage label. Fix: classify empty-state as triage first. Prevention: avoid calling it breakage without reproduction.",
         "- Symptom: reported done without file proof. Cause: conversation claim outran file verification. Fix: attach file evidence before declaring completion. Prevention: always verify real paths before reporting.",
         "",
-        "## Learning governance candidates (.learnings / promotion / skill extraction)",
+        "## Learning governance candidates (.governance / promotion / skill extraction)",
         "### Entry 1",
         "**Priority**: high",
         "**Status**: triage",
@@ -161,7 +161,7 @@ describe("self-improvement", () => {
         },
       ]);
 
-      const appendedOne = await appendSelfImprovementEntry({
+      const appendedOne = await appendGovernanceEntry({
         baseDir: workspaceDir,
         type: "learning",
         summary: governanceCandidates[0].summary,
@@ -170,9 +170,9 @@ describe("self-improvement", () => {
         area: governanceCandidates[0].area,
         priority: governanceCandidates[0].priority,
         status: governanceCandidates[0].status,
-        source: "openclaw-chronicle-engine/reflection:test",
+        source: "openclaw-chronicle-engine/behavioral-guidance:test",
       });
-      const appendedTwo = await appendSelfImprovementEntry({
+      const appendedTwo = await appendGovernanceEntry({
         baseDir: workspaceDir,
         type: "learning",
         summary: governanceCandidates[1].summary,
@@ -181,25 +181,25 @@ describe("self-improvement", () => {
         area: governanceCandidates[1].area,
         priority: governanceCandidates[1].priority,
         status: governanceCandidates[1].status,
-        source: "openclaw-chronicle-engine/reflection:test",
+        source: "openclaw-chronicle-engine/behavioral-guidance:test",
       });
 
       assert.match(appendedOne.id, /^LRN-\d{8}-001$/);
       assert.match(appendedTwo.id, /^LRN-\d{8}-002$/);
-      const learningsPath = path.join(workspaceDir, ".learnings", "LEARNINGS.md");
+      const learningsPath = path.join(workspaceDir, ".governance", "LEARNINGS.md");
       const learningsBody = readFileSync(learningsPath, "utf-8");
       assert.match(learningsBody, /Require file evidence before saying a skill was updated/);
       assert.match(learningsBody, /\*\*Priority\*\*: high/);
       assert.match(learningsBody, /\*\*Status\*\*: triage/);
       assert.match(learningsBody, /Document the triage-first rule after it repeats/);
       assert.match(learningsBody, /\*\*Status\*\*: pending/);
-      assert.match(learningsBody, /Source: openclaw-chronicle-engine\/reflection:test/);
+      assert.match(learningsBody, /Source: openclaw-chronicle-engine\/behavioral-guidance:test/);
     });
 
     it("handles learning id validation and writes promoted skill scaffold with sanitized outputDir", async () => {
       const harness = createToolHarness(workspaceDir);
-      const logTool = harness.tool("self_improvement_log");
-      const extractTool = harness.tool("self_improvement_extract_skill");
+      const logTool = harness.tool("governance_log");
+      const extractTool = harness.tool("governance_extract_skill");
 
       const logged = await logTool.execute("tc-1", {
         type: "learning",
@@ -242,7 +242,7 @@ describe("self-improvement", () => {
       assert.match(skillContent, /# Deterministic Fixtures/);
       assert.match(skillContent, new RegExp(`Learning ID: ${learningId}`));
 
-      const learningsPath = path.join(workspaceDir, ".learnings", "LEARNINGS.md");
+      const learningsPath = path.join(workspaceDir, ".governance", "LEARNINGS.md");
       const learningsBody = readFileSync(learningsPath, "utf-8");
       assert.match(learningsBody, /\*\*Status\*\*:\s*promoted_to_skill/);
       assert.match(learningsBody, /Skill-Path:\s*outside\/skills\/deterministic-fixtures/);

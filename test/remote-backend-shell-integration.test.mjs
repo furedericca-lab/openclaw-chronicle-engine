@@ -50,7 +50,7 @@ function makeRemoteConfig(root, overrides = {}) {
   const base = {
     autoCapture: true,
     sessionStrategy: "none",
-    selfImprovement: { enabled: false },
+    governance: { enabled: false },
     enableManagementTools: false,
     remoteBackend: {
       enabled: true,
@@ -64,10 +64,10 @@ function makeRemoteConfig(root, overrides = {}) {
   return {
     ...base,
     ...overrides,
-    selfImprovement: { ...base.selfImprovement, ...(overrides.selfImprovement || {}) },
+    governance: { ...base.governance, ...(overrides.governance || {}) },
     remoteBackend: { ...base.remoteBackend, ...(overrides.remoteBackend || {}) },
-    memoryReflection: overrides.memoryReflection
-      ? { ...(overrides.memoryReflection || {}) }
+    autoRecallBehavioral: overrides.autoRecallBehavioral
+      ? { ...(overrides.autoRecallBehavioral || {}) }
       : undefined,
   };
 }
@@ -267,22 +267,23 @@ describe("remote backend shell integration", () => {
     });
   });
 
-  it("rejects removed local reflection-generation fields during registration", () => {
+  it("rejects removed legacy memoryReflection config during registration", () => {
     const root = makeTempRoot();
     assert.throws(
       () =>
         chronicleEnginePlugin.register(
           createPluginApiHarness({
             pluginConfig: makeRemoteConfig(root, {
-              sessionStrategy: "memoryReflection",
               memoryReflection: {
-                agentId: "memory-distiller",
+                recall: {
+                  mode: "dynamic",
+                },
               },
             }),
             resolveRoot: root,
           }).api
         ),
-      /memoryReflection\.agentId is no longer supported in 1\.0\.0-beta\.0/
+      /memoryReflection is no longer supported in 1\.0\.0-beta\.0; use autoRecallBehavioral/
     );
   });
 
@@ -1393,7 +1394,7 @@ describe("remote backend shell integration", () => {
     assert.equal(fetchMock.calls.length, 3);
   });
 
-  it("uses backend reflection recall in before_prompt_build and preserves runtime context fields", async () => {
+  it("uses backend behavioral recall in before_prompt_build and preserves runtime context fields", async () => {
     const root = makeTempRoot();
 
     const fetchMock = installFetchMock([
@@ -1418,14 +1419,14 @@ describe("remote backend shell integration", () => {
 
     const harness = createPluginApiHarness({
       pluginConfig: makeRemoteConfig(root, {
-        sessionStrategy: "memoryReflection",
-        memoryReflection: {
+        sessionStrategy: "autoRecall",
+        autoRecallBehavioral: {
           recall: {
             mode: "fixed",
             topK: 4,
-            includeKinds: ["invariant", "derived"],
+            includeKinds: ["durable", "adaptive"],
           },
-          injectMode: "inheritance-only",
+          injectMode: "durable-only",
         },
       }),
       resolveRoot: root,
@@ -1446,7 +1447,7 @@ describe("remote backend shell integration", () => {
     );
 
     assert.ok(output && typeof output.prependContext === "string");
-    assert.match(output.prependContext, /<inherited-rules>/);
+    assert.match(output.prependContext, /<behavioral-guidance>/);
     assert.match(output.prependContext, /Always perform post-change service and DNS checks\./);
 
     assert.equal(fetchMock.calls.length, 1);
@@ -1461,19 +1462,19 @@ describe("remote backend shell integration", () => {
     assert.equal(recallCall.body.actor.sessionKey, "agent:agent-reflect:session:stable-reflect");
   });
 
-  it("keeps reflection recall fail-open when runtime principal identity is unavailable", async () => {
+  it("keeps behavioral recall fail-open when runtime principal identity is unavailable", async () => {
     const root = makeTempRoot();
     const fetchMock = installFetchMock([]);
 
     const harness = createPluginApiHarness({
       pluginConfig: makeRemoteConfig(root, {
-        sessionStrategy: "memoryReflection",
-        memoryReflection: {
-          injectMode: "inheritance-only",
+        sessionStrategy: "autoRecall",
+        autoRecallBehavioral: {
+          injectMode: "durable-only",
           recall: {
             mode: "fixed",
             topK: 3,
-            includeKinds: ["invariant"],
+            includeKinds: ["durable"],
           },
         },
       }),
@@ -1491,19 +1492,19 @@ describe("remote backend shell integration", () => {
       }
     );
 
-    assert.equal(output, undefined, "reflection recall should skip when runtime principal is unavailable");
+    assert.equal(output, undefined, "behavioral recall should skip when runtime principal is unavailable");
     assert.equal(fetchMock.calls.length, 0);
     assert.ok(
       harness.logs.some(
         (entry) =>
           entry.level === "warn" &&
-          entry.message.includes("reflection-recall skipped remote call (missing runtime principal")
+          entry.message.includes("remote behavioral recall skipped (missing runtime principal")
       ),
       "skip reason should remain visible in logs"
     );
   });
 
-  it("keeps reflection recall fail-open when backend reflection endpoint fails", async () => {
+  it("keeps behavioral recall fail-open when backend reflection endpoint fails", async () => {
     const root = makeTempRoot();
 
     const fetchMock = installFetchMock([
@@ -1515,7 +1516,7 @@ describe("remote backend shell integration", () => {
           body: {
             error: {
               code: "REFLECTION_RECALL_DOWN",
-              message: "reflection recall unavailable",
+              message: "behavioral guidance recall unavailable",
               retryable: true,
             },
           },
@@ -1525,13 +1526,13 @@ describe("remote backend shell integration", () => {
 
     const harness = createPluginApiHarness({
       pluginConfig: makeRemoteConfig(root, {
-        sessionStrategy: "memoryReflection",
-        memoryReflection: {
-          injectMode: "inheritance-only",
+        sessionStrategy: "autoRecall",
+        autoRecallBehavioral: {
+          injectMode: "durable-only",
           recall: {
             mode: "fixed",
             topK: 3,
-            includeKinds: ["invariant"],
+            includeKinds: ["durable"],
           },
         },
       }),
@@ -1550,25 +1551,25 @@ describe("remote backend shell integration", () => {
       }
     );
 
-    assert.equal(output, undefined, "reflection recall failure should not block prompt flow");
+    assert.equal(output, undefined, "behavioral recall failure should not block prompt flow");
     assert.equal(fetchMock.calls.length, 1);
     assert.ok(
       harness.logs.some(
         (entry) =>
           entry.level === "warn" &&
-          entry.message.includes("reflection-recall injection failed")
+          entry.message.includes("guidance injection failed")
       ),
       "failure should be observable in logs"
     );
   });
 
-  it("removes command-triggered reflection generation hooks when no other command-hook feature is enabled", async () => {
+  it("registers behavioral reminder command hooks when behavioral autoRecall is active", async () => {
     const root = makeTempRoot();
     const fetchMock = installFetchMock([]);
 
     const harness = createPluginApiHarness({
       pluginConfig: makeRemoteConfig(root, {
-        sessionStrategy: "memoryReflection",
+        sessionStrategy: "autoRecall",
       }),
       resolveRoot: root,
     });
@@ -1576,8 +1577,8 @@ describe("remote backend shell integration", () => {
 
     const commandNewHooks = harness.commandHooks.get("command:new") || [];
     const commandResetHooks = harness.commandHooks.get("command:reset") || [];
-    assert.equal(commandNewHooks.length, 0);
-    assert.equal(commandResetHooks.length, 0);
+    assert.equal(commandNewHooks.length, 1);
+    assert.equal(commandResetHooks.length, 1);
     assert.equal(fetchMock.calls.length, 0);
   });
 });

@@ -28,12 +28,18 @@ export interface SessionExposureStateOptions {
 
 export interface SessionExposureState {
   autoRecallState: DynamicRecallSessionState;
+  behavioralRecallState: DynamicRecallSessionState;
   reflectionRecallState: DynamicRecallSessionState;
   clearDynamicRecallForContext: (ctx: { sessionId?: unknown; sessionKey?: unknown }) => void;
+  addBehavioralGuidanceErrorSignal: (sessionKey: string, signal: ReflectionErrorSignal, dedupeEnabled: boolean) => void;
   addReflectionErrorSignal: (sessionKey: string, signal: ReflectionErrorSignal, dedupeEnabled: boolean) => void;
+  getPendingBehavioralGuidanceErrorSignalsForPrompt: (sessionKey: string, maxEntries: number) => ReflectionErrorSignal[];
   getPendingReflectionErrorSignalsForPrompt: (sessionKey: string, maxEntries: number) => ReflectionErrorSignal[];
+  getRecentBehavioralGuidanceErrorSignals: (sessionKey: string, maxEntries: number) => ReflectionErrorSignal[];
   getRecentReflectionErrorSignals: (sessionKey: string, maxEntries: number) => ReflectionErrorSignal[];
+  clearBehavioralGuidanceErrorSignalsForSession: (sessionKey: string) => void;
   clearReflectionErrorSignalsForSession: (sessionKey: string) => void;
+  pruneBehavioralGuidanceSessionState: (now?: number) => void;
   pruneReflectionSessionState: (now?: number) => void;
 }
 
@@ -57,7 +63,8 @@ export function createSessionExposureState(options?: SessionExposureStateOptions
 
   const reflectionErrorStateBySession = new Map<string, ReflectionErrorState>();
   const autoRecallState = createDynamicRecallSessionState({ maxSessions: maxTrackedSessions });
-  const reflectionRecallState = createDynamicRecallSessionState({ maxSessions: maxTrackedSessions });
+  const behavioralRecallState = createDynamicRecallSessionState({ maxSessions: maxTrackedSessions });
+  const reflectionRecallState = behavioralRecallState;
 
   const pruneOldestByUpdatedAt = <T extends { updatedAt: number }>(map: Map<string, T>, maxSize: number) => {
     if (map.size <= maxSize) return;
@@ -69,7 +76,7 @@ export function createSessionExposureState(options?: SessionExposureStateOptions
     }
   };
 
-  const pruneReflectionSessionState = (now = Date.now()) => {
+  const pruneBehavioralGuidanceSessionState = (now = Date.now()) => {
     for (const [key, state] of reflectionErrorStateBySession.entries()) {
       if (now - state.updatedAt > reflectionErrorSessionTtlMs) {
         reflectionErrorStateBySession.delete(key);
@@ -105,14 +112,18 @@ export function createSessionExposureState(options?: SessionExposureStateOptions
     }
     for (const sessionId of sessionIds) {
       clearDynamicRecallSessionState(autoRecallState, sessionId);
-      clearDynamicRecallSessionState(reflectionRecallState, sessionId);
+      clearDynamicRecallSessionState(behavioralRecallState, sessionId);
     }
   };
 
-  const addReflectionErrorSignal = (sessionKey: string, signal: ReflectionErrorSignal, dedupeEnabled: boolean) => {
+  const addBehavioralGuidanceErrorSignal = (
+    sessionKey: string,
+    signal: ReflectionErrorSignal,
+    dedupeEnabled: boolean
+  ) => {
     const normalizedSessionKey = sessionKey.trim();
     if (!normalizedSessionKey) return;
-    pruneReflectionSessionState();
+    pruneBehavioralGuidanceSessionState();
     const state = getReflectionErrorState(normalizedSessionKey);
     if (dedupeEnabled && state.signatureSet.has(signal.signatureHash)) return;
     state.entries.push(signal);
@@ -126,8 +137,11 @@ export function createSessionExposureState(options?: SessionExposureStateOptions
     }
   };
 
-  const getPendingReflectionErrorSignalsForPrompt = (sessionKey: string, maxEntries: number): ReflectionErrorSignal[] => {
-    pruneReflectionSessionState();
+  const getPendingBehavioralGuidanceErrorSignalsForPrompt = (
+    sessionKey: string,
+    maxEntries: number
+  ): ReflectionErrorSignal[] => {
+    pruneBehavioralGuidanceSessionState();
     const state = reflectionErrorStateBySession.get(sessionKey.trim());
     if (!state) return [];
     state.updatedAt = Date.now();
@@ -139,8 +153,11 @@ export function createSessionExposureState(options?: SessionExposureStateOptions
     return bounded;
   };
 
-  const getRecentReflectionErrorSignals = (sessionKey: string, maxEntries: number): ReflectionErrorSignal[] => {
-    pruneReflectionSessionState();
+  const getRecentBehavioralGuidanceErrorSignals = (
+    sessionKey: string,
+    maxEntries: number
+  ): ReflectionErrorSignal[] => {
+    pruneBehavioralGuidanceSessionState();
     const state = reflectionErrorStateBySession.get(sessionKey.trim());
     if (!state) return [];
     state.updatedAt = Date.now();
@@ -148,7 +165,7 @@ export function createSessionExposureState(options?: SessionExposureStateOptions
     return state.entries.slice(-limit);
   };
 
-  const clearReflectionErrorSignalsForSession = (sessionKey: string) => {
+  const clearBehavioralGuidanceErrorSignalsForSession = (sessionKey: string) => {
     const normalized = sessionKey.trim();
     if (!normalized) return;
     reflectionErrorStateBySession.delete(normalized);
@@ -156,13 +173,19 @@ export function createSessionExposureState(options?: SessionExposureStateOptions
 
   return {
     autoRecallState,
+    behavioralRecallState,
     reflectionRecallState,
     clearDynamicRecallForContext,
-    addReflectionErrorSignal,
-    getPendingReflectionErrorSignalsForPrompt,
-    getRecentReflectionErrorSignals,
-    clearReflectionErrorSignalsForSession,
-    pruneReflectionSessionState,
+    addBehavioralGuidanceErrorSignal,
+    addReflectionErrorSignal: addBehavioralGuidanceErrorSignal,
+    getPendingBehavioralGuidanceErrorSignalsForPrompt,
+    getPendingReflectionErrorSignalsForPrompt: getPendingBehavioralGuidanceErrorSignalsForPrompt,
+    getRecentBehavioralGuidanceErrorSignals,
+    getRecentReflectionErrorSignals: getRecentBehavioralGuidanceErrorSignals,
+    clearBehavioralGuidanceErrorSignalsForSession,
+    clearReflectionErrorSignalsForSession: clearBehavioralGuidanceErrorSignalsForSession,
+    pruneBehavioralGuidanceSessionState,
+    pruneReflectionSessionState: pruneBehavioralGuidanceSessionState,
   };
 }
 

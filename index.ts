@@ -11,13 +11,15 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
 import { registerRemoteMemoryTools } from "./src/backend-tools.js";
-import { ensureSelfImprovementLearningFiles, registerSelfImprovementTools } from "./src/self-improvement-tools.js";
+import { ensureGovernanceBacklogFiles, registerGovernanceTools } from "./src/governance-tools.js";
 import {
   createSessionExposureState,
   DEFAULT_SESSION_EXPOSURE_MAX_TRACKED_SESSIONS,
 } from "./src/context/session-exposure-state.js";
-import { createAutoRecallPlanner } from "./src/context/auto-recall-orchestrator.js";
-import { createReflectionPromptPlanner } from "./src/context/reflection-prompt-planner.js";
+import {
+  createAutoRecallBehavioralPlanner,
+  createAutoRecallPlanner,
+} from "./src/context/auto-recall-orchestrator.js";
 import { createMemoryBackendClient } from "./src/backend-client/client.js";
 import {
   resolveBackendCallContext,
@@ -43,17 +45,35 @@ interface PluginConfig {
   autoRecallTopK?: number;
   autoRecallSelectionMode?: AutoRecallSelectionMode;
   autoRecallCategories?: MemoryCategory[];
+  autoRecallExcludeBehavioral?: boolean;
   autoRecallExcludeReflection?: boolean;
   autoRecallMaxAgeDays?: number;
   autoRecallMaxEntriesPerKey?: number;
   captureAssistant?: boolean;
   enableManagementTools?: boolean;
   sessionStrategy?: SessionStrategy;
-  selfImprovement?: {
+  governance?: {
     enabled?: boolean;
+    ensureBacklogFiles?: boolean;
+  };
+  autoRecallBehavioral?: {
+    enabled?: boolean;
+    injectMode?: BehavioralGuidanceInjectMode;
+    errorReminderMaxEntries?: number;
+    dedupeErrorSignals?: boolean;
     beforeResetNote?: boolean;
     skipSubagentBootstrap?: boolean;
-    ensureLearningFiles?: boolean;
+    ensureGovernanceFiles?: boolean;
+    recall?: {
+      mode?: BehavioralRecallMode;
+      topK?: number;
+      includeKinds?: BehavioralRecallKind[];
+      maxAgeDays?: number;
+      maxEntriesPerKey?: number;
+      minRepeated?: number;
+      minScore?: number;
+      minPromptLength?: number;
+    };
   };
   distill?: {
     enabled?: boolean;
@@ -65,22 +85,6 @@ interface PluginConfig {
     chunkChars?: number;
     chunkOverlapMessages?: number;
   };
-  memoryReflection?: {
-    enabled?: boolean;
-    injectMode?: ReflectionInjectMode;
-    errorReminderMaxEntries?: number;
-    dedupeErrorSignals?: boolean;
-    recall?: {
-      mode?: ReflectionRecallMode;
-      topK?: number;
-      includeKinds?: ReflectionRecallKind[];
-      maxAgeDays?: number;
-      maxEntriesPerKey?: number;
-      minRepeated?: number;
-      minScore?: number;
-      minPromptLength?: number;
-    };
-  };
   remoteBackend?: {
     enabled?: boolean;
     baseURL?: string;
@@ -90,10 +94,10 @@ interface PluginConfig {
     retryBackoffMs?: number;
   };
 }
-type SessionStrategy = "memoryReflection" | "systemSessionMemory" | "none";
-type ReflectionInjectMode = "inheritance-only" | "inheritance+derived";
-type ReflectionRecallMode = "fixed" | "dynamic";
-type ReflectionRecallKind = "invariant" | "derived";
+type SessionStrategy = "autoRecall" | "systemSessionMemory" | "none";
+type BehavioralGuidanceInjectMode = "durable-only" | "durable+adaptive";
+type BehavioralRecallMode = "fixed" | "dynamic";
+type BehavioralRecallKind = "durable" | "adaptive";
 type AutoRecallSelectionMode = "mmr";
 type MemoryCategory = "preference" | "fact" | "decision" | "entity" | "other" | "reflection";
 
@@ -177,50 +181,53 @@ function parseMemoryCategories(value: unknown, fallback: MemoryCategory[]): Memo
   return parsed.length > 0 ? [...new Set(parsed)] : [...fallback];
 }
 
-function parseReflectionRecallKinds(value: unknown, fallback: ReflectionRecallKind[]): ReflectionRecallKind[] {
+function parseBehavioralRecallKinds(value: unknown, fallback: BehavioralRecallKind[]): BehavioralRecallKind[] {
   if (!Array.isArray(value)) return [...fallback];
   const parsed = value
     .filter((item): item is string => typeof item === "string")
     .map((item) => item.trim())
-    .filter((item): item is ReflectionRecallKind => item === "invariant" || item === "derived");
+    .map((item): BehavioralRecallKind | undefined => {
+      if (item === "durable" || item === "invariant") return "durable";
+      if (item === "adaptive" || item === "derived") return "adaptive";
+      return undefined;
+    })
+    .filter((item): item is BehavioralRecallKind => item === "durable" || item === "adaptive");
   return parsed.length > 0 ? [...new Set(parsed)] : [...fallback];
 }
 
-const DEFAULT_SELF_IMPROVEMENT_REMINDER = `## Self-Improvement Reminder
+const DEFAULT_BEHAVIORAL_GUIDANCE_REMINDER = `## AutoRecall Behavioral Guidance Reminder
 
-After completing tasks, evaluate if any learnings should be captured:
+After completing tasks, evaluate whether anything belongs in governance backlog:
 
 **Log when:**
-- User corrects you -> .learnings/LEARNINGS.md
-- Command/operation fails -> .learnings/ERRORS.md
-- You discover your knowledge was wrong -> .learnings/LEARNINGS.md
-- You find a better approach -> .learnings/LEARNINGS.md
+- User correction / reusable best practice / knowledge gap -> .governance/LEARNINGS.md
+- Command / tool / integration failure -> .governance/ERRORS.md
 
 **Promote when pattern is proven:**
-- Behavioral patterns -> SOUL.md
-- Workflow improvements -> AGENTS.md
+- Behavioral rules -> SOUL.md
+- Workflow rules -> AGENTS.md
 - Tool gotchas -> TOOLS.md
 
 Keep entries simple: date, title, what happened, what to do differently.`;
 
-const SELF_IMPROVEMENT_NOTE_PREFIX = "/note self-improvement (before reset):";
-const DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES = 3;
-const DEFAULT_REFLECTION_DEDUPE_ERROR_SIGNALS = true;
-const DEFAULT_REFLECTION_ERROR_SCAN_MAX_CHARS = 8_000;
+const BEHAVIORAL_GUIDANCE_NOTE_PREFIX = "/note behavioral-guidance (before reset):";
+const DEFAULT_BEHAVIORAL_ERROR_REMINDER_MAX_ENTRIES = 3;
+const DEFAULT_BEHAVIORAL_DEDUPE_ERROR_SIGNALS = true;
+const DEFAULT_BEHAVIORAL_ERROR_SCAN_MAX_CHARS = 8_000;
 const DEFAULT_AUTO_RECALL_TOP_K = 3;
 const DEFAULT_AUTO_RECALL_SELECTION_MODE: AutoRecallSelectionMode = "mmr";
-const DEFAULT_AUTO_RECALL_EXCLUDE_REFLECTION = true;
+const DEFAULT_AUTO_RECALL_EXCLUDE_BEHAVIORAL = true;
 const DEFAULT_AUTO_RECALL_MAX_AGE_DAYS = 30;
 const DEFAULT_AUTO_RECALL_MAX_ENTRIES_PER_KEY = 10;
 const DEFAULT_AUTO_RECALL_CATEGORIES: MemoryCategory[] = ["preference", "fact", "decision", "entity", "other"];
-const DEFAULT_REFLECTION_RECALL_MODE: ReflectionRecallMode = "fixed";
-const DEFAULT_REFLECTION_RECALL_TOP_K = 6;
-const DEFAULT_REFLECTION_RECALL_INCLUDE_KINDS: ReflectionRecallKind[] = ["invariant"];
-const DEFAULT_REFLECTION_RECALL_MAX_AGE_DAYS = 45;
-const DEFAULT_REFLECTION_RECALL_MAX_ENTRIES_PER_KEY = 10;
-const DEFAULT_REFLECTION_RECALL_MIN_REPEATED = 2;
-const DEFAULT_REFLECTION_RECALL_MIN_SCORE = 0.18;
-const DEFAULT_REFLECTION_RECALL_MIN_PROMPT_LENGTH = 8;
+const DEFAULT_BEHAVIORAL_RECALL_MODE: BehavioralRecallMode = "fixed";
+const DEFAULT_BEHAVIORAL_RECALL_TOP_K = 6;
+const DEFAULT_BEHAVIORAL_RECALL_INCLUDE_KINDS: BehavioralRecallKind[] = ["durable"];
+const DEFAULT_BEHAVIORAL_RECALL_MAX_AGE_DAYS = 45;
+const DEFAULT_BEHAVIORAL_RECALL_MAX_ENTRIES_PER_KEY = 10;
+const DEFAULT_BEHAVIORAL_RECALL_MIN_REPEATED = 2;
+const DEFAULT_BEHAVIORAL_RECALL_MIN_SCORE = 0.18;
+const DEFAULT_BEHAVIORAL_RECALL_MIN_PROMPT_LENGTH = 8;
 const DEFAULT_DISTILL_MODE: BackendDistillMode = "session-lessons";
 const DEFAULT_DISTILL_PERSIST_MODE: BackendDistillPersistMode = "artifacts-only";
 const DEFAULT_DISTILL_EVERY_TURNS = 5;
@@ -246,14 +253,14 @@ interface DistillCadenceSessionState {
   lastEnqueuedBucket: number;
 }
 
-function buildSelfImprovementResetNote(params?: { openLoopsBlock?: string; derivedFocusBlock?: string }): string {
+function buildBehavioralGuidanceResetNote(params?: { openLoopsBlock?: string; derivedFocusBlock?: string }): string {
   const openLoopsBlock = typeof params?.openLoopsBlock === "string" ? params.openLoopsBlock : "";
   const derivedFocusBlock = typeof params?.derivedFocusBlock === "string" ? params.derivedFocusBlock : "";
   const base = [
-    SELF_IMPROVEMENT_NOTE_PREFIX,
+    BEHAVIORAL_GUIDANCE_NOTE_PREFIX,
     "- If anything was learned/corrected, log it now:",
-    "  - .learnings/LEARNINGS.md (corrections/best practices)",
-    "  - .learnings/ERRORS.md (failures/root causes)",
+    "  - .governance/LEARNINGS.md (corrections/best practices)",
+    "  - .governance/ERRORS.md (failures/root causes)",
     "- Distill reusable rules to AGENTS.md / SOUL.md / TOOLS.md.",
     "- If reusable across tasks, extract a new skill from the learning.",
   ];
@@ -269,17 +276,17 @@ function buildSelfImprovementResetNote(params?: { openLoopsBlock?: string; deriv
   return base.join("\n");
 }
 
-async function loadSelfImprovementReminderContent(workspaceDir?: string): Promise<string> {
+async function loadBehavioralGuidanceReminderContent(workspaceDir?: string): Promise<string> {
   const baseDir = typeof workspaceDir === "string" && workspaceDir.trim().length ? workspaceDir.trim() : "";
-  if (!baseDir) return DEFAULT_SELF_IMPROVEMENT_REMINDER;
+  if (!baseDir) return DEFAULT_BEHAVIORAL_GUIDANCE_REMINDER;
 
-  const reminderPath = join(baseDir, "SELF_IMPROVEMENT_REMINDER.md");
+  const reminderPath = join(baseDir, "AUTORECALL_BEHAVIORAL_GUIDANCE.md");
   try {
     const content = await readFile(reminderPath, "utf-8");
     const trimmed = content.trim();
-    return trimmed.length ? trimmed : DEFAULT_SELF_IMPROVEMENT_REMINDER;
+    return trimmed.length ? trimmed : DEFAULT_BEHAVIORAL_GUIDANCE_REMINDER;
   } catch {
-    return DEFAULT_SELF_IMPROVEMENT_REMINDER;
+    return DEFAULT_BEHAVIORAL_GUIDANCE_REMINDER;
   }
 }
 
@@ -289,7 +296,7 @@ function asNonEmptyString(value: unknown): string | undefined {
   return trimmed.length ? trimmed : undefined;
 }
 
-function isInternalReflectionSessionKey(sessionKey: unknown): boolean {
+function isInternalBehavioralGuidanceSessionKey(sessionKey: unknown): boolean {
   return typeof sessionKey === "string" && sessionKey.trim().startsWith("temp:memory-reflection");
 }
 
@@ -669,8 +676,8 @@ const chronicleEnginePlugin = {
         enableManagementTools: config.enableManagementTools,
       }
     );
-    registerSelfImprovementTools(api, {
-      enabled: config.selfImprovement?.enabled !== false,
+    registerGovernanceTools(api, {
+      enabled: config.governance?.enabled !== false,
       enableManagementTools: config.enableManagementTools,
       defaultWorkspaceDir: getDefaultWorkspaceDir(),
     });
@@ -694,7 +701,7 @@ const chronicleEnginePlugin = {
         topK: config.autoRecallTopK ?? DEFAULT_AUTO_RECALL_TOP_K,
         selectionMode: config.autoRecallSelectionMode ?? DEFAULT_AUTO_RECALL_SELECTION_MODE,
         categories: config.autoRecallCategories,
-        excludeReflection: config.autoRecallExcludeReflection === true,
+        excludeBehavioral: config.autoRecallExcludeBehavioral === true,
         maxAgeDays: config.autoRecallMaxAgeDays,
         maxEntriesPerKey: config.autoRecallMaxEntriesPerKey,
       },
@@ -720,7 +727,7 @@ const chronicleEnginePlugin = {
             query: params.query,
             limit: params.limit,
             categories: params.categories,
-            excludeReflection: params.excludeReflection,
+            excludeReflection: params.excludeBehavioral,
             maxAgeDays: params.maxAgeDays,
             maxEntriesPerKey: params.maxEntriesPerKey,
           });
@@ -922,7 +929,7 @@ const chronicleEnginePlugin = {
       }
     };
 
-    if (config.selfImprovement?.enabled !== false) {
+    if (config.autoRecallBehavioral?.enabled === true) {
       let registeredBeforeResetNoteHooks = false;
       api.registerHook("agent:bootstrap", async (event) => {
         try {
@@ -930,16 +937,16 @@ const chronicleEnginePlugin = {
           const sessionKey = typeof event.sessionKey === "string" ? event.sessionKey : "";
           const workspaceDir = resolveWorkspaceDirFromContext(context);
 
-          if (isInternalReflectionSessionKey(sessionKey)) {
+          if (isInternalBehavioralGuidanceSessionKey(sessionKey)) {
             return;
           }
 
-          if (config.selfImprovement?.skipSubagentBootstrap !== false && sessionKey.includes(":subagent:")) {
+          if (config.autoRecallBehavioral?.skipSubagentBootstrap !== false && sessionKey.includes(":subagent:")) {
             return;
           }
 
-          if (config.selfImprovement?.ensureLearningFiles !== false) {
-            await ensureSelfImprovementLearningFiles(workspaceDir);
+          if (config.autoRecallBehavioral?.ensureGovernanceFiles !== false || config.governance?.ensureBacklogFiles !== false) {
+            await ensureGovernanceBacklogFiles(workspaceDir);
           }
 
           const bootstrapFiles = context.bootstrapFiles;
@@ -948,27 +955,27 @@ const chronicleEnginePlugin = {
           const exists = bootstrapFiles.some((f) => {
             if (!f || typeof f !== "object") return false;
             const pathValue = (f as Record<string, unknown>).path;
-            return typeof pathValue === "string" && pathValue === "SELF_IMPROVEMENT_REMINDER.md";
+            return typeof pathValue === "string" && pathValue === "AUTORECALL_BEHAVIORAL_GUIDANCE.md";
           });
           if (exists) return;
 
-          const content = await loadSelfImprovementReminderContent(workspaceDir);
+          const content = await loadBehavioralGuidanceReminderContent(workspaceDir);
           bootstrapFiles.push({
-            path: "SELF_IMPROVEMENT_REMINDER.md",
+            path: "AUTORECALL_BEHAVIORAL_GUIDANCE.md",
             content,
             virtual: true,
           });
         } catch (err) {
-          api.logger.warn(`self-improvement: bootstrap inject failed: ${String(err)}`);
+          api.logger.warn(`auto-recall.behavioral-guidance: bootstrap inject failed: ${String(err)}`);
         }
       }, {
-        name: "openclaw-chronicle-engine.self-improvement.agent-bootstrap",
-        description: "Inject self-improvement reminder on agent bootstrap",
+        name: "openclaw-chronicle-engine.auto-recall-behavioral.agent-bootstrap",
+        description: "Inject behavioral autoRecall reminder on agent bootstrap",
       });
 
-      if (config.selfImprovement?.beforeResetNote !== false) {
+      if (config.autoRecallBehavioral?.beforeResetNote !== false) {
         registeredBeforeResetNoteHooks = true;
-        const appendSelfImprovementNote = async (event: any) => {
+        const appendBehavioralGuidanceNote = async (event: any) => {
           try {
             const action = String(event?.action || "unknown");
             const sessionKeyForLog = typeof event?.sessionKey === "string" ? event.sessionKey : "";
@@ -978,91 +985,92 @@ const chronicleEnginePlugin = {
             const commandSource = typeof contextForLog.commandSource === "string" ? contextForLog.commandSource : "";
             const contextKeys = Object.keys(contextForLog).slice(0, 8).join(",");
             api.logger.info(
-              `self-improvement: command:${action} hook start; sessionKey=${sessionKeyForLog || "(none)"}; source=${commandSource || "(unknown)"}; hasMessages=${Array.isArray(event?.messages)}; contextKeys=${contextKeys || "(none)"}`
+              `auto-recall.behavioral-guidance: command:${action} hook start; sessionKey=${sessionKeyForLog || "(none)"}; source=${commandSource || "(unknown)"}; hasMessages=${Array.isArray(event?.messages)}; contextKeys=${contextKeys || "(none)"}`
             );
 
             if (!Array.isArray(event.messages)) {
-              api.logger.warn(`self-improvement: command:${action} missing event.messages array; skip note inject`);
+              api.logger.warn(`auto-recall.behavioral-guidance: command:${action} missing event.messages array; skip note inject`);
               return;
             }
 
-            const exists = event.messages.some((m: unknown) => typeof m === "string" && m.includes(SELF_IMPROVEMENT_NOTE_PREFIX));
+            const exists = event.messages.some((m: unknown) => typeof m === "string" && m.includes(BEHAVIORAL_GUIDANCE_NOTE_PREFIX));
             if (exists) {
-              api.logger.info(`self-improvement: command:${action} note already present; skip duplicate inject`);
+              api.logger.info(`auto-recall.behavioral-guidance: command:${action} note already present; skip duplicate inject`);
               return;
             }
 
-            event.messages.push(buildSelfImprovementResetNote());
+            event.messages.push(buildBehavioralGuidanceResetNote());
             api.logger.info(
-              `self-improvement: command:${action} injected note; messages=${event.messages.length}`
+              `auto-recall.behavioral-guidance: command:${action} injected note; messages=${event.messages.length}`
             );
           } catch (err) {
-            api.logger.warn(`self-improvement: note inject failed: ${String(err)}`);
+            api.logger.warn(`auto-recall.behavioral-guidance: note inject failed: ${String(err)}`);
           }
         };
 
-        const selfImprovementNewHookOptions = {
-          name: "openclaw-chronicle-engine.self-improvement.command-new",
-          description: "Append self-improvement note before /new",
+        const behavioralGuidanceNewHookOptions = {
+          name: "openclaw-chronicle-engine.auto-recall-behavioral.command-new",
+          description: "Append behavioral guidance note before /new",
         } as const;
-        const selfImprovementResetHookOptions = {
-          name: "openclaw-chronicle-engine.self-improvement.command-reset",
-          description: "Append self-improvement note before /reset",
+        const behavioralGuidanceResetHookOptions = {
+          name: "openclaw-chronicle-engine.auto-recall-behavioral.command-reset",
+          description: "Append behavioral guidance note before /reset",
         } as const;
-        registerDurableCommandHook("command:new", appendSelfImprovementNote, selfImprovementNewHookOptions, "self-improvement");
-        registerDurableCommandHook("command:reset", appendSelfImprovementNote, selfImprovementResetHookOptions, "self-improvement");
+        registerDurableCommandHook("command:new", appendBehavioralGuidanceNote, behavioralGuidanceNewHookOptions, "auto-recall-behavioral");
+        registerDurableCommandHook("command:reset", appendBehavioralGuidanceNote, behavioralGuidanceResetHookOptions, "auto-recall-behavioral");
         api.on("gateway_start", () => {
-          registerDurableCommandHook("command:new", appendSelfImprovementNote, selfImprovementNewHookOptions, "self-improvement");
-          registerDurableCommandHook("command:reset", appendSelfImprovementNote, selfImprovementResetHookOptions, "self-improvement");
-          api.logger.info("self-improvement: command hooks refreshed after gateway_start");
+          registerDurableCommandHook("command:new", appendBehavioralGuidanceNote, behavioralGuidanceNewHookOptions, "auto-recall-behavioral");
+          registerDurableCommandHook("command:reset", appendBehavioralGuidanceNote, behavioralGuidanceResetHookOptions, "auto-recall-behavioral");
+          api.logger.info("auto-recall.behavioral-guidance: command hooks refreshed after gateway_start");
         }, { priority: 12 });
       }
 
       api.logger.info(
         registeredBeforeResetNoteHooks
-          ? "self-improvement: integrated hooks registered (agent:bootstrap, command:new, command:reset)"
-          : "self-improvement: integrated hooks registered (agent:bootstrap)"
+          ? "auto-recall.behavioral-guidance: reminder hooks registered (agent:bootstrap, command:new, command:reset)"
+          : "auto-recall.behavioral-guidance: reminder hooks registered (agent:bootstrap)"
       );
     }
 
     // ========================================================================
-    // Integrated Memory Reflection (reflection)
+    // Behavioral AutoRecall Guidance
     // ========================================================================
 
-    if (config.sessionStrategy === "memoryReflection") {
-      const reflectionErrorReminderMaxEntries =
-        parsePositiveInt(config.memoryReflection?.errorReminderMaxEntries) ?? DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES;
-      const reflectionDedupeErrorSignals = config.memoryReflection?.dedupeErrorSignals !== false;
-      const reflectionInjectMode = config.memoryReflection?.injectMode ?? "inheritance+derived";
-      const reflectionRecallMode = config.memoryReflection?.recall?.mode ?? DEFAULT_REFLECTION_RECALL_MODE;
-      const reflectionRecallTopK = config.memoryReflection?.recall?.topK ?? DEFAULT_REFLECTION_RECALL_TOP_K;
-      const reflectionRecallIncludeKinds = config.memoryReflection?.recall?.includeKinds ?? DEFAULT_REFLECTION_RECALL_INCLUDE_KINDS;
-      const reflectionRecallMaxAgeDays = config.memoryReflection?.recall?.maxAgeDays ?? DEFAULT_REFLECTION_RECALL_MAX_AGE_DAYS;
-      const reflectionRecallMaxEntriesPerKey = config.memoryReflection?.recall?.maxEntriesPerKey ?? DEFAULT_REFLECTION_RECALL_MAX_ENTRIES_PER_KEY;
-      const reflectionRecallMinRepeated = config.memoryReflection?.recall?.minRepeated ?? DEFAULT_REFLECTION_RECALL_MIN_REPEATED;
-      const reflectionRecallMinScore = config.memoryReflection?.recall?.minScore ?? DEFAULT_REFLECTION_RECALL_MIN_SCORE;
-      const reflectionRecallMinPromptLength = config.memoryReflection?.recall?.minPromptLength ?? DEFAULT_REFLECTION_RECALL_MIN_PROMPT_LENGTH;
+    if (config.sessionStrategy === "autoRecall" && config.autoRecallBehavioral?.enabled === true) {
+      const behavioralErrorReminderMaxEntries =
+        parsePositiveInt(config.autoRecallBehavioral?.errorReminderMaxEntries) ?? DEFAULT_BEHAVIORAL_ERROR_REMINDER_MAX_ENTRIES;
+      const behavioralDedupeErrorSignals = config.autoRecallBehavioral?.dedupeErrorSignals !== false;
+      const behavioralInjectMode = config.autoRecallBehavioral?.injectMode ?? "durable+adaptive";
+      const behavioralRecallMode = config.autoRecallBehavioral?.recall?.mode ?? DEFAULT_BEHAVIORAL_RECALL_MODE;
+      const behavioralRecallTopK = config.autoRecallBehavioral?.recall?.topK ?? DEFAULT_BEHAVIORAL_RECALL_TOP_K;
+      const behavioralRecallIncludeKinds = config.autoRecallBehavioral?.recall?.includeKinds ?? DEFAULT_BEHAVIORAL_RECALL_INCLUDE_KINDS;
+      const behavioralRecallMaxAgeDays = config.autoRecallBehavioral?.recall?.maxAgeDays ?? DEFAULT_BEHAVIORAL_RECALL_MAX_AGE_DAYS;
+      const behavioralRecallMaxEntriesPerKey = config.autoRecallBehavioral?.recall?.maxEntriesPerKey ?? DEFAULT_BEHAVIORAL_RECALL_MAX_ENTRIES_PER_KEY;
+      const behavioralRecallMinRepeated = config.autoRecallBehavioral?.recall?.minRepeated ?? DEFAULT_BEHAVIORAL_RECALL_MIN_REPEATED;
+      const behavioralRecallMinScore = config.autoRecallBehavioral?.recall?.minScore ?? DEFAULT_BEHAVIORAL_RECALL_MIN_SCORE;
+      const behavioralRecallMinPromptLength = config.autoRecallBehavioral?.recall?.minPromptLength ?? DEFAULT_BEHAVIORAL_RECALL_MIN_PROMPT_LENGTH;
 
-      const reflectionPromptPlanner = createReflectionPromptPlanner(
+      const behavioralPromptPlanner = createAutoRecallBehavioralPlanner(
         {
-          injectMode: reflectionInjectMode,
-          dedupeErrorSignals: reflectionDedupeErrorSignals,
-          errorReminderMaxEntries: reflectionErrorReminderMaxEntries,
-          errorScanMaxChars: DEFAULT_REFLECTION_ERROR_SCAN_MAX_CHARS,
+          enabled: true,
+          injectMode: behavioralInjectMode,
+          dedupeErrorSignals: behavioralDedupeErrorSignals,
+          errorReminderMaxEntries: behavioralErrorReminderMaxEntries,
+          errorScanMaxChars: DEFAULT_BEHAVIORAL_ERROR_SCAN_MAX_CHARS,
           recall: {
-            mode: reflectionRecallMode,
-            topK: reflectionRecallTopK,
-            includeKinds: reflectionRecallIncludeKinds,
-            maxAgeDays: reflectionRecallMaxAgeDays,
-            maxEntriesPerKey: reflectionRecallMaxEntriesPerKey,
-            minRepeated: reflectionRecallMinRepeated,
-            minScore: reflectionRecallMinScore,
-            minPromptLength: reflectionRecallMinPromptLength,
+            mode: behavioralRecallMode,
+            topK: behavioralRecallTopK,
+            includeKinds: behavioralRecallIncludeKinds,
+            maxAgeDays: behavioralRecallMaxAgeDays,
+            maxEntriesPerKey: behavioralRecallMaxEntriesPerKey,
+            minRepeated: behavioralRecallMinRepeated,
+            minScore: behavioralRecallMinScore,
+            minPromptLength: behavioralRecallMinPromptLength,
           },
         },
         {
           sessionState: sessionExposureState,
-          recallReflection: async (params) => {
+          recallBehavioral: async (params) => {
             const resolved = resolveBackendCallContext(
               {
                 userId: params.userId,
@@ -1074,18 +1082,18 @@ const chronicleEnginePlugin = {
             );
             if (!resolved.hasPrincipalIdentity) {
               api.logger.warn(
-                `memory-reflection: reflection-recall skipped remote call (missing runtime principal: ${resolved.missingPrincipalFields.join(", ")})`
+                `auto-recall.behavioral-guidance: remote behavioral recall skipped (missing runtime principal: ${resolved.missingPrincipalFields.join(", ")})`
               );
               return [];
             }
-            const mode: BackendReflectionRecallMode = params.mode === "invariant-only"
+            const mode: BackendReflectionRecallMode = params.mode === "durable-only"
               ? "invariant-only"
               : "invariant+derived";
             return await memoryBackendClient.recallReflection(resolved.context, {
-              query: String(params.prompt || "reflection-context"),
+              query: String(params.prompt || "behavioral-guidance"),
               mode,
               limit: params.limit,
-              includeKinds: params.includeKinds,
+              includeKinds: params.includeKinds?.map((kind) => kind === "durable" ? "invariant" : "derived"),
               minScore: params.minScore,
             });
           },
@@ -1096,15 +1104,15 @@ const chronicleEnginePlugin = {
 
       api.on("after_tool_call", (event, ctx) => {
         const sessionKey = typeof ctx.sessionKey === "string" ? ctx.sessionKey : "";
-        if (isInternalReflectionSessionKey(sessionKey)) return;
+        if (isInternalBehavioralGuidanceSessionKey(sessionKey)) return;
         if (!sessionKey) return;
-        reflectionPromptPlanner.captureAfterToolCall(event, sessionKey);
+        behavioralPromptPlanner.captureAfterToolCall(event, sessionKey);
       }, { priority: 15 });
 
       api.on("before_prompt_build", async (event, ctx) => {
         const sessionKey = typeof ctx.sessionKey === "string" ? ctx.sessionKey : "";
-        if (isInternalReflectionSessionKey(sessionKey)) return;
-        const prependContext = await reflectionPromptPlanner.buildBeforePromptPrependContext({
+        if (isInternalBehavioralGuidanceSessionKey(sessionKey)) return;
+        const prependContext = await behavioralPromptPlanner.buildBeforePromptPrependContext({
           prompt: event?.prompt,
           agentId: ctx?.agentId,
           sessionId: ctx?.sessionId,
@@ -1118,29 +1126,29 @@ const chronicleEnginePlugin = {
       api.on("session_end", (_event, ctx) => {
         const sessionKey = typeof ctx.sessionKey === "string" ? ctx.sessionKey.trim() : "";
         if (!sessionKey) return;
-        reflectionPromptPlanner.clearSession({
+        behavioralPromptPlanner.clearSession({
           sessionKey,
           sessionId: typeof ctx.sessionId === "string" ? ctx.sessionId : undefined,
         });
-        reflectionPromptPlanner.pruneSessionState();
+        behavioralPromptPlanner.pruneSessionState();
       }, { priority: 20 });
       api.on("before_reset", (_event, ctx) => {
         const sessionKey = typeof ctx.sessionKey === "string" ? ctx.sessionKey.trim() : "";
         if (!sessionKey) return;
-        reflectionPromptPlanner.clearSession({
+        behavioralPromptPlanner.clearSession({
           sessionKey,
           sessionId: typeof ctx.sessionId === "string" ? ctx.sessionId : undefined,
         });
-        reflectionPromptPlanner.pruneSessionState();
+        behavioralPromptPlanner.pruneSessionState();
       }, { priority: 12 });
-      api.logger.info("memory-reflection: integrated hooks registered (after_tool_call, before_prompt_build[inherited-rules,error-detected], before_reset cleanup)");
+      api.logger.info("auto-recall.behavioral-guidance: hooks registered (after_tool_call, before_prompt_build[behavioral-guidance,error-detected], before_reset cleanup)");
     }
 
     if (config.sessionStrategy === "systemSessionMemory") {
-      api.logger.info("session-strategy: using systemSessionMemory (plugin memory-reflection hooks disabled)");
+      api.logger.info("session-strategy: using systemSessionMemory (plugin behavioral auto-recall hooks disabled)");
     }
     if (config.sessionStrategy === "none") {
-      api.logger.info("session-strategy: using none (plugin memory-reflection hooks disabled)");
+      api.logger.info("session-strategy: using none (plugin behavioral auto-recall hooks disabled)");
     }
 
     // ========================================================================
@@ -1187,8 +1195,11 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     throw new Error("remoteBackend.authToken is required when remoteBackend is enabled");
   }
 
-  const memoryReflectionRaw = typeof cfg.memoryReflection === "object" && cfg.memoryReflection !== null
-    ? cfg.memoryReflection as Record<string, unknown>
+  const autoRecallBehavioralRaw = typeof cfg.autoRecallBehavioral === "object" && cfg.autoRecallBehavioral !== null
+    ? cfg.autoRecallBehavioral as Record<string, unknown>
+    : null;
+  const governanceRaw = typeof cfg.governance === "object" && cfg.governance !== null
+    ? cfg.governance as Record<string, unknown>
     : null;
   const distillRaw = typeof cfg.distill === "object" && cfg.distill !== null
     ? cfg.distill as Record<string, unknown>
@@ -1196,38 +1207,44 @@ export function parsePluginConfig(value: unknown): PluginConfig {
   if (hasOwnKey(cfg as Record<string, unknown>, "sessionMemory")) {
     rejectRemovedConfigField("sessionMemory", "sessionStrategy");
   }
-  if (memoryReflectionRaw) {
-    for (const field of ["agentId", "maxInputChars", "timeoutMs", "thinkLevel", "messageCount"]) {
-      if (hasOwnKey(memoryReflectionRaw, field)) {
-        rejectRemovedConfigField(`memoryReflection.${field}`);
-      }
-    }
+  if (hasOwnKey(cfg as Record<string, unknown>, "memoryReflection")) {
+    rejectRemovedConfigField("memoryReflection", "autoRecallBehavioral");
+  }
+  if (hasOwnKey(cfg as Record<string, unknown>, "selfImprovement")) {
+    rejectRemovedConfigField("selfImprovement", "governance or autoRecallBehavioral");
   }
   const sessionStrategyRaw = cfg.sessionStrategy;
+  if (sessionStrategyRaw === "memoryReflection") {
+    throw new Error(
+      "sessionStrategy=memoryReflection is no longer supported in 1.0.0-beta.0; use sessionStrategy=autoRecall"
+    );
+  }
   const sessionStrategy: SessionStrategy =
-    sessionStrategyRaw === "systemSessionMemory" || sessionStrategyRaw === "memoryReflection" || sessionStrategyRaw === "none"
+    sessionStrategyRaw === "autoRecall" || sessionStrategyRaw === "systemSessionMemory" || sessionStrategyRaw === "none"
       ? sessionStrategyRaw
       : "systemSessionMemory";
-  const injectModeRaw = memoryReflectionRaw?.injectMode;
-  const reflectionInjectMode: ReflectionInjectMode =
-    injectModeRaw === "inheritance-only" || injectModeRaw === "inheritance+derived"
-      ? injectModeRaw
-      : "inheritance+derived";
-  const memoryReflectionRecallRaw = typeof memoryReflectionRaw?.recall === "object" && memoryReflectionRaw.recall !== null
-    ? memoryReflectionRaw.recall as Record<string, unknown>
+  const injectModeRaw = autoRecallBehavioralRaw?.injectMode;
+  const behavioralInjectMode: BehavioralGuidanceInjectMode =
+    injectModeRaw === "durable-only" || injectModeRaw === "inheritance-only"
+      ? "durable-only"
+      : injectModeRaw === "durable+adaptive" || injectModeRaw === "inheritance+derived"
+        ? "durable+adaptive"
+        : "durable+adaptive";
+  const autoRecallBehavioralRecallRaw = typeof autoRecallBehavioralRaw?.recall === "object" && autoRecallBehavioralRaw.recall !== null
+    ? autoRecallBehavioralRaw.recall as Record<string, unknown>
     : null;
-  const reflectionRecallMode: ReflectionRecallMode =
-    memoryReflectionRecallRaw?.mode === "dynamic" ? "dynamic" : DEFAULT_REFLECTION_RECALL_MODE;
-  const reflectionRecallTopK = parsePositiveInt(memoryReflectionRecallRaw?.topK) ?? DEFAULT_REFLECTION_RECALL_TOP_K;
-  const reflectionRecallIncludeKinds = parseReflectionRecallKinds(
-    memoryReflectionRecallRaw?.includeKinds,
-    DEFAULT_REFLECTION_RECALL_INCLUDE_KINDS
+  const behavioralRecallMode: BehavioralRecallMode =
+    autoRecallBehavioralRecallRaw?.mode === "dynamic" ? "dynamic" : DEFAULT_BEHAVIORAL_RECALL_MODE;
+  const behavioralRecallTopK = parsePositiveInt(autoRecallBehavioralRecallRaw?.topK) ?? DEFAULT_BEHAVIORAL_RECALL_TOP_K;
+  const behavioralRecallIncludeKinds = parseBehavioralRecallKinds(
+    autoRecallBehavioralRecallRaw?.includeKinds,
+    DEFAULT_BEHAVIORAL_RECALL_INCLUDE_KINDS
   );
-  const reflectionRecallMaxAgeDays = parsePositiveInt(memoryReflectionRecallRaw?.maxAgeDays) ?? DEFAULT_REFLECTION_RECALL_MAX_AGE_DAYS;
-  const reflectionRecallMaxEntriesPerKey = parsePositiveInt(memoryReflectionRecallRaw?.maxEntriesPerKey) ?? DEFAULT_REFLECTION_RECALL_MAX_ENTRIES_PER_KEY;
-  const reflectionRecallMinRepeated = parsePositiveInt(memoryReflectionRecallRaw?.minRepeated) ?? DEFAULT_REFLECTION_RECALL_MIN_REPEATED;
-  const reflectionRecallMinScore = parseNonNegativeNumber(memoryReflectionRecallRaw?.minScore) ?? DEFAULT_REFLECTION_RECALL_MIN_SCORE;
-  const reflectionRecallMinPromptLength = parsePositiveInt(memoryReflectionRecallRaw?.minPromptLength) ?? DEFAULT_REFLECTION_RECALL_MIN_PROMPT_LENGTH;
+  const behavioralRecallMaxAgeDays = parsePositiveInt(autoRecallBehavioralRecallRaw?.maxAgeDays) ?? DEFAULT_BEHAVIORAL_RECALL_MAX_AGE_DAYS;
+  const behavioralRecallMaxEntriesPerKey = parsePositiveInt(autoRecallBehavioralRecallRaw?.maxEntriesPerKey) ?? DEFAULT_BEHAVIORAL_RECALL_MAX_ENTRIES_PER_KEY;
+  const behavioralRecallMinRepeated = parsePositiveInt(autoRecallBehavioralRecallRaw?.minRepeated) ?? DEFAULT_BEHAVIORAL_RECALL_MIN_REPEATED;
+  const behavioralRecallMinScore = parseNonNegativeNumber(autoRecallBehavioralRecallRaw?.minScore) ?? DEFAULT_BEHAVIORAL_RECALL_MIN_SCORE;
+  const behavioralRecallMinPromptLength = parsePositiveInt(autoRecallBehavioralRecallRaw?.minPromptLength) ?? DEFAULT_BEHAVIORAL_RECALL_MIN_PROMPT_LENGTH;
   if (cfg.autoRecallSelectionMode === "setwise-v2") {
     throw new Error("autoRecallSelectionMode=setwise-v2 is no longer supported; use mmr");
   }
@@ -1236,6 +1253,26 @@ export function parsePluginConfig(value: unknown): PluginConfig {
       ? "mmr"
       : DEFAULT_AUTO_RECALL_SELECTION_MODE;
   const distillEveryTurns = parsePositiveInt(distillRaw?.everyTurns) ?? DEFAULT_DISTILL_EVERY_TURNS;
+  const governanceEnabled = governanceRaw
+    ? governanceRaw.enabled !== false
+    : true;
+  const ensureGovernanceFiles = typeof autoRecallBehavioralRaw?.ensureGovernanceFiles === "boolean"
+    ? autoRecallBehavioralRaw.ensureGovernanceFiles
+    : typeof governanceRaw?.ensureBacklogFiles === "boolean"
+      ? governanceRaw.ensureBacklogFiles
+      : true;
+  const behavioralBeforeResetNote = typeof autoRecallBehavioralRaw?.beforeResetNote === "boolean"
+    ? autoRecallBehavioralRaw.beforeResetNote
+    : true;
+  const behavioralSkipSubagentBootstrap = typeof autoRecallBehavioralRaw?.skipSubagentBootstrap === "boolean"
+    ? autoRecallBehavioralRaw.skipSubagentBootstrap
+    : true;
+  const autoRecallExcludeBehavioral = typeof cfg.autoRecallExcludeBehavioral === "boolean"
+    ? cfg.autoRecallExcludeBehavioral
+    : typeof cfg.autoRecallExcludeReflection === "boolean"
+      ? cfg.autoRecallExcludeReflection
+      : DEFAULT_AUTO_RECALL_EXCLUDE_BEHAVIORAL;
+  const behavioralEnabled = sessionStrategy === "autoRecall" && autoRecallBehavioralRaw?.enabled !== false;
 
   return {
     autoCapture: cfg.autoCapture !== false,
@@ -1246,9 +1283,8 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     autoRecallTopK: parsePositiveInt(cfg.autoRecallTopK) ?? DEFAULT_AUTO_RECALL_TOP_K,
     autoRecallSelectionMode,
     autoRecallCategories: parseMemoryCategories(cfg.autoRecallCategories, DEFAULT_AUTO_RECALL_CATEGORIES),
-    autoRecallExcludeReflection: typeof cfg.autoRecallExcludeReflection === "boolean"
-      ? cfg.autoRecallExcludeReflection
-      : DEFAULT_AUTO_RECALL_EXCLUDE_REFLECTION,
+    autoRecallExcludeBehavioral,
+    autoRecallExcludeReflection: autoRecallExcludeBehavioral,
     autoRecallMaxAgeDays: parsePositiveInt(cfg.autoRecallMaxAgeDays) ?? DEFAULT_AUTO_RECALL_MAX_AGE_DAYS,
     autoRecallMaxEntriesPerKey: parsePositiveInt(cfg.autoRecallMaxEntriesPerKey) ?? DEFAULT_AUTO_RECALL_MAX_ENTRIES_PER_KEY,
     captureAssistant: cfg.captureAssistant === true,
@@ -1275,52 +1311,29 @@ export function parsePluginConfig(value: unknown): PluginConfig {
         chunkChars: DEFAULT_DISTILL_CHUNK_CHARS,
         chunkOverlapMessages: DEFAULT_DISTILL_CHUNK_OVERLAP_MESSAGES,
       },
-    selfImprovement: typeof cfg.selfImprovement === "object" && cfg.selfImprovement !== null
-      ? {
-        enabled: (cfg.selfImprovement as Record<string, unknown>).enabled !== false,
-        beforeResetNote: (cfg.selfImprovement as Record<string, unknown>).beforeResetNote !== false,
-        skipSubagentBootstrap: (cfg.selfImprovement as Record<string, unknown>).skipSubagentBootstrap !== false,
-        ensureLearningFiles: (cfg.selfImprovement as Record<string, unknown>).ensureLearningFiles !== false,
-      }
-      : {
-        enabled: true,
-        beforeResetNote: true,
-        skipSubagentBootstrap: true,
-        ensureLearningFiles: true,
+    governance: {
+      enabled: governanceEnabled,
+      ensureBacklogFiles: ensureGovernanceFiles,
+    },
+    autoRecallBehavioral: {
+      enabled: behavioralEnabled,
+      injectMode: behavioralInjectMode,
+      errorReminderMaxEntries: parsePositiveInt(autoRecallBehavioralRaw?.errorReminderMaxEntries) ?? DEFAULT_BEHAVIORAL_ERROR_REMINDER_MAX_ENTRIES,
+      dedupeErrorSignals: autoRecallBehavioralRaw?.dedupeErrorSignals !== false,
+      beforeResetNote: behavioralBeforeResetNote,
+      skipSubagentBootstrap: behavioralSkipSubagentBootstrap,
+      ensureGovernanceFiles,
+      recall: {
+        mode: behavioralRecallMode,
+        topK: behavioralRecallTopK,
+        includeKinds: behavioralRecallIncludeKinds,
+        maxAgeDays: behavioralRecallMaxAgeDays,
+        maxEntriesPerKey: behavioralRecallMaxEntriesPerKey,
+        minRepeated: behavioralRecallMinRepeated,
+        minScore: behavioralRecallMinScore,
+        minPromptLength: behavioralRecallMinPromptLength,
       },
-    memoryReflection: memoryReflectionRaw
-      ? {
-        enabled: sessionStrategy === "memoryReflection",
-        injectMode: reflectionInjectMode,
-        errorReminderMaxEntries: parsePositiveInt(memoryReflectionRaw.errorReminderMaxEntries) ?? DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES,
-        dedupeErrorSignals: memoryReflectionRaw.dedupeErrorSignals !== false,
-        recall: {
-          mode: reflectionRecallMode,
-          topK: reflectionRecallTopK,
-          includeKinds: reflectionRecallIncludeKinds,
-          maxAgeDays: reflectionRecallMaxAgeDays,
-          maxEntriesPerKey: reflectionRecallMaxEntriesPerKey,
-          minRepeated: reflectionRecallMinRepeated,
-          minScore: reflectionRecallMinScore,
-          minPromptLength: reflectionRecallMinPromptLength,
-        },
-      }
-      : {
-        enabled: sessionStrategy === "memoryReflection",
-        injectMode: "inheritance+derived",
-        errorReminderMaxEntries: DEFAULT_REFLECTION_ERROR_REMINDER_MAX_ENTRIES,
-        dedupeErrorSignals: DEFAULT_REFLECTION_DEDUPE_ERROR_SIGNALS,
-        recall: {
-          mode: DEFAULT_REFLECTION_RECALL_MODE,
-          topK: DEFAULT_REFLECTION_RECALL_TOP_K,
-          includeKinds: [...DEFAULT_REFLECTION_RECALL_INCLUDE_KINDS],
-          maxAgeDays: DEFAULT_REFLECTION_RECALL_MAX_AGE_DAYS,
-          maxEntriesPerKey: DEFAULT_REFLECTION_RECALL_MAX_ENTRIES_PER_KEY,
-          minRepeated: DEFAULT_REFLECTION_RECALL_MIN_REPEATED,
-          minScore: DEFAULT_REFLECTION_RECALL_MIN_SCORE,
-          minPromptLength: DEFAULT_REFLECTION_RECALL_MIN_PROMPT_LENGTH,
-        },
-      },
+    },
     remoteBackend: {
       enabled: true,
       baseURL: remoteBackendBaseURL,

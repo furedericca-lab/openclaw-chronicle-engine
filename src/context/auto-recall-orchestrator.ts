@@ -1,12 +1,25 @@
-import type { BackendRecallGenericRow } from "../backend-client/types.js";
+import type { BackendRecallGenericRow, BackendRecallReflectionRow } from "../backend-client/types.js";
+import {
+  extractBehavioralGuidanceErrorSignalFromToolCall,
+  type BehavioralGuidanceToolCallEvent,
+} from "./behavioral-guidance-error-signals.js";
 import {
   orchestrateDynamicRecall,
   type DynamicRecallResult,
   type DynamicRecallSessionState,
 } from "./recall-engine.js";
+import {
+  joinPrependContextBlocks,
+  renderBehavioralGuidanceBlock,
+  renderErrorDetectedBlock,
+} from "./prompt-block-renderer.js";
+import type { ReflectionErrorSignal, SessionExposureState } from "./session-exposure-state.js";
 
 export type AutoRecallSelectionMode = "mmr";
 export type AutoRecallCategory = "preference" | "fact" | "decision" | "entity" | "other" | "reflection";
+export type BehavioralGuidanceInjectMode = "durable-only" | "durable+adaptive";
+export type BehavioralRecallMode = "fixed" | "dynamic";
+export type BehavioralRecallKind = "durable" | "adaptive";
 
 export interface AutoRecallPlannerConfig {
   enabled: boolean;
@@ -15,7 +28,7 @@ export interface AutoRecallPlannerConfig {
   topK: number;
   selectionMode: AutoRecallSelectionMode;
   categories?: AutoRecallCategory[];
-  excludeReflection?: boolean;
+  excludeBehavioral?: boolean;
   maxAgeDays?: number;
   maxEntriesPerKey?: number;
 }
@@ -30,7 +43,7 @@ export interface AutoRecallPlannerDependencies {
     sessionKey?: string;
     userId?: string;
     categories?: AutoRecallCategory[];
-    excludeReflection?: boolean;
+    excludeBehavioral?: boolean;
     maxAgeDays?: number;
     maxEntriesPerKey?: number;
   }) => Promise<BackendRecallGenericRow[]>;
@@ -47,6 +60,45 @@ export interface AutoRecallPlanParams {
   sessionId?: string;
   sessionKey?: string;
   userId?: string;
+}
+
+export interface AutoRecallBehavioralPlannerConfig {
+  enabled: boolean;
+  injectMode: BehavioralGuidanceInjectMode;
+  dedupeErrorSignals: boolean;
+  errorReminderMaxEntries: number;
+  errorScanMaxChars: number;
+  recall: {
+    mode: BehavioralRecallMode;
+    topK: number;
+    includeKinds: BehavioralRecallKind[];
+    maxAgeDays: number;
+    maxEntriesPerKey: number;
+    minRepeated: number;
+    minScore: number;
+    minPromptLength: number;
+  };
+}
+
+export interface AutoRecallBehavioralPlannerDependencies {
+  sessionState: SessionExposureState;
+  recallBehavioral: (params: {
+    prompt?: string;
+    agentId: string;
+    sessionId: string;
+    sessionKey?: string;
+    userId?: string;
+    mode: "durable-only" | "durable+adaptive";
+    limit: number;
+    includeKinds?: BehavioralRecallKind[];
+    minScore?: number;
+  }) => Promise<BackendRecallReflectionRow[]>;
+  sanitizeForContext: (text: string) => string;
+  logger?: {
+    info?: (message: string) => void;
+    debug?: (message: string) => void;
+    warn?: (message: string) => void;
+  };
 }
 
 interface AutoRecallResultRow {
@@ -73,7 +125,7 @@ export function createAutoRecallPlanner(
     const topK = Math.max(1, normalizePositiveInt(config.topK, 3));
 
     return await orchestrateDynamicRecall({
-      channelName: "auto-recall",
+      channelName: "auto-recall-context",
       prompt: params.prompt,
       minPromptLength: config.minPromptLength,
       minRepeated: config.minRepeated,
@@ -93,7 +145,7 @@ export function createAutoRecallPlanner(
           sessionKey: params.sessionKey,
           userId: params.userId,
           categories: config.categories,
-          excludeReflection: config.excludeReflection,
+          excludeBehavioral: config.excludeBehavioral,
           maxAgeDays: config.maxAgeDays,
           maxEntriesPerKey: config.maxEntriesPerKey,
         }));
@@ -106,6 +158,157 @@ export function createAutoRecallPlanner(
   };
 
   return { plan };
+}
+
+export function createAutoRecallBehavioralPlanner(
+  config: AutoRecallBehavioralPlannerConfig,
+  deps: AutoRecallBehavioralPlannerDependencies
+): {
+  captureAfterToolCall: (event: BehavioralGuidanceToolCallEvent, sessionKey: string) => void;
+  buildBeforePromptPrependContext: (params: {
+    prompt?: string;
+    agentId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    userId?: string;
+  }) => Promise<string | undefined>;
+  getRecentErrorSignals: (sessionKey: string, maxEntries: number) => ReflectionErrorSignal[];
+  clearSession: (context: { sessionKey?: string; sessionId?: string }) => void;
+  pruneSessionState: () => void;
+  invalidateAgentCache: (_agentId: string) => void;
+} {
+  if (typeof deps.recallBehavioral !== "function") {
+    throw new Error("auto-recall behavioral planner requires remote recallBehavioral dependency");
+  }
+
+  const buildBehavioralRecallPrependContext = async (params: {
+    prompt?: string;
+    agentId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    userId?: string;
+  }): Promise<string | undefined> => {
+    const agentId = typeof params.agentId === "string" && params.agentId.trim() ? params.agentId.trim() : "main";
+    const sessionId = params.sessionId || params.sessionKey || "default";
+
+    if (config.recall.mode === "fixed") {
+      const rows = await deps.recallBehavioral({
+        prompt: params.prompt,
+        agentId,
+        sessionId,
+        sessionKey: params.sessionKey,
+        userId: params.userId,
+        mode: "durable-only",
+        limit: Math.max(1, Math.min(20, normalizePositiveInt(config.recall.topK, 6))),
+        includeKinds: config.recall.includeKinds,
+      });
+      const visible = rows
+        .slice(0, 6)
+        .map((row, index) => `${index + 1}. ${deps.sanitizeForContext(row.text)}`);
+      if (visible.length === 0) return undefined;
+      return renderBehavioralGuidanceBlock(visible);
+    }
+
+    const topK = Math.max(1, normalizePositiveInt(config.recall.topK, 1));
+    const result = await orchestrateDynamicRecall({
+      channelName: "auto-recall-behavioral",
+      prompt: params.prompt,
+      minPromptLength: config.recall.minPromptLength,
+      minRepeated: config.recall.minRepeated,
+      topK,
+      sessionId,
+      state: deps.sessionState.behavioralRecallState,
+      outputTag: "behavioral-guidance",
+      headerLines: [
+        "Dynamic behavioral guidance selected by Auto-Recall. Treat as durable guidance unless user or higher-priority system instructions override.",
+      ],
+      logger: deps.logger,
+      loadCandidates: async () => {
+        const rows = await deps.recallBehavioral({
+          prompt: params.prompt,
+          agentId,
+          sessionId,
+          sessionKey: params.sessionKey,
+          userId: params.userId,
+          mode: "durable+adaptive",
+          limit: topK,
+          includeKinds: config.recall.includeKinds,
+          minScore: config.recall.minScore,
+        });
+        return rows.slice(0, topK);
+      },
+      formatLine: (row, index) =>
+        `${index + 1}. ${deps.sanitizeForContext(row.text)} (${(row.score * 100).toFixed(0)}%)`,
+    });
+    return result?.prependContext;
+  };
+
+  const captureAfterToolCall = (event: BehavioralGuidanceToolCallEvent, sessionKey: string) => {
+    if (!sessionKey.trim()) return;
+    deps.sessionState.pruneBehavioralGuidanceSessionState();
+    const signal = extractBehavioralGuidanceErrorSignalFromToolCall(event, config.errorScanMaxChars);
+    if (!signal) return;
+    deps.sessionState.addBehavioralGuidanceErrorSignal(sessionKey, signal, config.dedupeErrorSignals);
+  };
+
+  const buildBeforePromptPrependContext = async (params: {
+    prompt?: string;
+    agentId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    userId?: string;
+  }): Promise<string | undefined> => {
+    deps.sessionState.pruneBehavioralGuidanceSessionState();
+    const blocks: string[] = [];
+
+    if (config.injectMode === "durable-only" || config.injectMode === "durable+adaptive") {
+      try {
+        const inherited = await buildBehavioralRecallPrependContext(params);
+        if (inherited) blocks.push(inherited);
+      } catch (err) {
+        deps.logger?.warn?.(`auto-recall.behavioral-guidance: guidance injection failed: ${String(err)}`);
+      }
+    }
+
+    const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : "";
+    if (sessionKey) {
+      const pending = deps.sessionState.getPendingBehavioralGuidanceErrorSignalsForPrompt(
+        sessionKey,
+        config.errorReminderMaxEntries
+      );
+      const errorBlock = renderErrorDetectedBlock(pending);
+      if (errorBlock) blocks.push(errorBlock);
+    }
+
+    return joinPrependContextBlocks(blocks);
+  };
+
+  const getRecentErrorSignals = (sessionKey: string, maxEntries: number): ReflectionErrorSignal[] =>
+    deps.sessionState.getRecentBehavioralGuidanceErrorSignals(sessionKey, maxEntries);
+
+  const clearSession = (context: { sessionKey?: string; sessionId?: string }) => {
+    const sessionKey = typeof context.sessionKey === "string" ? context.sessionKey.trim() : "";
+    if (sessionKey) {
+      deps.sessionState.clearBehavioralGuidanceErrorSignalsForSession(sessionKey);
+    }
+    deps.sessionState.clearDynamicRecallForContext({
+      sessionKey,
+      sessionId: context.sessionId,
+    });
+  };
+
+  const pruneSessionState = () => {
+    deps.sessionState.pruneBehavioralGuidanceSessionState();
+  };
+
+  return {
+    captureAfterToolCall,
+    buildBeforePromptPrependContext,
+    getRecentErrorSignals,
+    clearSession,
+    pruneSessionState,
+    invalidateAgentCache: () => {},
+  };
 }
 
 function normalizePositiveInt(value: unknown, fallback: number): number {
@@ -122,4 +325,51 @@ function mapBackendRowsToRecallResults(rows: BackendRecallGenericRow[]): AutoRec
     scope: row.scope,
     score: Number.isFinite(row.score) ? Number(row.score) : 0,
   }));
+}
+
+export type ReflectionInjectMode = "inheritance-only" | "inheritance+derived";
+export type ReflectionRecallMode = BehavioralRecallMode;
+export type ReflectionItemKind = "invariant" | "derived";
+export type ReflectionPromptPlannerConfig = Omit<AutoRecallBehavioralPlannerConfig, "injectMode"> & {
+  injectMode: ReflectionInjectMode;
+  recall: Omit<AutoRecallBehavioralPlannerConfig["recall"], "includeKinds"> & {
+    includeKinds: ReflectionItemKind[];
+  };
+};
+export type ReflectionPromptPlannerDependencies = Omit<AutoRecallBehavioralPlannerDependencies, "recallBehavioral"> & {
+  recallReflection: (params: {
+    prompt?: string;
+    agentId: string;
+    sessionId: string;
+    sessionKey?: string;
+    userId?: string;
+    mode: "invariant-only" | "invariant+derived";
+    limit: number;
+    includeKinds?: ReflectionItemKind[];
+    minScore?: number;
+  }) => Promise<BackendRecallReflectionRow[]>;
+};
+
+export function createReflectionPromptPlanner(
+  config: ReflectionPromptPlannerConfig,
+  deps: ReflectionPromptPlannerDependencies
+) {
+  return createAutoRecallBehavioralPlanner(
+    {
+      ...config,
+      injectMode: config.injectMode === "inheritance-only" ? "durable-only" : "durable+adaptive",
+      recall: {
+        ...config.recall,
+        includeKinds: config.recall.includeKinds.map((kind) => kind === "invariant" ? "durable" : "adaptive"),
+      },
+    },
+    {
+      ...deps,
+      recallBehavioral: async (params) => deps.recallReflection({
+        ...params,
+        mode: params.mode === "durable-only" ? "invariant-only" : "invariant+derived",
+        includeKinds: params.includeKinds?.map((kind) => kind === "durable" ? "invariant" : "derived"),
+      }),
+    }
+  );
 }

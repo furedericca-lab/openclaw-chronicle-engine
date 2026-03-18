@@ -7,12 +7,13 @@ Snapshot note:
 - this contract records the refreshed 2026-03-17 internal design boundary for the context-engine split;
 - it is design guidance for current module placement and orchestration seams, while `openclaw.plugin.json` remains the config/schema authority.
 - any older command-triggered reflection-generation wording in this snapshot is superseded by `../runtime-architecture.md` and `../remote-memory-backend-2026-03-18/`.
+- current canonical naming for prompt-time orchestration is `autoRecall` plus `governance`; any reflection/self-improvement wording below is historical snapshot context only.
 
 ## API Contracts
 
 This branch does **not** introduce a new public OpenClaw plugin contract. The external contract remains:
 - plugin kind: `memory`
-- current memory tools and self-improvement tools
+- current memory tools and governance tools
 - current config schema in `openclaw.plugin.json`
 
 Internal contracts to introduce in this branch:
@@ -46,7 +47,7 @@ Contract rule:
 - orchestration may decide whether to inject or suppress a block;
 - orchestration must not request scopes or perform read-authority filtering locally.
 
-### Reflection recall provider
+### Behavioral-guidance recall provider
 Request shape:
 - query: string
 - actor:
@@ -54,7 +55,7 @@ Request shape:
   - agentId: string
   - sessionId: string
   - sessionKey: string
-- mode: `invariant-only` | `invariant+derived`
+- mode: `durable-only` | `durable+adaptive`
 - limits/config snapshot:
   - topK
   - minPromptLength
@@ -69,7 +70,7 @@ Response shape:
 - optional block-plan metadata keyed by requested high-level mode
 
 Contract rule:
-- `mode` defaults to `invariant+derived`;
+- `mode` defaults to the mixed durable/adaptive behavioral-guidance path;
 - adapter/context do not expose or depend on backend-internal kind selection rules beyond the stable mode contract.
 
 ### Error-signal provider
@@ -86,7 +87,7 @@ Response shape:
 
 ### Context block renderer
 Input:
-- tag: `relevant-memories` | `inherited-rules` | `error-detected`
+- tag: `relevant-memories` | `behavioral-guidance` | `error-detected`
 - rows/signals
 - wrapping mode (`wrapUntrustedData`, header lines, numbering rules)
 
@@ -130,7 +131,7 @@ Validation rules:
 - Docs must not claim a shipped standalone ContextEngine.
 
 Compatibility policy:
-- The public plugin kind, tool names, and current config keys stay stable.
+- The public plugin kind stays stable, while canonical tool/config wording now favors governance and autoRecall behavioral guidance.
 - Internal orchestration/file-layout changes are acceptable when tests stay green.
 - Context-layer work must not recreate local retrieval/scope authority.
 
@@ -139,4 +140,4 @@ Compatibility policy:
 - Only backend-authoritative rows may be rendered into prompt blocks.
 - Orchestration must not widen visibility by adding local scope or ACL logic.
 - Error signals must remain summarized; no raw sensitive payload dumping into docs/tests.
-- Reflection-derived blocks must preserve current untrusted-data framing semantics when surfaced to the model.
+- Behavioral-guidance blocks must preserve current untrusted-data framing semantics when surfaced to the model.
