@@ -238,7 +238,7 @@ distill 请求
 | distill inline-messages 清洗 + artifact 持久化 | 支持 | backend 权威执行路径 |
 | distill `session-transcript` source | 支持 | backend 持久化 transcript + 异步 distill 执行 |
 | 每 N 个 user turn 自动 distill | 支持 | runtime cadence + backend-native `session-transcript` jobs |
-| `session-lessons` 模式 | 支持 | 负责 lesson、cause、fix、prevention、stable decision、durable practice |
+| `session-lessons` 模式 | 支持 | 负责 lesson、cause、fix、prevention、stable decision、durable practice，并对 stable decision / durable practice 使用 evidence gate 升格 |
 | `governance-candidates` 模式 | 支持 | 负责值得提升的 learnings、skill extraction candidates、AGENTS/SOUL/TOOLS promotion candidates |
 | distill artifact 子类型 | 支持 | `follow-up-focus` 和 `next-turn-guidance` 取代独立 derived/open-loop reflection 持久化 |
 | `memory_store` / `memory_update` / `memory_forget` | 支持 | 远程后端工具 |
@@ -474,6 +474,11 @@ cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -
 - 文档索引：`docs/README.md`
 - 历史执行与关闭 scope：`docs/archive/`
 - 插件 schema：`openclaw.plugin.json`
+
+## License
+
+MIT
+claw.plugin.json`
 
 ## License
 

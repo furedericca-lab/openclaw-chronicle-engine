@@ -278,6 +278,7 @@ What current distill is good at:
 
 - deterministic turns-stage lesson extraction without sidecar infrastructure
 - multi-message evidence aggregation inside backend reduction windows
+- evidence-gated promotion of `stable decision` / `durable practice` rather than single-keyword escalation
 - stable artifacts and optional memory persistence under the same caller-scoped backend authority model
 - keeping all new-learning writes under `session-lessons` and `governance-candidates`
 
