@@ -6,10 +6,11 @@ description: 2026-03-17 brainstorming snapshot for context-engine-split.
 Snapshot note:
 - this file captures the refreshed 2026-03-17 decision framing after the backend-authority and `1.0.0-beta.0` cutover work;
 - it is kept as design context for current module placement, not as the canonical runtime contract.
+- any older mention of command-triggered reflection generation is superseded by `../runtime-architecture.md` and `../remote-memory-backend-2026-03-18/`.
 
 ## Problem
 
-`openclaw-chronicle-engine` still needs a cleaner boundary between backend/adapter work and turn-time context orchestration. The backend side is already Rust-owned for retrieval/ranking/scope authority, while the plugin still owns prompt gating, `<relevant-memories>` injection, `<inherited-rules>` injection, `<error-detected>` injection, session-local dedupe/suppression state, and `/new`/`/reset` reflection flows. This makes the plugin harder to evolve toward a dedicated ContextEngine path unless the remaining orchestration files are kept visibly separated from backend/adapter modules.
+`openclaw-chronicle-engine` still needs a cleaner boundary between backend/adapter work and turn-time context orchestration. The backend side is already Rust-owned for retrieval/ranking/scope authority, while the plugin still owns prompt gating, `<relevant-memories>` injection, `<inherited-rules>` injection, `<error-detected>` injection, and session-local dedupe/suppression/cleanup state. This makes the plugin harder to evolve toward a dedicated ContextEngine path unless the remaining orchestration files are kept visibly separated from backend/adapter modules.
 
 Desired outcome: keep `openclaw-chronicle-engine` as a strong backend-authoritative memory plugin while keeping prompt-time orchestration behind a thin internal seam that could later move into a separate ContextEngine implementation. Success means backend retrieval/tool behavior stays stable, prompt orchestration stays modular and visibly grouped, and migration can be validated by active-path tests before any external contract switch.
 
@@ -25,13 +26,13 @@ In scope:
 Out of scope:
 - Shipping a brand-new OpenClaw ContextEngine plugin in this branch.
 - Replacing backend-owned retrieval, ranking, scope, or tool APIs.
-- Changing `/new` or `/reset` external behavior beyond internal seam extraction.
+- Changing session cleanup behavior beyond internal seam extraction.
 - Adding lossless transcript DAG/session compaction in this branch.
 
 ## Constraints
 
 - Framework reality first: this repository currently implements `kind: "memory"` in `openclaw.plugin.json`; no fake contract migration is allowed in this branch.
-- Active paths must stay working: `before_agent_start`, `before_prompt_build`, `after_tool_call`, `agent_end`, `command:new`, and `command:reset`.
+- Active paths must stay working: `before_agent_start`, `before_prompt_build`, `after_tool_call`, `agent_end`, `session_end`, and `before_reset`.
 - Storage/retrieval concerns must remain in backend-owned Rust services and the plugin's backend adapter modules such as `src/backend-client/*` and `src/backend-tools.ts`.
 - Prompt-time exposure decisions must move toward orchestration modules without changing user-facing config keys.
 - Tests must cover unset-vs-set config behavior and hook-driven paths before any future default-path switch.
@@ -77,7 +78,7 @@ For v1, `agent_end` remains in the backend branch as ingestion logic; any furthe
 
 - Hook parity risk: moving orchestration code may subtly change injection order or dedupe behavior.
 - Config compatibility risk: `autoRecallSelectionMode`, `memoryReflection.recall.*`, and session-strategy behavior must remain unchanged.
-- Test blind spots: if `/new`/`/reset` or dynamic reflection paths are not re-verified, the refactor can silently regress.
+- Test blind spots: if session cleanup or dynamic reflection paths are not re-verified, the refactor can silently regress.
 - Documentation drift: README architecture sections must not overclaim a shipped ContextEngine.
 
 ## Open Questions

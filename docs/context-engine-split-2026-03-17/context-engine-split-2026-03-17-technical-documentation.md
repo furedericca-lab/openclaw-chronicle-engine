@@ -7,6 +7,7 @@ Snapshot note:
 - this document records the refreshed 2026-03-17 context-engine split design state;
 - it reflects the current active file-layout judgment for context orchestration;
 - `runtime-architecture.md` remains the top-level runtime/source-of-truth boundary document.
+- command-triggered reflection-generation wording from older snapshots is superseded by `runtime-architecture.md` and `docs/remote-memory-backend-2026-03-18/`.
 
 ## Canonical Architecture
 
@@ -47,8 +48,8 @@ Constraints:
   - `before_prompt_build`
   - `after_tool_call`
   - `agent_end`
-  - `command:new`
-  - `command:reset`
+  - `session_end`
+  - `before_reset`
 - Preserve retrieval behavior and scopes.
 
 Non-goals:
@@ -113,11 +114,10 @@ Prompt-time data flow after refactor:
 - `after_tool_call` + `before_prompt_build`:
   - delegated to `createReflectionPromptPlanner(...)`
   - reflection-recall injection failures log `memory-reflection: reflection-recall injection failed: ...`; prompt build continues
-- `command:new` / `command:reset`:
-  - reflection hook keeps durable registration + duplicate-trigger guard
-  - trigger is normalized to shared contract values (`new` / `reset`) before local-vs-remote branching
-  - post-hook session clear now applies to both reflection error signals and dynamic recall state
-  - failures log `memory-reflection: hook failed: ...`; command flow continues
+- `session_end` + `before_reset`:
+  - clear reflection error state and dynamic recall session state
+  - do not enqueue or generate trajectory-derived knowledge
+  - failures remain non-blocking for surrounding runtime flow
 - `agent_end`:
   - remains backend-owned auto-capture/store path in `index.ts` and backend modules
 
@@ -135,7 +135,7 @@ A later standalone ContextEngine adapter should stay thin and consume existing s
   - reflection persistence/mapping (`reflection-store.ts` and related reflection backends)
   - tool registration + memory-slot contract (`tools.ts`, `openclaw.plugin.json`)
 - During future contract migration, re-verify the same active hooks:
-  - `before_agent_start`, `before_prompt_build`, `after_tool_call`, `agent_end`, `command:new`, `command:reset`
+  - `before_agent_start`, `before_prompt_build`, `after_tool_call`, `agent_end`, `session_end`, `before_reset`
 
 ## Security model and hardening notes
 
@@ -150,7 +150,7 @@ A later standalone ContextEngine adapter should stay thin and consume existing s
   - plugin kind stays `memory`
   - public tool names and config keys stay unchanged
 - Rollback path for this refactor:
-  - if orchestration regression is found, revert the `src/context/*` delegation wiring while keeping the same active hook surfaces (`before_agent_start`, `before_prompt_build`, `after_tool_call`, `agent_end`, `command:new`, `command:reset`)
+  - if orchestration regression is found, revert the `src/context/*` delegation wiring while keeping the same active hook surfaces (`before_agent_start`, `before_prompt_build`, `after_tool_call`, `agent_end`, `session_end`, `before_reset`)
 - Migration safety note:
   - any future contract migration to a standalone ContextEngine must start from the extracted seams, then re-run active-hook parity tests before changing plugin contract exposure.
 

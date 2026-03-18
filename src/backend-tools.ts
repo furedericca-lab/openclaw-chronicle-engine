@@ -15,9 +15,10 @@ import type {
   MemoryBackendClient,
   MemoryCategory,
   ReflectionRecallMode,
+  WritableMemoryCategory,
 } from "./backend-client/types.js";
 
-const MEMORY_CATEGORIES = [
+const MEMORY_FILTER_CATEGORIES = [
   "preference",
   "fact",
   "decision",
@@ -25,6 +26,7 @@ const MEMORY_CATEGORIES = [
   "reflection",
   "other",
 ] as const;
+const MEMORY_WRITE_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
 
 const MESSAGE_ROLES = ["user", "assistant", "system"] as const;
 const DISTILL_MODES = ["session-lessons", "governance-candidates"] as const;
@@ -73,7 +75,7 @@ function registerMemoryRecallTool(
       parameters: Type.Object({
         query: Type.String({ description: "Search query for finding relevant memories" }),
         limit: Type.Optional(Type.Number({ description: "Max results to return (default: 5, max: 20)" })),
-        category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
+        category: Type.Optional(stringEnum(MEMORY_FILTER_CATEGORIES)),
         debug: Type.Optional(Type.Boolean({ description: "Include lightweight debug details." })),
       }),
       async execute(_toolCallId, params) {
@@ -160,20 +162,22 @@ function registerMemoryStoreTool(
       parameters: Type.Object({
         text: Type.String({ description: "Information to remember" }),
         importance: Type.Optional(Type.Number({ description: "Importance score 0-1 (optional)" })),
-        category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
+        category: Type.Optional(stringEnum(MEMORY_WRITE_CATEGORIES)),
       }),
       async execute(_toolCallId, params) {
         const { text, importance, category } = params as {
           text: string;
           importance?: number;
-          category?: MemoryCategory;
+          category?: WritableMemoryCategory | "reflection";
         };
+        const blocked = manualReflectionWriteSurfaceError(category);
+        if (blocked) return blocked;
         try {
           const ctx = buildToolCallContext(toolCtx, context.runtimeDefaults);
           const results = await context.backendClient.storeToolMemory(ctx, {
             text,
             importance: Number.isFinite(importance) ? clamp01(Number(importance), 0.7) : undefined,
-            category,
+            category: category as WritableMemoryCategory | undefined,
           });
           if (results.length === 0) {
             return {
@@ -275,14 +279,14 @@ function registerMemoryUpdateTool(
         }),
         text: Type.Optional(Type.String({ description: "New text content" })),
         importance: Type.Optional(Type.Number({ description: "New importance score 0-1" })),
-        category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
+        category: Type.Optional(stringEnum(MEMORY_WRITE_CATEGORIES)),
       }),
       async execute(_toolCallId, params) {
         const { memoryId, text, importance, category } = params as {
           memoryId: string;
           text?: string;
           importance?: number;
-          category?: MemoryCategory;
+          category?: WritableMemoryCategory | "reflection";
         };
         if (!text && importance === undefined && !category) {
           return {
@@ -290,6 +294,8 @@ function registerMemoryUpdateTool(
             details: { error: "no_updates" },
           };
         }
+        const blocked = manualReflectionWriteSurfaceError(category);
+        if (blocked) return blocked;
         try {
           const ctx = buildToolCallContext(toolCtx, context.runtimeDefaults);
           const resolvedId = await resolveMemoryId(ctx, context.backendClient, memoryId);
@@ -311,7 +317,7 @@ function registerMemoryUpdateTool(
             memoryId: resolvedId,
             patch: {
               text: text || undefined,
-              category,
+              category: category as WritableMemoryCategory | undefined,
               importance: Number.isFinite(importance) ? clamp01(Number(importance), 0.7) : undefined,
             },
           });
@@ -383,7 +389,7 @@ function registerMemoryListTool(
       description: "List recent caller-visible memories via remote backend (backend-owned scope semantics).",
       parameters: Type.Object({
         limit: Type.Optional(Type.Number({ description: "Max memories to list (default: 10, max: 50)" })),
-        category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
+        category: Type.Optional(stringEnum(MEMORY_FILTER_CATEGORIES)),
         offset: Type.Optional(Type.Number({ description: "Rows to skip (default: 0)" })),
       }),
       async execute(_toolCallId, params) {
@@ -695,6 +701,23 @@ function backendToolError(prefix: string, error: unknown) {
     details: {
       error: "remote_backend_error",
       message: String(error),
+    },
+  };
+}
+
+function manualReflectionWriteSurfaceError(category: unknown) {
+  if (category !== "reflection") return undefined;
+  return {
+    content: [
+      {
+        type: "text",
+        text: "category=reflection is reserved for backend-managed recall rows. Use distill for trajectory-derived knowledge.",
+      },
+    ],
+    details: {
+      error: "invalid_param",
+      code: "reflection_category_reserved",
+      category: "reflection",
     },
   };
 }

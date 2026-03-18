@@ -2,7 +2,7 @@ use crate::{
     config::AppConfig,
     error::{AppError, AppResult},
     models::{
-        clamped_limit, validate_non_empty, Actor, Category, DeleteRequest, DistillArtifact,
+        clamped_limit, manual_reflection_write_error, validate_non_empty, Actor, Category, DeleteRequest, DistillArtifact,
         DistillArtifactEvidence, DistillArtifactKind, DistillArtifactPersistence,
         DistillArtifactSubtype, DistillJobResultSummary, DistillJobStatus,
         DistillJobStatusResponse, DistillMode, DistillPersistMode, DistillSource,
@@ -1642,6 +1642,9 @@ impl LanceMemoryRepo {
         match req {
             StoreRequest::ToolStore { actor, memory } => {
                 let category = memory.category.unwrap_or(Category::Other);
+                if matches!(category, Category::Reflection) {
+                    return Err(manual_reflection_write_error());
+                }
                 let importance = memory.importance.unwrap_or(DEFAULT_IMPORTANCE);
                 let now = now_millis();
                 let scope = actor.derived_scope();
@@ -1723,6 +1726,11 @@ impl LanceMemoryRepo {
         let mut row = rows
             .pop()
             .ok_or_else(|| AppError::not_found("memory not found"))?;
+        if matches!(row.category, Category::Reflection)
+            || matches!(req.patch.category, Some(Category::Reflection))
+        {
+            return Err(manual_reflection_write_error());
+        }
         let previous_updated_at = row.updated_at;
 
         let mut text_changed = false;

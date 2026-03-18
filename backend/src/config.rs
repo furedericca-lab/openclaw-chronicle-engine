@@ -52,8 +52,6 @@ pub struct ProvidersConfig {
     pub embedding: EmbeddingProviderConfig,
     #[serde(default)]
     pub rerank: RerankProviderConfig,
-    #[serde(default)]
-    pub reflection: ReflectionProviderConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -106,18 +104,6 @@ pub struct RerankProviderConfig {
     pub timeout_ms: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
-pub struct ReflectionProviderConfig {
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub api: Option<String>,
-    #[serde(default)]
-    pub base_url: Option<String>,
-    #[serde(default)]
-    pub api_key: Option<String>,
-}
-
 #[derive(Clone, Debug, Deserialize)]
 pub struct RetrievalConfig {
     #[serde(default = "default_candidate_pool_size")]
@@ -167,7 +153,6 @@ impl Default for ProvidersConfig {
         Self {
             embedding: EmbeddingProviderConfig::default(),
             rerank: RerankProviderConfig::default(),
-            reflection: ReflectionProviderConfig::default(),
         }
     }
 }

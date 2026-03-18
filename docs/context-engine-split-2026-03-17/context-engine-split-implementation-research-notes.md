@@ -18,9 +18,9 @@ Current backend/adapter-heavy modules:
 Current orchestration-heavy ownership in `index.ts`:
 - `before_agent_start` generic auto-recall injection (`index.ts:1675-1715`).
 - `agent_end` auto-capture (`index.ts:1718+`).
-- durable hook registration for `/new` and `/reset` (`index.ts:1849+`, `1981+`, `2495+`).
 - `after_tool_call` error-signal collection (`index.ts:2063+`).
 - `before_prompt_build` for `<inherited-rules>` and `<error-detected>` injection (`index.ts:2150-2182`).
+- `session_end` + `before_reset` cleanup for reflection prompt/session state (`index.ts:1113+`).
 - parsing of reflection/auto-recall config in `parsePluginConfig` (`index.ts:2722+`).
 
 Supporting orchestration helpers already exist and are now largely under `src/context/`:

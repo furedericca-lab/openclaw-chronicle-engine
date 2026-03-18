@@ -727,6 +727,47 @@ describe("remote backend shell integration", () => {
     assert.match(result.content[0].text, /blocked because runtime principal identity is unavailable/);
   });
 
+  it("blocks manual reflection-category store/update writes before calling the backend", async () => {
+    const root = makeTempRoot();
+    const fetchMock = installFetchMock([]);
+
+    const harness = createPluginApiHarness({
+      pluginConfig: makeRemoteConfig(root, {
+        sessionStrategy: "none",
+        autoCapture: false,
+      }),
+      resolveRoot: root,
+    });
+    chronicleEnginePlugin.register(harness.api);
+
+    const toolCtx = {
+      userId: "user-reflection-write",
+      agentId: "agent-reflection-write",
+      sessionId: "session-reflection-write",
+      sessionKey: "agent:agent-reflection-write:session:stable-reflection-write",
+    };
+
+    const store = harness.instantiateTool("memory_store", toolCtx);
+    const storeResult = await store.execute("call-store-reflection", {
+      text: "Do not allow this manual reflection write",
+      category: "reflection",
+    });
+    assert.equal(storeResult.details.error, "invalid_param");
+    assert.equal(storeResult.details.code, "reflection_category_reserved");
+    assert.match(storeResult.content[0].text, /category=reflection/);
+
+    const update = harness.instantiateTool("memory_update", toolCtx);
+    const updateResult = await update.execute("call-update-reflection", {
+      memoryId: "123e4567-e89b-12d3-a456-426614174000",
+      category: "reflection",
+    });
+    assert.equal(updateResult.details.error, "invalid_param");
+    assert.equal(updateResult.details.code, "reflection_category_reserved");
+    assert.match(updateResult.content[0].text, /category=reflection/);
+
+    assert.equal(fetchMock.calls.length, 0);
+  });
+
   it("fails distill/debug management tools closed when runtime principal identity is unavailable", async () => {
     const root = makeTempRoot();
     const fetchMock = installFetchMock([]);

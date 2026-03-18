@@ -10,7 +10,7 @@ Historical and superseded material:
 
 - `archive/`: completed plans, architecture transition docs, closeout contracts, and stale operator notes preserved for reference.
 - `archive-index.md`: top-level archive map for the preserved historical scopes.
-- `context-engine-split-2026-03-17/`: refreshed 2026-03-17 architecture/design snapshot for the context-engine split design set.
+- `context-engine-split-2026-03-17/`: refreshed 2026-03-17 module-placement snapshot for the context-engine split design set. Any older command-triggered reflection-generation wording inside that snapshot is superseded by `runtime-architecture.md` and `remote-memory-backend-2026-03-18/`.
 - `remote-memory-backend-2026-03-18/`: current 2026-03-18 architecture/design snapshot for the remote backend design set.
 
 Selection rule:

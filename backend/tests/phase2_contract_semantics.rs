@@ -254,6 +254,73 @@ async fn set_row_temporal_access_metadata(
         .expect("temporal metadata update should succeed");
 }
 
+async fn mark_row_as_reflection(tmp: &Path, row_id: &str, strict_key: Option<&str>) {
+    let db_path = tmp.join("lancedb");
+    let conn = connect(db_path.to_string_lossy().as_ref())
+        .execute()
+        .await
+        .expect("lancedb should connect for reflection row update");
+    let table = conn
+        .open_table("memories_v1")
+        .execute()
+        .await
+        .expect("memories_v1 should open for reflection row update");
+    let escaped_id = row_id.replace('\'', "''");
+    let strict_key_expr = strict_key
+        .map(|value| format!("'{}'", value.replace('\'', "''")))
+        .unwrap_or_else(|| "NULL".to_string());
+    let update_result = table
+        .update()
+        .only_if(format!("id = '{escaped_id}'"))
+        .column("category", "'reflection'")
+        .column("reflection_kind", "'invariant'")
+        .column("strict_key", strict_key_expr)
+        .execute()
+        .await
+        .expect("reflection row update should succeed");
+    assert_eq!(
+        update_result.rows_updated, 1,
+        "reflection row update should affect exactly one row"
+    );
+}
+
+async fn seed_reflection_memory(
+    app: &Router,
+    tmp: &Path,
+    user_id: &str,
+    agent_id: &str,
+    session_id: &str,
+    session_key: &str,
+    text: &str,
+    idempotency_key: &str,
+) -> String {
+    let store = json!({
+        "actor": actor(user_id, agent_id, session_id, session_key),
+        "mode": "tool-store",
+        "memory": {
+            "text": text,
+            "category": "fact"
+        }
+    });
+    let (status, body) = request_json(
+        app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(store),
+        Some(idempotency_key),
+        Some((user_id, agent_id)),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "reflection seed store failed: {body}");
+    let row_id = body["results"][0]["id"]
+        .as_str()
+        .expect("seeded row id should exist")
+        .to_string();
+    mark_row_as_reflection(tmp, &row_id, Some(&format!("reflection:{row_id}"))).await;
+    row_id
+}
+
 async fn seed_legacy_table_without_vector(tmp: &Path, rows: &[(&str, &str, &str, &str)]) {
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -3797,31 +3864,27 @@ async fn debug_recall_trace_records_rerank_fallback_reason_without_exposing_runt
 
 #[tokio::test]
 async fn debug_reflection_recall_route_reports_mode_and_trace_without_leaking_extra_row_fields() {
-    let app = setup_app_with(|cfg| {
+    let tmp = std::env::temp_dir().join(format!(
+        "memory-lancedb-pro-backend-test-debug-reflection-{}",
+        Uuid::new_v4()
+    ));
+    let app = setup_app_with_at(&tmp, |cfg| {
         cfg.retrieval.diagnostics = true;
         cfg.retrieval.min_score = 0.0;
         cfg.retrieval.hard_min_score = 0.0;
     });
 
-    let store = json!({
-        "actor": actor("u1", "main", "sess-debug-reflection-store", "session-key-debug-reflection"),
-        "mode": "tool-store",
-        "memory": {
-            "text": "Always verify DNS and mount health after restart.",
-            "category": "reflection"
-        }
-    });
-    let (status, body) = request_json(
+    seed_reflection_memory(
         &app,
-        Method::POST,
-        "/v1/memories/store",
-        Some(store),
-        Some("idem-debug-reflection-store"),
-        Some(("u1", "main")),
-        &[],
+        &tmp,
+        "u1",
+        "main",
+        "sess-debug-reflection-store",
+        "session-key-debug-reflection",
+        "Always verify DNS and mount health after restart.",
+        "idem-debug-reflection-store",
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "reflection store failed: {body}");
 
     let recall = json!({
         "actor": actor("u1", "main", "sess-debug-reflection-query", "session-key-debug-reflection"),
@@ -4005,28 +4068,139 @@ async fn missing_authenticated_identity_headers_are_rejected() {
 }
 
 #[tokio::test]
-async fn reflection_recall_mode_honors_invariant_only_semantics() {
-    let app = setup_app();
+async fn manual_reflection_write_routes_are_rejected() {
+    let tmp = std::env::temp_dir().join(format!(
+        "memory-lancedb-pro-backend-test-manual-reflection-write-{}",
+        Uuid::new_v4()
+    ));
+    let app = setup_app_at(&tmp);
 
     let store_reflection = json!({
-        "actor": actor("u1", "main", "sess-ref-1", "session-key-1"),
+        "actor": actor("u1", "main", "sess-ref-store-reject", "session-key-1"),
         "mode": "tool-store",
         "memory": {
-            "text": "Verify health checks before infra edits",
+            "text": "Manual reflection write should be rejected",
             "category": "reflection"
         }
     });
-    let (status, _) = request_json(
+    let (status, body) = request_json(
         &app,
         Method::POST,
         "/v1/memories/store",
         Some(store_reflection),
-        Some("idem-ref-store"),
+        Some("idem-reflection-store-reject"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "INVALID_REQUEST");
+    assert_eq!(
+        body["error"]["message"],
+        "reflection-category rows are backend-managed and cannot be created or updated manually"
+    );
+
+    let store_fact = json!({
+        "actor": actor("u1", "main", "sess-fact-store", "session-key-1"),
+        "mode": "tool-store",
+        "memory": {
+            "text": "Store a fact row first",
+            "category": "fact"
+        }
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/store",
+        Some(store_fact),
+        Some("idem-fact-store"),
         Some(("u1", "main")),
         &[],
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    let fact_row_id = body["results"][0]["id"]
+        .as_str()
+        .expect("stored fact row id should exist");
+
+    let update_to_reflection = json!({
+        "actor": actor("u1", "main", "sess-fact-update", "session-key-1"),
+        "memoryId": fact_row_id,
+        "patch": {
+            "category": "reflection"
+        }
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/update",
+        Some(update_to_reflection),
+        Some("idem-update-to-reflection"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "INVALID_REQUEST");
+    assert_eq!(
+        body["error"]["message"],
+        "reflection-category rows are backend-managed and cannot be created or updated manually"
+    );
+
+    let reflection_row_id = seed_reflection_memory(
+        &app,
+        &tmp,
+        "u1",
+        "main",
+        "sess-reflection-row",
+        "session-key-1",
+        "Seeded reflection row for recall-only behavior",
+        "idem-seeded-reflection-row",
+    )
+    .await;
+    let update_existing_reflection = json!({
+        "actor": actor("u1", "main", "sess-reflection-update", "session-key-1"),
+        "memoryId": reflection_row_id,
+        "patch": {
+            "text": "Attempted manual edit to reflection row"
+        }
+    });
+    let (status, body) = request_json(
+        &app,
+        Method::POST,
+        "/v1/memories/update",
+        Some(update_existing_reflection),
+        Some("idem-update-reflection-row"),
+        Some(("u1", "main")),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "INVALID_REQUEST");
+    assert_eq!(
+        body["error"]["message"],
+        "reflection-category rows are backend-managed and cannot be created or updated manually"
+    );
+}
+
+#[tokio::test]
+async fn reflection_recall_mode_honors_invariant_only_semantics() {
+    let tmp = std::env::temp_dir().join(format!(
+        "memory-lancedb-pro-backend-test-reflection-mode-{}",
+        Uuid::new_v4()
+    ));
+    let app = setup_app_at(&tmp);
+    seed_reflection_memory(
+        &app,
+        &tmp,
+        "u1",
+        "main",
+        "sess-ref-1",
+        "session-key-1",
+        "Verify health checks before infra edits",
+        "idem-ref-store",
+    )
+    .await;
 
     let invariant_only = json!({
         "actor": actor("u1", "main", "sess-ref-2", "session-key-1"),
@@ -4051,7 +4225,11 @@ async fn reflection_recall_mode_honors_invariant_only_semantics() {
 
 #[tokio::test]
 async fn generic_recall_applies_backend_owned_filter_fields() {
-    let app = setup_app();
+    let tmp = std::env::temp_dir().join(format!(
+        "memory-lancedb-pro-backend-test-generic-filter-{}",
+        Uuid::new_v4()
+    ));
+    let app = setup_app_at(&tmp);
 
     for (idx, text) in [
         "Verify DNS and mount health after restart.",
@@ -4082,25 +4260,17 @@ async fn generic_recall_applies_backend_owned_filter_fields() {
         assert_eq!(status, StatusCode::OK);
     }
 
-    let reflection_store = json!({
-        "actor": actor("u1", "main", "sess-generic-filter-reflection", "session-key-1"),
-        "mode": "tool-store",
-        "memory": {
-            "text": "Reflection-only memory should not pass generic backend filter.",
-            "category": "reflection"
-        }
-    });
-    let (status, _) = request_json(
+    seed_reflection_memory(
         &app,
-        Method::POST,
-        "/v1/memories/store",
-        Some(reflection_store),
-        Some("idem-generic-filter-reflection"),
-        Some(("u1", "main")),
-        &[],
+        &tmp,
+        "u1",
+        "main",
+        "sess-generic-filter-reflection",
+        "session-key-1",
+        "Reflection-only memory should not pass generic backend filter.",
+        "idem-generic-filter-reflection",
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
 
     let recall = json!({
         "actor": actor("u1", "main", "sess-generic-filter-query", "session-key-1"),
@@ -4139,27 +4309,22 @@ async fn generic_recall_applies_backend_owned_filter_fields() {
 
 #[tokio::test]
 async fn reflection_recall_applies_include_kinds_filter() {
-    let app = setup_app();
-
-    let store_reflection = json!({
-        "actor": actor("u1", "main", "sess-ref-filter-1", "session-key-1"),
-        "mode": "tool-store",
-        "memory": {
-            "text": "Always verify health checks before infra edits",
-            "category": "reflection"
-        }
-    });
-    let (status, _) = request_json(
+    let tmp = std::env::temp_dir().join(format!(
+        "memory-lancedb-pro-backend-test-reflection-filter-{}",
+        Uuid::new_v4()
+    ));
+    let app = setup_app_at(&tmp);
+    seed_reflection_memory(
         &app,
-        Method::POST,
-        "/v1/memories/store",
-        Some(store_reflection),
-        Some("idem-ref-filter-store"),
-        Some(("u1", "main")),
-        &[],
+        &tmp,
+        "u1",
+        "main",
+        "sess-ref-filter-1",
+        "session-key-1",
+        "Always verify health checks before infra edits",
+        "idem-ref-filter-store",
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
 
     let derived_only = json!({
         "actor": actor("u1", "main", "sess-ref-filter-2", "session-key-1"),

@@ -6,6 +6,7 @@ description: 2026-03-17 design contract snapshot for context-engine-split.
 Snapshot note:
 - this contract records the refreshed 2026-03-17 internal design boundary for the context-engine split;
 - it is design guidance for current module placement and orchestration seams, while `openclaw.plugin.json` remains the config/schema authority.
+- any older command-triggered reflection-generation wording in this snapshot is superseded by `../runtime-architecture.md` and `../remote-memory-backend-2026-03-18/`.
 
 ## API Contracts
 
@@ -116,7 +117,7 @@ Hook/event surfaces that must preserve behavior:
 - `before_prompt_build` → inherited rules + error-detected path
 - `after_tool_call` → error-signal capture path
 - `agent_end` → auto-capture path
-- `command:new` / `command:reset` → reflection generation path
+- `session_end` / `before_reset` → reflection session-state cleanup path
 
 Contract rule:
 - This branch may thin handler bodies, but it must not delete these active paths without replacement verification.

@@ -6,6 +6,8 @@ export type MemoryCategory =
   | "reflection"
   | "other";
 
+export type WritableMemoryCategory = Exclude<MemoryCategory, "reflection">;
+
 export type ReflectionRecallMode = "invariant-only" | "invariant+derived";
 export type MessageRole = "user" | "assistant" | "system";
 export type DistillMode = "session-lessons" | "governance-candidates";
@@ -31,7 +33,7 @@ export interface BackendCallContext {
 
 export interface BackendStoreToolInput {
   text: string;
-  category?: MemoryCategory;
+  category?: WritableMemoryCategory;
   importance?: number;
 }
 
@@ -44,7 +46,7 @@ export interface BackendUpdateInput {
   memoryId: string;
   patch: {
     text?: string;
-    category?: MemoryCategory;
+    category?: WritableMemoryCategory;
     importance?: number;
   };
 }
