@@ -127,4 +127,43 @@ describe("sessionStrategy cutover contract", () => {
       /selfImprovement is no longer supported in 1\.0\.0-beta\.0; use governance or autoRecallBehavioral/
     );
   });
+
+  it("rejects removed autoRecallExcludeReflection alias", () => {
+    assert.throws(
+      () =>
+        parsePluginConfig({
+          ...baseConfig(),
+          autoRecallExcludeReflection: true,
+        }),
+      /autoRecallExcludeReflection is no longer supported in 1\.0\.0-beta\.0; use autoRecallExcludeBehavioral/
+    );
+  });
+
+  it("rejects removed inheritance-style behavioral injectMode aliases", () => {
+    assert.throws(
+      () =>
+        parsePluginConfig({
+          ...baseConfig(),
+          autoRecallBehavioral: {
+            injectMode: "inheritance-only",
+          },
+        }),
+      /autoRecallBehavioral\.injectMode=inheritance-only is no longer supported in 1\.0\.0-beta\.0; use autoRecallBehavioral\.injectMode=durable-only/
+    );
+  });
+
+  it("rejects removed invariant-derived behavioral includeKinds aliases", () => {
+    assert.throws(
+      () =>
+        parsePluginConfig({
+          ...baseConfig(),
+          autoRecallBehavioral: {
+            recall: {
+              includeKinds: ["invariant"],
+            },
+          },
+        }),
+      /autoRecallBehavioral\.recall\.includeKinds\[\]=invariant is no longer supported in 1\.0\.0-beta\.0; use autoRecallBehavioral\.recall\.includeKinds\[\]=durable/
+    );
+  });
 });

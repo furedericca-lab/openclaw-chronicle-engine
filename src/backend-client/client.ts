@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type {
   BackendCallContext,
   BackendCaptureItem,
+  BackendBehavioralRecallDebugResponse,
+  BackendBehavioralRecallRow,
   BackendDeleteInput,
   BackendDistillJobResponse,
   BackendDistillJobStatusResponse,
@@ -9,8 +11,6 @@ import type {
   BackendMemoryMutationResult,
   BackendRecallGenericDebugResponse,
   BackendRecallGenericRow,
-  BackendRecallReflectionDebugResponse,
-  BackendRecallReflectionRow,
   BackendSessionTranscriptAppendResponse,
   BackendStatsResponse,
   BackendStoreToolInput,
@@ -170,7 +170,7 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
         ...(Array.isArray(input.categories) && input.categories.length > 0
           ? { categories: input.categories }
           : {}),
-        ...(input.excludeReflection === true ? { excludeReflection: true } : {}),
+        ...(input.excludeBehavioral === true ? { excludeReflection: true } : {}),
         ...(Number.isFinite(input.maxAgeDays) ? { maxAgeDays: clampInt(Number(input.maxAgeDays), 1, 200) } : {}),
         ...(Number.isFinite(input.maxEntriesPerKey)
           ? { maxEntriesPerKey: clampInt(Number(input.maxEntriesPerKey), 1, 200) }
@@ -193,7 +193,7 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
         ...(Array.isArray(input.categories) && input.categories.length > 0
           ? { categories: input.categories }
           : {}),
-        ...(input.excludeReflection === true ? { excludeReflection: true } : {}),
+        ...(input.excludeBehavioral === true ? { excludeReflection: true } : {}),
         ...(Number.isFinite(input.maxAgeDays) ? { maxAgeDays: clampInt(Number(input.maxAgeDays), 1, 200) } : {}),
         ...(Number.isFinite(input.maxEntriesPerKey)
           ? { maxEntriesPerKey: clampInt(Number(input.maxEntriesPerKey), 1, 200) }
@@ -211,7 +211,7 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
       };
     },
 
-    async recallReflection(ctx, input) {
+    async recallBehavioral(ctx, input) {
       const body = {
         ...withActor(ctx),
         query: input.query,
@@ -224,7 +224,7 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
           ? { minScore: clampScore(Number(input.minScore)) }
           : {}),
       };
-      const response = await requestJson<{ rows: BackendRecallReflectionRow[] }>({
+      const response = await requestJson<{ rows: BackendBehavioralRecallRow[] }>({
         method: "POST",
         path: "/v1/recall/reflection",
         ctx,
@@ -233,7 +233,7 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
       return Array.isArray(response.rows) ? response.rows : [];
     },
 
-    async recallReflectionDebug(ctx, input) {
+    async recallBehavioralDebug(ctx, input) {
       const body = {
         ...withActor(ctx),
         query: input.query,
@@ -246,7 +246,7 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
           ? { minScore: clampScore(Number(input.minScore)) }
           : {}),
       };
-      const response = await requestJson<BackendRecallReflectionDebugResponse>({
+      const response = await requestJson<BackendBehavioralRecallDebugResponse>({
         method: "POST",
         path: "/v1/debug/recall/reflection",
         ctx,
@@ -360,13 +360,17 @@ export function createMemoryBackendClient(config: MemoryBackendClientConfig): Me
     },
 
     async stats(ctx) {
-      const response = await requestJson<BackendStatsResponse>({
+      const response = await requestJson<{ memoryCount: number; reflectionCount: number; categories: Record<string, number> }>({
         method: "POST",
         path: "/v1/memories/stats",
         ctx,
         body: withActor(ctx),
       });
-      return response;
+      return {
+        memoryCount: Number(response.memoryCount || 0),
+        behavioralCount: Number(response.reflectionCount || 0),
+        categories: response.categories || {},
+      } satisfies BackendStatsResponse;
     },
 
     async enqueueDistillJob(ctx, input) {

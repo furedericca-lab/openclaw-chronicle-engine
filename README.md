@@ -373,11 +373,10 @@ Required fields:
 Cutover note:
 
 - `1.0.0-beta.0` removes migration-only config aliases.
-- Use `sessionStrategy` directly instead of `sessionMemory.*`.
 - Only `sessionStrategy: "autoRecall" | "systemSessionMemory" | "none"` is supported.
 - Use `autoRecallBehavioral.*` as the canonical behavioral-guidance config surface.
 - Use `governance.*` for backlog/review workflow configuration.
-- `memoryReflection.*`, `selfImprovement.*`, and `sessionStrategy: "memoryReflection"` are rejected.
+- Legacy pre-closeout config aliases are rejected.
 
 ## 13. Tools
 
@@ -403,20 +402,12 @@ Enable `enableManagementTools: true` to expose:
 
 Management/debug tools stay caller-scoped and require runtime principal identity. They are not available as anonymous local fallbacks.
 
-Transitional aliases:
-
-- `self_improvement_log`
-- `self_improvement_review`
-- `self_improvement_extract_skill`
-
-These legacy names currently call the same governance implementations and should be treated as compatibility aliases only.
-
 ### Backend client management/debug surfaces
 
 The plugin client also has backend job adapters for:
 
 - distill jobs
-- recall debug traces
+- recall debug traces (`generic` and `behavioral`)
 
 ## 14. Repository Layout
 
@@ -460,15 +451,13 @@ No. `src/context/*` is prompt-time orchestration:
 
 It is not backend ownership.
 
-### “Do old `sessionMemory.*` or legacy `memoryReflection.*` fields still work?”
+### “Do old config aliases still work?”
 
-`sessionMemory.*` does not work. Use `sessionStrategy` directly.
+No. Use the current schema names only:
 
-`memoryReflection.*` does not work. Use `autoRecallBehavioral.*` instead.
-
-`selfImprovement.*` also does not work. Use `governance.*` for governance workflow knobs and `autoRecallBehavioral.*` for behavioral reminder/bootstrap knobs.
-
-`sessionStrategy: "memoryReflection"` is rejected. Use `sessionStrategy: "autoRecall"` instead.
+- `sessionStrategy`
+- `autoRecallBehavioral.*`
+- `governance.*`
 
 ### “Does distill still mean running the old `jsonl_distill.py` sidecar?”
 

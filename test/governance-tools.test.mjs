@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,15 +15,17 @@ const jiti = jitiFactory(import.meta.url, {
   },
 });
 const {
+  ensureGovernanceBacklogFiles,
   registerGovernanceLogTool,
   registerGovernanceExtractSkillTool,
+  registerGovernanceTools,
   appendGovernanceEntry,
 } = jiti("../src/governance-tools.ts");
 const {
-  extractReflectionLearningGovernanceCandidates,
-  extractReflectionLessons,
-  extractReflectionMappedMemories,
-} = jiti("./helpers/reflection-reference.ts");
+  extractBehavioralGuidanceGovernanceCandidates,
+  extractBehavioralGuidanceLessons,
+  extractBehavioralGuidanceMappedMemories,
+} = jiti("./helpers/behavioral-guidance-reference.ts");
 
 function createToolHarness(workspaceDir) {
   const factories = new Map();
@@ -79,7 +81,7 @@ describe("governance", () => {
         "## Learning governance candidates (.governance / promotion / skill extraction)",
         "- LRN candidate: require file evidence before saying a skill was updated.",
       ].join("\n");
-      const mapped = extractReflectionMappedMemories(reflectionText);
+      const mapped = extractBehavioralGuidanceMappedMemories(reflectionText);
       assert.deepEqual(mapped, [
         {
           text: "Prefers concise direct answers without confirmation loops.",
@@ -136,12 +138,12 @@ describe("governance", () => {
         "### Suggested Action",
         "Add the concise rule to AGENTS.md when the pattern repeats again.",
       ].join("\n");
-      const lessons = extractReflectionLessons(reflectionText);
+      const lessons = extractBehavioralGuidanceLessons(reflectionText);
       assert.deepEqual(lessons, [
         "Symptom: empty-state status looked like a failure. Cause: no explicit triage label. Fix: classify empty-state as triage first. Prevention: avoid calling it breakage without reproduction.",
         "Symptom: reported done without file proof. Cause: conversation claim outran file verification. Fix: attach file evidence before declaring completion. Prevention: always verify real paths before reporting.",
       ]);
-      const governanceCandidates = extractReflectionLearningGovernanceCandidates(reflectionText);
+      const governanceCandidates = extractBehavioralGuidanceGovernanceCandidates(reflectionText);
       assert.deepEqual(governanceCandidates, [
         {
           priority: "high",
@@ -196,6 +198,23 @@ describe("governance", () => {
       assert.match(learningsBody, /Source: openclaw-chronicle-engine\/behavioral-guidance:test/);
     });
 
+    it("imports legacy .learnings backlog files into the canonical governance directory", async () => {
+      const legacyDir = path.join(workspaceDir, ".learnings");
+      mkdirSync(legacyDir, { recursive: true });
+      writeFileSync(path.join(legacyDir, "LEARNINGS.md"), "# Learnings\n\n## [LRN-20260318-001] best_practice\n\n### Summary\nLegacy learning\n", "utf-8");
+      writeFileSync(path.join(legacyDir, "ERRORS.md"), "# Errors\n\n## [ERR-20260318-001]\n\n### Summary\nLegacy error\n", "utf-8");
+
+      await ensureGovernanceBacklogFiles(workspaceDir);
+
+      const canonicalLearnings = readFileSync(path.join(workspaceDir, ".governance", "LEARNINGS.md"), "utf-8");
+      const canonicalErrors = readFileSync(path.join(workspaceDir, ".governance", "ERRORS.md"), "utf-8");
+
+      assert.match(canonicalLearnings, /Legacy learning/);
+      assert.match(canonicalErrors, /Legacy error/);
+      assert.doesNotMatch(canonicalLearnings, /Append structured entries:/);
+      assert.doesNotMatch(canonicalErrors, /Append structured entries:/);
+    });
+
     it("handles learning id validation and writes promoted skill scaffold with sanitized outputDir", async () => {
       const harness = createToolHarness(workspaceDir);
       const logTool = harness.tool("governance_log");
@@ -246,6 +265,26 @@ describe("governance", () => {
       const learningsBody = readFileSync(learningsPath, "utf-8");
       assert.match(learningsBody, /\*\*Status\*\*:\s*promoted_to_skill/);
       assert.match(learningsBody, /Skill-Path:\s*outside\/skills\/deterministic-fixtures/);
+    });
+
+    it("registers canonical governance tool names only", () => {
+      const factories = new Map();
+      const api = {
+        registerTool(factory, meta) {
+          factories.set(meta?.name || "", factory);
+        },
+      };
+
+      registerGovernanceTools(api, {
+        enableManagementTools: true,
+        defaultWorkspaceDir: workspaceDir,
+      });
+
+      assert.deepEqual([...factories.keys()].sort(), [
+        "governance_extract_skill",
+        "governance_log",
+        "governance_review",
+      ]);
     });
   });
 });

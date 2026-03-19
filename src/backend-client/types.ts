@@ -8,7 +8,7 @@ export type MemoryCategory =
 
 export type WritableMemoryCategory = Exclude<MemoryCategory, "reflection">;
 
-export type ReflectionRecallMode = "invariant-only" | "invariant+derived";
+export type BehavioralRecallMode = "invariant-only" | "invariant+derived";
 export type MessageRole = "user" | "assistant" | "system";
 export type DistillMode = "session-lessons" | "governance-candidates";
 export type DistillPersistMode = "artifacts-only" | "persist-memory-rows";
@@ -83,7 +83,7 @@ export interface BackendRecallGenericRow {
   };
 }
 
-export interface BackendRecallReflectionRow {
+export interface BackendBehavioralRecallRow {
   id: string;
   text: string;
   kind: "invariant" | "derived";
@@ -95,7 +95,7 @@ export interface BackendRecallReflectionRow {
   };
 }
 
-export type BackendRetrievalTraceKind = "generic" | "reflection";
+export type BackendRetrievalTraceKind = "generic" | "reflection" | "behavioral";
 export type BackendRetrievalTraceStageStatus = "ok" | "fallback" | "skipped" | "failed";
 
 export interface BackendRetrievalTraceQuery {
@@ -128,8 +128,8 @@ export interface BackendRecallGenericDebugResponse {
   trace: BackendRetrievalTrace;
 }
 
-export interface BackendRecallReflectionDebugResponse {
-  rows: BackendRecallReflectionRow[];
+export interface BackendBehavioralRecallDebugResponse {
+  rows: BackendBehavioralRecallRow[];
   trace: BackendRetrievalTrace;
 }
 
@@ -146,7 +146,7 @@ export interface BackendListRow {
 
 export interface BackendStatsResponse {
   memoryCount: number;
-  reflectionCount: number;
+  behavioralCount: number;
   categories: Record<string, number>;
 }
 
@@ -199,7 +199,7 @@ export interface MemoryBackendClient {
       query: string;
       limit: number;
       categories?: MemoryCategory[];
-      excludeReflection?: boolean;
+      excludeBehavioral?: boolean;
       maxAgeDays?: number;
       maxEntriesPerKey?: number;
     }
@@ -210,31 +210,31 @@ export interface MemoryBackendClient {
       query: string;
       limit: number;
       categories?: MemoryCategory[];
-      excludeReflection?: boolean;
+      excludeBehavioral?: boolean;
       maxAgeDays?: number;
       maxEntriesPerKey?: number;
     }
   ) => Promise<BackendRecallGenericDebugResponse>;
-  recallReflection: (
+  recallBehavioral: (
     ctx: BackendCallContext,
     input: {
       query: string;
-      mode: ReflectionRecallMode;
+      mode: BehavioralRecallMode;
       limit: number;
       includeKinds?: Array<"invariant" | "derived">;
       minScore?: number;
     }
-  ) => Promise<BackendRecallReflectionRow[]>;
-  recallReflectionDebug: (
+  ) => Promise<BackendBehavioralRecallRow[]>;
+  recallBehavioralDebug: (
     ctx: BackendCallContext,
     input: {
       query: string;
-      mode: ReflectionRecallMode;
+      mode: BehavioralRecallMode;
       limit: number;
       includeKinds?: Array<"invariant" | "derived">;
       minScore?: number;
     }
-  ) => Promise<BackendRecallReflectionDebugResponse>;
+  ) => Promise<BackendBehavioralRecallDebugResponse>;
   storeToolMemory: (
     ctx: BackendCallContext,
     input: BackendStoreToolInput

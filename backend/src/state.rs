@@ -2,7 +2,7 @@ use crate::{
     config::AppConfig,
     error::{AppError, AppResult},
     models::{
-        clamped_limit, manual_reflection_write_error, validate_non_empty, Actor, Category, DeleteRequest, DistillArtifact,
+        clamped_limit, manual_behavioral_guidance_write_error, validate_non_empty, Actor, Category, DeleteRequest, DistillArtifact,
         DistillArtifactEvidence, DistillArtifactKind, DistillArtifactPersistence,
         DistillArtifactSubtype, DistillJobResultSummary, DistillJobStatus,
         DistillJobStatusResponse, DistillMode, DistillPersistMode, DistillSource,
@@ -1643,7 +1643,7 @@ impl LanceMemoryRepo {
             StoreRequest::ToolStore { actor, memory } => {
                 let category = memory.category.unwrap_or(Category::Other);
                 if matches!(category, Category::Reflection) {
-                    return Err(manual_reflection_write_error());
+                    return Err(manual_behavioral_guidance_write_error());
                 }
                 let importance = memory.importance.unwrap_or(DEFAULT_IMPORTANCE);
                 let now = now_millis();
@@ -1664,7 +1664,7 @@ impl LanceMemoryRepo {
                     strict_key: None,
                     vector: None,
                 };
-                normalize_reflection_fields(&mut row);
+                normalize_behavioral_guidance_fields(&mut row);
                 row.vector = Some(self.generic_recall_engine.embed_passage(&row.text).await?);
                 results.push(to_mutation_result(&row, MemoryAction::Add));
                 rows.push(row);
@@ -1729,7 +1729,7 @@ impl LanceMemoryRepo {
         if matches!(row.category, Category::Reflection)
             || matches!(req.patch.category, Some(Category::Reflection))
         {
-            return Err(manual_reflection_write_error());
+            return Err(manual_behavioral_guidance_write_error());
         }
         let previous_updated_at = row.updated_at;
 
@@ -1745,7 +1745,7 @@ impl LanceMemoryRepo {
             row.importance = importance;
         }
         row.updated_at = now_millis();
-        normalize_reflection_fields(&mut row);
+        normalize_behavioral_guidance_fields(&mut row);
         if text_changed {
             row.vector = Some(self.generic_recall_engine.embed_passage(&row.text).await?);
         }
@@ -1763,7 +1763,7 @@ impl LanceMemoryRepo {
             .column("importance", row.importance.to_string())
             .column("updated_at", row.updated_at.to_string());
 
-        let reflection_kind_expr = row.reflection_kind.map(reflection_kind_to_str);
+        let reflection_kind_expr = row.reflection_kind.map(behavioral_guidance_kind_to_str);
         update_builder = update_builder.column(
             "reflection_kind",
             sql_optional_string_literal(reflection_kind_expr),
@@ -1881,10 +1881,10 @@ impl LanceMemoryRepo {
             .await?;
 
         let mut categories = BTreeMap::new();
-        let mut reflection_count = 0_u64;
+        let mut behavioral_count = 0_u64;
         for row in &rows {
             if row.category == Category::Reflection {
-                reflection_count += 1;
+                behavioral_count += 1;
             }
             *categories
                 .entry(row.category.as_str().to_string())
@@ -1893,7 +1893,7 @@ impl LanceMemoryRepo {
 
         Ok(StatsResponse {
             memory_count: rows.len() as u64,
-            reflection_count,
+            reflection_count: behavioral_count,
             categories,
         })
     }
@@ -2011,26 +2011,26 @@ impl LanceMemoryRepo {
         Ok((response, trace))
     }
 
-    pub async fn recall_reflection(
+    pub async fn recall_behavioral_guidance(
         &self,
         req: RecallReflectionRequest,
     ) -> AppResult<RecallReflectionResponse> {
-        let (response, _) = self.recall_reflection_internal(req, false).await?;
+        let (response, _) = self.recall_behavioral_guidance_internal(req, false).await?;
         Ok(response)
     }
 
-    pub async fn recall_reflection_with_trace(
+    pub async fn recall_behavioral_guidance_with_trace(
         &self,
         req: RecallReflectionRequest,
     ) -> AppResult<(RecallReflectionResponse, RetrievalTrace)> {
-        let (response, trace) = self.recall_reflection_internal(req, true).await?;
+        let (response, trace) = self.recall_behavioral_guidance_internal(req, true).await?;
         Ok((
             response,
-            trace.expect("trace must exist when recall_reflection_with_trace is requested"),
+            trace.expect("trace must exist when recall_behavioral_guidance_with_trace is requested"),
         ))
     }
 
-    async fn recall_reflection_internal(
+    async fn recall_behavioral_guidance_internal(
         &self,
         req: RecallReflectionRequest,
         include_trace: bool,
@@ -2047,7 +2047,7 @@ impl LanceMemoryRepo {
                 .metrics
                 .insert("dimensions".to_string(), json!(query_embedding.len()));
             stage.metrics.insert(
-                "reflectionMode".to_string(),
+                "behavioralMode".to_string(),
                 json!(match mode {
                     ReflectionRecallMode::InvariantOnly => "invariant-only",
                     ReflectionRecallMode::InvariantDerived => "invariant+derived",
@@ -2084,7 +2084,7 @@ impl LanceMemoryRepo {
                 trace.as_mut(),
             )
             .await?;
-        let ranked = apply_reflection_recall_filters(ranked, &req);
+        let ranked = apply_behavioral_guidance_recall_filters(ranked, &req);
         if let Err(err) = self
             .record_recall_access_metadata(&table, &req.actor, &ranked)
             .await
@@ -2831,7 +2831,7 @@ fn apply_generic_recall_filters(
     apply_max_entries_per_key(filtered, req.max_entries_per_key)
 }
 
-fn apply_reflection_recall_filters(
+fn apply_behavioral_guidance_recall_filters(
     ranked: Vec<RankedMemoryRow>,
     req: &RecallReflectionRequest,
 ) -> Vec<RankedMemoryRow> {
@@ -3845,7 +3845,7 @@ fn rows_to_record_batch(rows: &[MemoryRow], vector_dimensions: usize) -> AppResu
         rows.iter().map(|row| row.last_accessed_at.max(0)).collect();
     let reflection_kind_values: Vec<Option<&str>> = rows
         .iter()
-        .map(|row| row.reflection_kind.map(reflection_kind_to_str))
+        .map(|row| row.reflection_kind.map(behavioral_guidance_kind_to_str))
         .collect();
     let strict_key_values: Vec<Option<&str>> =
         rows.iter().map(|row| row.strict_key.as_deref()).collect();
@@ -3942,7 +3942,7 @@ fn rows_from_batches(batches: &[RecordBatch]) -> AppResult<Vec<MemoryRow>> {
             let reflection_kind = if reflection_kind_col.is_null(row_idx) {
                 None
             } else {
-                Some(parse_reflection_kind(reflection_kind_col.value(row_idx))?)
+                Some(parse_behavioral_guidance_kind(reflection_kind_col.value(row_idx))?)
             };
             let strict_key = if strict_key_col.is_null(row_idx) {
                 None
@@ -5460,7 +5460,7 @@ fn parse_category(raw: &str) -> AppResult<Category> {
     }
 }
 
-fn parse_reflection_kind(raw: &str) -> AppResult<ReflectionKind> {
+fn parse_behavioral_guidance_kind(raw: &str) -> AppResult<ReflectionKind> {
     match raw {
         "invariant" => Ok(ReflectionKind::Invariant),
         "derived" => Ok(ReflectionKind::Derived),
@@ -5470,7 +5470,7 @@ fn parse_reflection_kind(raw: &str) -> AppResult<ReflectionKind> {
     }
 }
 
-fn reflection_kind_to_str(kind: ReflectionKind) -> &'static str {
+fn behavioral_guidance_kind_to_str(kind: ReflectionKind) -> &'static str {
     match kind {
         ReflectionKind::Invariant => "invariant",
         ReflectionKind::Derived => "derived",
@@ -5548,7 +5548,7 @@ fn default_strict_key(row_id: &str) -> String {
     format!("reflection:{row_id}")
 }
 
-fn normalize_reflection_fields(row: &mut MemoryRow) {
+fn normalize_behavioral_guidance_fields(row: &mut MemoryRow) {
     if row.category != Category::Reflection {
         row.reflection_kind = None;
         row.strict_key = None;

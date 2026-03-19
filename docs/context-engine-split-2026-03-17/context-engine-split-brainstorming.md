@@ -6,8 +6,8 @@ description: 2026-03-17 brainstorming snapshot for context-engine-split.
 Snapshot note:
 - this file captures the refreshed 2026-03-17 decision framing after the backend-authority and `1.0.0-beta.0` cutover work;
 - it is kept as design context for current module placement, not as the canonical runtime contract.
-- any older mention of command-triggered reflection generation is superseded by `../runtime-architecture.md` and `../remote-memory-backend-2026-03-18/`.
-- current canonical naming for prompt-time orchestration is `autoRecall` context + behavioral-guidance and `governance`; older reflection/self-improvement wording in this snapshot is historical only.
+- any older mention of command-triggered generation is superseded by `../runtime-architecture.md` and `../remote-memory-backend-2026-03-18/`.
+- current canonical naming for prompt-time orchestration is `autoRecall` context + behavioral-guidance and `governance`; older transitional wording in this snapshot is historical only.
 
 ## Problem
 

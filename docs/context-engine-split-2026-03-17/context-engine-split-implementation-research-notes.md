@@ -26,8 +26,8 @@ Current orchestration-heavy ownership in `index.ts`:
 Supporting orchestration helpers already exist and are now largely under `src/context/`:
 - `src/context/recall-engine.ts` — prompt gating/session dedupe/tagged block assembly helper.
 - `src/context/adaptive-retrieval.ts` — query worthiness heuristics.
-- `src/context/auto-recall-orchestrator.ts` — generic auto-recall planner.
-- `src/context/reflection-prompt-planner.ts` — historical name for the behavioral-guidance/error planner seam.
+- `src/context/auto-recall-orchestrator.ts` — generic auto-recall planner plus behavioral-guidance/error planner seam.
+- `src/context/behavioral-guidance-error-signals.ts` — tool-call error signal extraction for behavioral guidance.
 - `src/context/session-exposure-state.ts` — session-local exposure suppression and error-signal state.
 
 ## Gap analysis with evidence
@@ -36,13 +36,13 @@ Supporting orchestration helpers already exist and are now largely under `src/co
    Evidence: `index.ts` both constructs backend objects (`MemoryStore`, `embedder`, `retriever`, `scopeManager`) and directly renders prompt blocks for `<relevant-memories>`, `<behavioral-guidance>`, and `<error-detected>`.
 
 2. **Prompt-time state is kept alongside backend setup.**
-   Evidence: `autoRecallState`, `reflectionErrorStateBySession`, and reflection-agent caches are all created in `index.ts`, even though these are session exposure concerns rather than persistence primitives.
+   Evidence: `autoRecallState`, behavioral-guidance error state, and session recall caches are all created in `index.ts`, even though these are session exposure concerns rather than persistence primitives.
 
 3. **The reusable recall helpers are now context-owned, but the design docs need to track the moved paths precisely.**
    Evidence: `orchestrateDynamicRecall()` now lives in `src/context/recall-engine.ts`, while callers in `src/context/*` consume it directly.
 
 4. **Future ContextEngine migration lacks a thin adapter seam.**
-   Evidence: no module currently exposes a backend-facing API like "recall generic rows" or "recall reflection rows" without also deciding output tags and block formatting.
+   Evidence: no module currently exposes a backend-facing API like "recall generic rows" or "recall behavioral-guidance rows" without also deciding output tags and block formatting.
 
 5. **Hook-driven behavior is gated and cannot be assumed safe to move blindly.**
    Evidence: tests in `test/auto-recall-behavioral.test.mjs` and `test/config-session-strategy-cutover.test.mjs` cover session strategy, dynamic behavioral recall, and selection-mode behavior. These paths must remain green before any later contract change.
@@ -88,7 +88,7 @@ Current seam modules:
   - `src/backend-client/runtime-context.ts`
 - context orchestration:
   - `src/context/auto-recall-orchestrator.ts`
-  - `src/context/reflection-prompt-planner.ts` (historical filename; compatibility shim in later scopes)
+  - `src/context/behavioral-guidance-error-signals.ts`
   - `src/context/prompt-block-renderer.ts`
   - `src/context/session-exposure-state.ts`
   - `src/context/recall-engine.ts`

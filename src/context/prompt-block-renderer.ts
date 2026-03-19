@@ -5,7 +5,7 @@ export interface RenderTaggedPromptBlockParams {
   wrapUntrustedData?: boolean;
 }
 
-export interface ReflectionErrorSignalForRender {
+export interface BehavioralGuidanceErrorSignalForRender {
   toolName: string;
   summary: string;
 }
@@ -62,7 +62,7 @@ export function renderInheritedRulesBlock(lines: string[], options?: { dynamicHe
   return renderBehavioralGuidanceBlock(lines, options);
 }
 
-export function renderErrorDetectedBlock(signals: ReflectionErrorSignalForRender[]): string {
+export function renderErrorDetectedBlock(signals: BehavioralGuidanceErrorSignalForRender[]): string {
   const normalized = signals
     .filter((signal) => signal && typeof signal === "object")
     .map((signal) => ({

@@ -45,9 +45,12 @@ pub fn build_app(config: AppConfig) -> anyhow::Result<Router> {
 
     let data_routes = Router::new()
         .route("/v1/recall/generic", post(recall_generic))
-        .route("/v1/recall/reflection", post(recall_reflection))
+        .route("/v1/recall/reflection", post(recall_behavioral_guidance))
         .route("/v1/debug/recall/generic", post(recall_generic_debug))
-        .route("/v1/debug/recall/reflection", post(recall_reflection_debug))
+        .route(
+            "/v1/debug/recall/reflection",
+            post(recall_behavioral_guidance_debug),
+        )
         .route("/v1/memories/store", post(store_memories))
         .route(
             "/v1/session-transcripts/append",
@@ -90,7 +93,7 @@ async fn recall_generic(
     Ok(Json(rows))
 }
 
-async fn recall_reflection(
+async fn recall_behavioral_guidance(
     State(state): State<AppState>,
     Extension(auth): Extension<RuntimeAuthContext>,
     payload: Result<Json<RecallReflectionRequest>, JsonRejection>,
@@ -98,7 +101,7 @@ async fn recall_reflection(
     let req = decode_json(payload)?;
     validate_recall_reflection_request(&req)?;
     ensure_actor_matches_context(&req.actor, &auth)?;
-    let rows = state.memory_repo.recall_reflection(req).await?;
+    let rows = state.memory_repo.recall_behavioral_guidance(req).await?;
     Ok(Json(rows))
 }
 
@@ -117,7 +120,7 @@ async fn recall_generic_debug(
     }))
 }
 
-async fn recall_reflection_debug(
+async fn recall_behavioral_guidance_debug(
     State(state): State<AppState>,
     Extension(auth): Extension<RuntimeAuthContext>,
     payload: Result<Json<RecallReflectionRequest>, JsonRejection>,
@@ -125,7 +128,10 @@ async fn recall_reflection_debug(
     let req = decode_json(payload)?;
     validate_recall_reflection_request(&req)?;
     ensure_actor_matches_context(&req.actor, &auth)?;
-    let (rows, trace) = state.memory_repo.recall_reflection_with_trace(req).await?;
+    let (rows, trace) = state
+        .memory_repo
+        .recall_behavioral_guidance_with_trace(req)
+        .await?;
     Ok(Json(RecallReflectionDebugResponse {
         rows: rows.rows,
         trace,

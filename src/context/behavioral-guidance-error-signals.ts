@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ReflectionErrorSignal } from "./session-exposure-state.js";
+import type { BehavioralGuidanceErrorSignal } from "./session-exposure-state.js";
 
 export interface BehavioralGuidanceToolCallEvent {
   toolName?: string;
@@ -10,7 +10,7 @@ export interface BehavioralGuidanceToolCallEvent {
 export function extractBehavioralGuidanceErrorSignalFromToolCall(
   event: BehavioralGuidanceToolCallEvent,
   maxScanChars: number
-): ReflectionErrorSignal | null {
+): BehavioralGuidanceErrorSignal | null {
   const toolName = typeof event.toolName === "string" && event.toolName.trim() ? event.toolName : "unknown";
 
   if (typeof event.error === "string" && event.error.trim().length > 0) {

@@ -18,14 +18,14 @@ const jiti = jitiFactory(import.meta.url, {
 const pluginModule = jiti("../index.ts");
 const chronicleEnginePlugin = pluginModule.default || pluginModule;
 const { parsePluginConfig } = pluginModule;
-const { getDisplayCategoryTag } = jiti("./helpers/reflection-reference.ts");
+const { getDisplayCategoryTag } = jiti("./helpers/behavioral-guidance-reference.ts");
 const {
-  classifyReflectionRetry,
-  computeReflectionRetryDelayMs,
-  isReflectionNonRetryError,
-  isTransientReflectionUpstreamError,
-  runWithReflectionTransientRetryOnce,
-} = jiti("./helpers/reflection-reference.ts");
+  classifyBehavioralGuidanceRetry,
+  computeBehavioralGuidanceRetryDelayMs,
+  isBehavioralGuidanceNonRetryError,
+  isTransientBehavioralGuidanceUpstreamError,
+  runWithBehavioralGuidanceTransientRetryOnce,
+} = jiti("./helpers/behavioral-guidance-reference.ts");
 const {
   createDynamicRecallSessionState,
   clearDynamicRecallSessionState,
@@ -198,22 +198,22 @@ describe("auto recall orchestration", () => {
 
   describe("transient retry classifier", () => {
     it("classifies unexpected EOF as transient upstream error", () => {
-      const isTransient = isTransientReflectionUpstreamError(new Error("unexpected EOF while reading upstream response"));
+      const isTransient = isTransientBehavioralGuidanceUpstreamError(new Error("unexpected EOF while reading upstream response"));
       assert.equal(isTransient, true);
     });
 
     it("classifies auth/billing/model/context/session/refusal errors as non-retry", () => {
-      assert.equal(isReflectionNonRetryError(new Error("401 unauthorized: invalid api key")), true);
-      assert.equal(isReflectionNonRetryError(new Error("insufficient credits for this request")), true);
-      assert.equal(isReflectionNonRetryError(new Error("model not found: gpt-x")), true);
-      assert.equal(isReflectionNonRetryError(new Error("context length exceeded")), true);
-      assert.equal(isReflectionNonRetryError(new Error("session expired, please re-authenticate")), true);
-      assert.equal(isReflectionNonRetryError(new Error("refusal due to safety policy")), true);
+      assert.equal(isBehavioralGuidanceNonRetryError(new Error("401 unauthorized: invalid api key")), true);
+      assert.equal(isBehavioralGuidanceNonRetryError(new Error("insufficient credits for this request")), true);
+      assert.equal(isBehavioralGuidanceNonRetryError(new Error("model not found: gpt-x")), true);
+      assert.equal(isBehavioralGuidanceNonRetryError(new Error("context length exceeded")), true);
+      assert.equal(isBehavioralGuidanceNonRetryError(new Error("session expired, please re-authenticate")), true);
+      assert.equal(isBehavioralGuidanceNonRetryError(new Error("refusal due to safety policy")), true);
     });
 
     it("allows retry only in reflection scope with zero useful output and retryCount=0", () => {
-      const allowed = classifyReflectionRetry({
-        inReflectionScope: true,
+      const allowed = classifyBehavioralGuidanceRetry({
+        inBehavioralGuidanceScope: true,
         retryCount: 0,
         usefulOutputChars: 0,
         error: new Error("upstream temporarily unavailable (503)"),
@@ -221,17 +221,17 @@ describe("auto recall orchestration", () => {
       assert.equal(allowed.retryable, true);
       assert.equal(allowed.reason, "transient_upstream_failure");
 
-      const notScope = classifyReflectionRetry({
-        inReflectionScope: false,
+      const notScope = classifyBehavioralGuidanceRetry({
+        inBehavioralGuidanceScope: false,
         retryCount: 0,
         usefulOutputChars: 0,
         error: new Error("unexpected EOF"),
       });
       assert.equal(notScope.retryable, false);
-      assert.equal(notScope.reason, "not_reflection_scope");
+      assert.equal(notScope.reason, "not_behavioral_guidance_scope");
 
-      const hadOutput = classifyReflectionRetry({
-        inReflectionScope: true,
+      const hadOutput = classifyBehavioralGuidanceRetry({
+        inBehavioralGuidanceScope: true,
         retryCount: 0,
         usefulOutputChars: 12,
         error: new Error("unexpected EOF"),
@@ -239,8 +239,8 @@ describe("auto recall orchestration", () => {
       assert.equal(hadOutput.retryable, false);
       assert.equal(hadOutput.reason, "useful_output_present");
 
-      const retryUsed = classifyReflectionRetry({
-        inReflectionScope: true,
+      const retryUsed = classifyBehavioralGuidanceRetry({
+        inBehavioralGuidanceScope: true,
         retryCount: 1,
         usefulOutputChars: 0,
         error: new Error("unexpected EOF"),
@@ -250,21 +250,21 @@ describe("auto recall orchestration", () => {
     });
 
     it("computes jitter delay in the required 1-3s range", () => {
-      assert.equal(computeReflectionRetryDelayMs(() => 0), 1000);
-      assert.equal(computeReflectionRetryDelayMs(() => 0.5), 2000);
-      assert.equal(computeReflectionRetryDelayMs(() => 1), 3000);
+      assert.equal(computeBehavioralGuidanceRetryDelayMs(() => 0), 1000);
+      assert.equal(computeBehavioralGuidanceRetryDelayMs(() => 0.5), 2000);
+      assert.equal(computeBehavioralGuidanceRetryDelayMs(() => 1), 3000);
     });
   });
 
-  describe("runWithReflectionTransientRetryOnce", () => {
+  describe("runWithBehavioralGuidanceTransientRetryOnce", () => {
     it("retries once and succeeds for transient failures", async () => {
       let attempts = 0;
       const sleeps = [];
       const logs = [];
       const retryState = { count: 0 };
 
-      const result = await runWithReflectionTransientRetryOnce({
-        scope: "reflection",
+      const result = await runWithBehavioralGuidanceTransientRetryOnce({
+        scope: "behavioral-guidance",
         runner: "direct",
         retryState,
         execute: async () => {
@@ -296,8 +296,8 @@ describe("auto recall orchestration", () => {
       const retryState = { count: 0 };
 
       await assert.rejects(
-        runWithReflectionTransientRetryOnce({
-          scope: "reflection",
+        runWithBehavioralGuidanceTransientRetryOnce({
+          scope: "behavioral-guidance",
           runner: "cli",
           retryState,
           execute: async () => {
@@ -319,7 +319,7 @@ describe("auto recall orchestration", () => {
       const retryState = { count: 0 };
 
       await assert.rejects(
-        runWithReflectionTransientRetryOnce({
+        runWithBehavioralGuidanceTransientRetryOnce({
           scope: "distiller",
           runner: "cli",
           retryState,
@@ -416,10 +416,10 @@ describe("auto recall orchestration", () => {
       assert.equal(parsed.sessionStrategy, "systemSessionMemory");
     });
 
-    it("defaults auto-recall category allowlist to include other while keeping reflection excluded", () => {
+    it("defaults auto-recall category allowlist to include other while keeping behavioral guidance excluded", () => {
       const parsed = parsePluginConfig(baseConfig());
       assert.deepEqual(parsed.autoRecallCategories, ["preference", "fact", "decision", "entity", "other"]);
-      assert.equal(parsed.autoRecallExcludeReflection, true);
+      assert.equal(parsed.autoRecallExcludeBehavioral, true);
     });
 
     it("defaults behavioral autoRecall mode to fixed", () => {
@@ -738,7 +738,7 @@ describe("auto recall orchestration", () => {
     });
 
     it("uses one shared session-clear contract for behavioral guidance errors and dynamic recall state", () => {
-      const clearedReflectionErrors = [];
+      const clearedBehavioralErrors = [];
       const clearedDynamicContext = [];
       const planner = createAutoRecallBehavioralPlanner(
         {
@@ -773,7 +773,7 @@ describe("auto recall orchestration", () => {
               return [];
             },
             clearBehavioralGuidanceErrorSignalsForSession(sessionKey) {
-              clearedReflectionErrors.push(sessionKey);
+              clearedBehavioralErrors.push(sessionKey);
             },
             pruneBehavioralGuidanceSessionState() { },
           },
@@ -787,7 +787,7 @@ describe("auto recall orchestration", () => {
         sessionId: "planner-reset-runtime",
       });
 
-      assert.deepEqual(clearedReflectionErrors, ["agent:main:session:planner-reset"]);
+      assert.deepEqual(clearedBehavioralErrors, ["agent:main:session:planner-reset"]);
       assert.deepEqual(clearedDynamicContext, [
         {
           sessionKey: "agent:main:session:planner-reset",

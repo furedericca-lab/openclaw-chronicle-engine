@@ -570,7 +570,7 @@ pub fn validate_store_request(req: &StoreRequest) -> AppResult<()> {
         StoreRequest::ToolStore { actor, memory } => {
             actor.validate()?;
             validate_non_empty("memory.text", &memory.text)?;
-            validate_manual_reflection_write_category(memory.category)?;
+            validate_manual_behavioral_guidance_write_category(memory.category)?;
             if let Some(importance) = memory.importance {
                 validate_importance(importance)?;
             }
@@ -593,7 +593,7 @@ pub fn validate_store_request(req: &StoreRequest) -> AppResult<()> {
 pub fn validate_update_request(req: &UpdateRequest) -> AppResult<()> {
     req.actor.validate()?;
     validate_non_empty("memoryId", &req.memory_id)?;
-    validate_manual_reflection_write_category(req.patch.category)?;
+    validate_manual_behavioral_guidance_write_category(req.patch.category)?;
     if req.patch.text.is_none() && req.patch.category.is_none() && req.patch.importance.is_none() {
         return Err(AppError::invalid_request(
             "patch must include at least one of text/category/importance",
@@ -608,15 +608,15 @@ pub fn validate_update_request(req: &UpdateRequest) -> AppResult<()> {
     Ok(())
 }
 
-pub fn manual_reflection_write_error() -> AppError {
+pub fn manual_behavioral_guidance_write_error() -> AppError {
     AppError::invalid_request(
         "reflection-category rows are backend-managed and cannot be created or updated manually",
     )
 }
 
-fn validate_manual_reflection_write_category(category: Option<Category>) -> AppResult<()> {
+fn validate_manual_behavioral_guidance_write_category(category: Option<Category>) -> AppResult<()> {
     if matches!(category, Some(Category::Reflection)) {
-        return Err(manual_reflection_write_error());
+        return Err(manual_behavioral_guidance_write_error());
     }
     Ok(())
 }

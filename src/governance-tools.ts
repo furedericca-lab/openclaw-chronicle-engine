@@ -1,12 +1,12 @@
 import { Type } from "@sinclair/typebox";
 import { stringEnum } from "openclaw/plugin-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { appendFile, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 export const CANONICAL_GOVERNANCE_DIRNAME = ".governance";
-export const LEGACY_GOVERNANCE_DIRNAME = ".learnings";
+const LEGACY_GOVERNANCE_DIRNAME = ".learnings";
 
 export const DEFAULT_GOVERNANCE_LEARNINGS_TEMPLATE = `# Learnings
 
@@ -46,7 +46,7 @@ function todayYmd(): string {
   return new Date().toISOString().slice(0, 10).replace(/-/g, "");
 }
 
-async function nextLearningId(filePath: string, prefix: "LRN" | "ERR"): Promise<string> {
+async function nextGovernanceEntryId(filePath: string, prefix: "LRN" | "ERR"): Promise<string> {
   const date = todayYmd();
   let count = 0;
   try {
@@ -67,20 +67,20 @@ function legacyGovernanceDir(baseDir: string): string {
   return join(baseDir, LEGACY_GOVERNANCE_DIRNAME);
 }
 
-async function maybeCopyLegacyGovernanceFile(baseDir: string, fileName: string): Promise<void> {
+async function maybeImportLegacyGovernanceFile(baseDir: string, fileName: string): Promise<void> {
   const canonicalPath = join(canonicalGovernanceDir(baseDir), fileName);
   const legacyPath = join(legacyGovernanceDir(baseDir), fileName);
   try {
     const existing = await readFile(canonicalPath, "utf-8");
     if (existing.trim().length > 0) return;
   } catch {
-    // allow copy attempt below
+    // allow import attempt below
   }
 
   try {
     const legacy = await readFile(legacyPath, "utf-8");
     if (!legacy.trim()) return;
-    await copyFile(legacyPath, canonicalPath);
+    await writeFile(canonicalPath, legacy.endsWith("\n") ? legacy : `${legacy}\n`, "utf-8");
   } catch {
     // legacy file missing or unreadable, ignore
   }
@@ -90,8 +90,8 @@ export async function ensureGovernanceBacklogFiles(baseDir: string): Promise<voi
   const governanceDir = canonicalGovernanceDir(baseDir);
   await mkdir(governanceDir, { recursive: true });
 
-  await maybeCopyLegacyGovernanceFile(baseDir, "LEARNINGS.md");
-  await maybeCopyLegacyGovernanceFile(baseDir, "ERRORS.md");
+  await maybeImportLegacyGovernanceFile(baseDir, "LEARNINGS.md");
+  await maybeImportLegacyGovernanceFile(baseDir, "ERRORS.md");
 
   const ensureFile = async (filePath: string, content: string) => {
     try {
@@ -144,7 +144,7 @@ export async function appendGovernanceEntry(params: AppendGovernanceEntryParams)
   const idPrefix = type === "learning" ? "LRN" : "ERR";
 
   const id = await withFileWriteQueue(filePath, async () => {
-    const entryId = await nextLearningId(filePath, idPrefix);
+    const entryId = await nextGovernanceEntryId(filePath, idPrefix);
     const nowIso = new Date().toISOString();
     const titleSuffix = type === "learning" ? ` ${category}` : "";
     const entry = [
@@ -186,7 +186,6 @@ export interface GovernanceRegistrationOptions {
   enableManagementTools?: boolean;
   enabled?: boolean;
   defaultWorkspaceDir?: string;
-  registerLegacyAliases?: boolean;
 }
 
 function resolveWorkspaceDir(toolCtx: unknown, fallback?: string): string {
@@ -472,26 +471,8 @@ export function registerGovernanceTools(
   const passthroughCtx: GovernanceToolContext = { workspaceDir: options.defaultWorkspaceDir };
   registerGovernanceLogTool(api, passthroughCtx);
 
-  if (options.registerLegacyAliases !== false) {
-    registerGovernanceLogToolByName(api, passthroughCtx, "self_improvement_log", "Self-Improvement Log (Legacy)");
-  }
-
   if (options.enableManagementTools) {
     registerGovernanceExtractSkillTool(api, passthroughCtx);
     registerGovernanceReviewTool(api, passthroughCtx);
-    if (options.registerLegacyAliases !== false) {
-      registerGovernanceExtractSkillToolByName(
-        api,
-        passthroughCtx,
-        "self_improvement_extract_skill",
-        "Self-Improvement Extract Skill (Legacy)"
-      );
-      registerGovernanceReviewToolByName(
-        api,
-        passthroughCtx,
-        "self_improvement_review",
-        "Self-Improvement Review (Legacy)"
-      );
-    }
   }
 }

@@ -23,6 +23,7 @@
 - `autoRecall` is the only prompt-time recall/injection orchestration surface.
 - `autoRecall` has context and behavioral-guidance channels; neither is a separate generation pipeline.
 - `governance` owns backlog, review, extraction, and promotion workflow tools/files.
+- Governance tools are registered only under canonical `governance_*` names.
 - `session-lessons` owns lesson, cause, fix, prevention, stable decision, and durable practice extraction.
 - `governance-candidates` owns worth-promoting learnings, skill extraction candidates, and AGENTS/SOUL/TOOLS promotion candidates.
 - `follow-up-focus` and `next-turn-guidance` are distill artifact subtypes, not a separate reflection persistence pipeline.
@@ -38,8 +39,15 @@
 - `remoteBackend.enabled=true` is required for supported runtime behavior.
 - The plugin does not provide a supported local-authority fallback.
 - Client-side tools do not own scope selection; backend data-plane routes remain authoritative.
+- The plugin no longer ships self-improvement/reflection wrapper modules or legacy governance tool aliases.
 - Recall/injection paths remain fail-open where appropriate.
 - Write, update, delete, list, stats, and distill enqueue paths require runtime principal identity and fail clearly when that identity is missing.
+
+## Naming boundary
+
+- Canonical plugin/runtime language is `autoRecall`, `behavioral guidance`, `distill`, and `governance`.
+- The backend wire/storage contract still uses `category=reflection` and `/v1/recall/reflection` for the behavioral-guidance recall lane in this scope.
+- That backend naming is intentionally retained for contract and persisted-data stability; adapter/runtime internals map it to behavioral-guidance terminology instead of exposing new compatibility shims.
 
 ## Current source-of-truth files
 

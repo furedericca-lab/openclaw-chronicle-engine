@@ -372,11 +372,10 @@ openclaw config get plugins.slots.memory
 cutover 说明：
 
 - `1.0.0-beta.0` 已移除只为迁移保留的 config alias。
-- 请直接使用 `sessionStrategy`，不要再使用 `sessionMemory.*`。
 - 只支持 `sessionStrategy: "autoRecall" | "systemSessionMemory" | "none"`。
 - `autoRecallBehavioral.*` 是当前行为指导配置的 canonical surface。
 - backlog/review 工作流配置请使用 `governance.*`。
-- `memoryReflection.*`、`selfImprovement.*` 和 `sessionStrategy: "memoryReflection"` 都会被直接拒绝。
+- 历史迁移别名配置都会被直接拒绝。
 
 ## 13. 工具
 
@@ -402,20 +401,12 @@ cutover 说明：
 
 这些 management/debug 工具仍然受 caller scope 和运行时主体身份约束，不提供匿名本地 fallback。
 
-过渡兼容 alias：
-
-- `self_improvement_log`
-- `self_improvement_review`
-- `self_improvement_extract_skill`
-
-这些旧名字当前仍调用同一套 governance 实现，但应视为兼容层而不是规范接口。
-
 ### Backend client 管理/调试面
 
 插件侧 backend client 还提供：
 
 - distill jobs
-- recall debug traces
+- recall debug traces（`generic` 与 `behavioral`）
 
 ## 14. 仓库结构
 
@@ -459,15 +450,13 @@ cargo test --manifest-path backend/Cargo.toml --test phase2_contract_semantics -
 
 它不负责 backend 权威。
 
-### “旧的 `sessionMemory.*` 或遗留的 `memoryReflection.*` 字段现在还能用吗？”
+### “旧的配置别名现在还能用吗？”
 
-`sessionMemory.*` 不能用。请直接使用 `sessionStrategy`。
+不能。请只使用当前 schema 中的名字：
 
-`memoryReflection.*` 不能用。请改用 `autoRecallBehavioral.*`。
-
-`selfImprovement.*` 也不能用。governance 工作流相关配置请改用 `governance.*`，行为提醒 / bootstrap 相关配置请改用 `autoRecallBehavioral.*`。
-
-`sessionStrategy: "memoryReflection"` 也会被拒绝。请改用 `sessionStrategy: "autoRecall"`。
+- `sessionStrategy`
+- `autoRecallBehavioral.*`
+- `governance.*`
 
 ### “distill 现在是不是还靠旧的 `jsonl_distill.py` sidecar？”
 

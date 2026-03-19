@@ -630,15 +630,17 @@ describe("remote backend shell integration", () => {
     assert.equal(genericDebugResult.details.trace.kind, "generic");
     assert.match(genericDebugResult.content[0].text, /Debug recall trace \(generic\): 1 row\(s\)/);
 
-    const reflectionDebugResult = await debugTool.execute("call-debug-reflection", {
-      channel: "reflection",
+    const behavioralDebugResult = await debugTool.execute("call-debug-behavioral", {
+      channel: "behavioral",
       query: "restart checks",
       limit: 3,
-      reflectionMode: "invariant-only",
+      behavioralMode: "invariant-only",
     });
-    assert.equal(reflectionDebugResult.details.channel, "reflection");
-    assert.equal(reflectionDebugResult.details.trace.kind, "reflection");
-    assert.equal(reflectionDebugResult.details.trace.mode, "invariant-only");
+    assert.equal(behavioralDebugResult.details.channel, "behavioral");
+    assert.equal(behavioralDebugResult.details.trace.kind, "behavioral");
+    assert.equal(behavioralDebugResult.details.trace.mode, "invariant-only");
+    assert.match(behavioralDebugResult.content[0].text, /Trace kind: behavioral/);
+    assert.doesNotMatch(behavioralDebugResult.content[0].text, /Trace kind: reflection/);
 
     assert.equal(fetchMock.calls.length, 4);
     const distillEnqueueCall = fetchMock.calls[0];
@@ -657,10 +659,10 @@ describe("remote backend shell integration", () => {
     assert.deepEqual(Object.keys(genericDebugCall.body).sort(), ["actor", "limit", "query"]);
     assert.equal(genericDebugCall.headers["idempotency-key"], undefined);
 
-    const reflectionDebugCall = fetchMock.calls[3];
-    assert.equal(reflectionDebugCall.path, "/v1/debug/recall/reflection");
-    assert.deepEqual(Object.keys(reflectionDebugCall.body).sort(), ["actor", "limit", "mode", "query"]);
-    assert.equal(reflectionDebugCall.body.mode, "invariant-only");
+    const behavioralDebugCall = fetchMock.calls[3];
+    assert.equal(behavioralDebugCall.path, "/v1/debug/recall/reflection");
+    assert.deepEqual(Object.keys(behavioralDebugCall.body).sort(), ["actor", "limit", "mode", "query"]);
+    assert.equal(behavioralDebugCall.body.mode, "invariant-only");
 
     for (const call of fetchMock.calls) {
       if (call.body) {
@@ -754,7 +756,7 @@ describe("remote backend shell integration", () => {
       category: "reflection",
     });
     assert.equal(storeResult.details.error, "invalid_param");
-    assert.equal(storeResult.details.code, "reflection_category_reserved");
+    assert.equal(storeResult.details.code, "behavioral_category_reserved");
     assert.match(storeResult.content[0].text, /category=reflection/);
 
     const update = harness.instantiateTool("memory_update", toolCtx);
@@ -763,7 +765,7 @@ describe("remote backend shell integration", () => {
       category: "reflection",
     });
     assert.equal(updateResult.details.error, "invalid_param");
-    assert.equal(updateResult.details.code, "reflection_category_reserved");
+    assert.equal(updateResult.details.code, "behavioral_category_reserved");
     assert.match(updateResult.content[0].text, /category=reflection/);
 
     assert.equal(fetchMock.calls.length, 0);

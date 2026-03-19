@@ -1,4 +1,4 @@
-import type { BackendRecallGenericRow, BackendRecallReflectionRow } from "../backend-client/types.js";
+import type { BackendBehavioralRecallRow, BackendRecallGenericRow } from "../backend-client/types.js";
 import {
   extractBehavioralGuidanceErrorSignalFromToolCall,
   type BehavioralGuidanceToolCallEvent,
@@ -13,7 +13,7 @@ import {
   renderBehavioralGuidanceBlock,
   renderErrorDetectedBlock,
 } from "./prompt-block-renderer.js";
-import type { ReflectionErrorSignal, SessionExposureState } from "./session-exposure-state.js";
+import type { BehavioralGuidanceErrorSignal, SessionExposureState } from "./session-exposure-state.js";
 
 export type AutoRecallSelectionMode = "mmr";
 export type AutoRecallCategory = "preference" | "fact" | "decision" | "entity" | "other" | "reflection";
@@ -92,7 +92,7 @@ export interface AutoRecallBehavioralPlannerDependencies {
     limit: number;
     includeKinds?: BehavioralRecallKind[];
     minScore?: number;
-  }) => Promise<BackendRecallReflectionRow[]>;
+  }) => Promise<BackendBehavioralRecallRow[]>;
   sanitizeForContext: (text: string) => string;
   logger?: {
     info?: (message: string) => void;
@@ -172,7 +172,7 @@ export function createAutoRecallBehavioralPlanner(
     sessionKey?: string;
     userId?: string;
   }) => Promise<string | undefined>;
-  getRecentErrorSignals: (sessionKey: string, maxEntries: number) => ReflectionErrorSignal[];
+  getRecentErrorSignals: (sessionKey: string, maxEntries: number) => BehavioralGuidanceErrorSignal[];
   clearSession: (context: { sessionKey?: string; sessionId?: string }) => void;
   pruneSessionState: () => void;
   invalidateAgentCache: (_agentId: string) => void;
@@ -283,7 +283,7 @@ export function createAutoRecallBehavioralPlanner(
     return joinPrependContextBlocks(blocks);
   };
 
-  const getRecentErrorSignals = (sessionKey: string, maxEntries: number): ReflectionErrorSignal[] =>
+  const getRecentErrorSignals = (sessionKey: string, maxEntries: number): BehavioralGuidanceErrorSignal[] =>
     deps.sessionState.getRecentBehavioralGuidanceErrorSignals(sessionKey, maxEntries);
 
   const clearSession = (context: { sessionKey?: string; sessionId?: string }) => {
@@ -325,51 +325,4 @@ function mapBackendRowsToRecallResults(rows: BackendRecallGenericRow[]): AutoRec
     scope: row.scope,
     score: Number.isFinite(row.score) ? Number(row.score) : 0,
   }));
-}
-
-export type ReflectionInjectMode = "inheritance-only" | "inheritance+derived";
-export type ReflectionRecallMode = BehavioralRecallMode;
-export type ReflectionItemKind = "invariant" | "derived";
-export type ReflectionPromptPlannerConfig = Omit<AutoRecallBehavioralPlannerConfig, "injectMode"> & {
-  injectMode: ReflectionInjectMode;
-  recall: Omit<AutoRecallBehavioralPlannerConfig["recall"], "includeKinds"> & {
-    includeKinds: ReflectionItemKind[];
-  };
-};
-export type ReflectionPromptPlannerDependencies = Omit<AutoRecallBehavioralPlannerDependencies, "recallBehavioral"> & {
-  recallReflection: (params: {
-    prompt?: string;
-    agentId: string;
-    sessionId: string;
-    sessionKey?: string;
-    userId?: string;
-    mode: "invariant-only" | "invariant+derived";
-    limit: number;
-    includeKinds?: ReflectionItemKind[];
-    minScore?: number;
-  }) => Promise<BackendRecallReflectionRow[]>;
-};
-
-export function createReflectionPromptPlanner(
-  config: ReflectionPromptPlannerConfig,
-  deps: ReflectionPromptPlannerDependencies
-) {
-  return createAutoRecallBehavioralPlanner(
-    {
-      ...config,
-      injectMode: config.injectMode === "inheritance-only" ? "durable-only" : "durable+adaptive",
-      recall: {
-        ...config.recall,
-        includeKinds: config.recall.includeKinds.map((kind) => kind === "invariant" ? "durable" : "adaptive"),
-      },
-    },
-    {
-      ...deps,
-      recallBehavioral: async (params) => deps.recallReflection({
-        ...params,
-        mode: params.mode === "durable-only" ? "invariant-only" : "invariant+derived",
-        includeKinds: params.includeKinds?.map((kind) => kind === "durable" ? "invariant" : "derived"),
-      }),
-    }
-  );
 }

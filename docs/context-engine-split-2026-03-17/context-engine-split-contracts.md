@@ -6,8 +6,8 @@ description: 2026-03-17 design contract snapshot for context-engine-split.
 Snapshot note:
 - this contract records the refreshed 2026-03-17 internal design boundary for the context-engine split;
 - it is design guidance for current module placement and orchestration seams, while `openclaw.plugin.json` remains the config/schema authority.
-- any older command-triggered reflection-generation wording in this snapshot is superseded by `../runtime-architecture.md` and `../remote-memory-backend-2026-03-18/`.
-- current canonical naming for prompt-time orchestration is `autoRecall` plus `governance`; any reflection/self-improvement wording below is historical snapshot context only.
+- any older command-triggered generation wording in this snapshot is superseded by `../runtime-architecture.md` and `../remote-memory-backend-2026-03-18/`.
+- current canonical naming for prompt-time orchestration is `autoRecall` plus `governance`; any older transitional wording below is historical snapshot context only.
 
 ## API Contracts
 

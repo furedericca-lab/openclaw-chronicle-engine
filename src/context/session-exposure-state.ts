@@ -4,7 +4,7 @@ import {
   type DynamicRecallSessionState,
 } from "./recall-engine.js";
 
-export type ReflectionErrorSignal = {
+export type BehavioralGuidanceErrorSignal = {
   at: number;
   toolName: string;
   summary: string;
@@ -13,8 +13,8 @@ export type ReflectionErrorSignal = {
   signatureHash: string;
 };
 
-type ReflectionErrorState = {
-  entries: ReflectionErrorSignal[];
+type BehavioralGuidanceErrorState = {
+  entries: BehavioralGuidanceErrorSignal[];
   lastInjectedCount: number;
   signatureSet: Set<string>;
   updatedAt: number;
@@ -22,49 +22,42 @@ type ReflectionErrorState = {
 
 export interface SessionExposureStateOptions {
   maxTrackedSessions?: number;
-  reflectionErrorSessionTtlMs?: number;
-  reflectionErrorSessionEntryLimit?: number;
+  behavioralGuidanceErrorSessionTtlMs?: number;
+  behavioralGuidanceErrorSessionEntryLimit?: number;
 }
 
 export interface SessionExposureState {
   autoRecallState: DynamicRecallSessionState;
   behavioralRecallState: DynamicRecallSessionState;
-  reflectionRecallState: DynamicRecallSessionState;
   clearDynamicRecallForContext: (ctx: { sessionId?: unknown; sessionKey?: unknown }) => void;
-  addBehavioralGuidanceErrorSignal: (sessionKey: string, signal: ReflectionErrorSignal, dedupeEnabled: boolean) => void;
-  addReflectionErrorSignal: (sessionKey: string, signal: ReflectionErrorSignal, dedupeEnabled: boolean) => void;
-  getPendingBehavioralGuidanceErrorSignalsForPrompt: (sessionKey: string, maxEntries: number) => ReflectionErrorSignal[];
-  getPendingReflectionErrorSignalsForPrompt: (sessionKey: string, maxEntries: number) => ReflectionErrorSignal[];
-  getRecentBehavioralGuidanceErrorSignals: (sessionKey: string, maxEntries: number) => ReflectionErrorSignal[];
-  getRecentReflectionErrorSignals: (sessionKey: string, maxEntries: number) => ReflectionErrorSignal[];
+  addBehavioralGuidanceErrorSignal: (sessionKey: string, signal: BehavioralGuidanceErrorSignal, dedupeEnabled: boolean) => void;
+  getPendingBehavioralGuidanceErrorSignalsForPrompt: (sessionKey: string, maxEntries: number) => BehavioralGuidanceErrorSignal[];
+  getRecentBehavioralGuidanceErrorSignals: (sessionKey: string, maxEntries: number) => BehavioralGuidanceErrorSignal[];
   clearBehavioralGuidanceErrorSignalsForSession: (sessionKey: string) => void;
-  clearReflectionErrorSignalsForSession: (sessionKey: string) => void;
   pruneBehavioralGuidanceSessionState: (now?: number) => void;
-  pruneReflectionSessionState: (now?: number) => void;
 }
 
 export const DEFAULT_SESSION_EXPOSURE_MAX_TRACKED_SESSIONS = 200;
-export const DEFAULT_REFLECTION_ERROR_SESSION_TTL_MS = 30 * 60 * 1000;
-const DEFAULT_REFLECTION_ERROR_SESSION_ENTRY_LIMIT = 30;
+export const DEFAULT_BEHAVIORAL_GUIDANCE_ERROR_SESSION_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_BEHAVIORAL_GUIDANCE_ERROR_SESSION_ENTRY_LIMIT = 30;
 
 export function createSessionExposureState(options?: SessionExposureStateOptions): SessionExposureState {
   const maxTrackedSessions = normalizePositiveInt(
     options?.maxTrackedSessions,
     DEFAULT_SESSION_EXPOSURE_MAX_TRACKED_SESSIONS
   );
-  const reflectionErrorSessionTtlMs = normalizePositiveInt(
-    options?.reflectionErrorSessionTtlMs,
-    DEFAULT_REFLECTION_ERROR_SESSION_TTL_MS
+  const behavioralGuidanceErrorSessionTtlMs = normalizePositiveInt(
+    options?.behavioralGuidanceErrorSessionTtlMs,
+    DEFAULT_BEHAVIORAL_GUIDANCE_ERROR_SESSION_TTL_MS
   );
-  const reflectionErrorSessionEntryLimit = normalizePositiveInt(
-    options?.reflectionErrorSessionEntryLimit,
-    DEFAULT_REFLECTION_ERROR_SESSION_ENTRY_LIMIT
+  const behavioralGuidanceErrorSessionEntryLimit = normalizePositiveInt(
+    options?.behavioralGuidanceErrorSessionEntryLimit,
+    DEFAULT_BEHAVIORAL_GUIDANCE_ERROR_SESSION_ENTRY_LIMIT
   );
 
-  const reflectionErrorStateBySession = new Map<string, ReflectionErrorState>();
+  const behavioralGuidanceErrorStateBySession = new Map<string, BehavioralGuidanceErrorState>();
   const autoRecallState = createDynamicRecallSessionState({ maxSessions: maxTrackedSessions });
   const behavioralRecallState = createDynamicRecallSessionState({ maxSessions: maxTrackedSessions });
-  const reflectionRecallState = behavioralRecallState;
 
   const pruneOldestByUpdatedAt = <T extends { updatedAt: number }>(map: Map<string, T>, maxSize: number) => {
     if (map.size <= maxSize) return;
@@ -77,28 +70,28 @@ export function createSessionExposureState(options?: SessionExposureStateOptions
   };
 
   const pruneBehavioralGuidanceSessionState = (now = Date.now()) => {
-    for (const [key, state] of reflectionErrorStateBySession.entries()) {
-      if (now - state.updatedAt > reflectionErrorSessionTtlMs) {
-        reflectionErrorStateBySession.delete(key);
+    for (const [key, state] of behavioralGuidanceErrorStateBySession.entries()) {
+      if (now - state.updatedAt > behavioralGuidanceErrorSessionTtlMs) {
+        behavioralGuidanceErrorStateBySession.delete(key);
       }
     }
-    pruneOldestByUpdatedAt(reflectionErrorStateBySession, maxTrackedSessions);
+    pruneOldestByUpdatedAt(behavioralGuidanceErrorStateBySession, maxTrackedSessions);
   };
 
-  const getReflectionErrorState = (sessionKey: string): ReflectionErrorState => {
+  const getBehavioralGuidanceErrorState = (sessionKey: string): BehavioralGuidanceErrorState => {
     const key = sessionKey.trim();
-    const current = reflectionErrorStateBySession.get(key);
+    const current = behavioralGuidanceErrorStateBySession.get(key);
     if (current) {
       current.updatedAt = Date.now();
       return current;
     }
-    const created: ReflectionErrorState = {
+    const created: BehavioralGuidanceErrorState = {
       entries: [],
       lastInjectedCount: 0,
       signatureSet: new Set<string>(),
       updatedAt: Date.now(),
     };
-    reflectionErrorStateBySession.set(key, created);
+    behavioralGuidanceErrorStateBySession.set(key, created);
     return created;
   };
 
@@ -118,19 +111,19 @@ export function createSessionExposureState(options?: SessionExposureStateOptions
 
   const addBehavioralGuidanceErrorSignal = (
     sessionKey: string,
-    signal: ReflectionErrorSignal,
+    signal: BehavioralGuidanceErrorSignal,
     dedupeEnabled: boolean
   ) => {
     const normalizedSessionKey = sessionKey.trim();
     if (!normalizedSessionKey) return;
     pruneBehavioralGuidanceSessionState();
-    const state = getReflectionErrorState(normalizedSessionKey);
+    const state = getBehavioralGuidanceErrorState(normalizedSessionKey);
     if (dedupeEnabled && state.signatureSet.has(signal.signatureHash)) return;
     state.entries.push(signal);
     state.signatureSet.add(signal.signatureHash);
     state.updatedAt = Date.now();
-    if (state.entries.length > reflectionErrorSessionEntryLimit) {
-      const removed = state.entries.length - reflectionErrorSessionEntryLimit;
+    if (state.entries.length > behavioralGuidanceErrorSessionEntryLimit) {
+      const removed = state.entries.length - behavioralGuidanceErrorSessionEntryLimit;
       state.entries.splice(0, removed);
       state.lastInjectedCount = Math.max(0, state.lastInjectedCount - removed);
       state.signatureSet = new Set(state.entries.map((entry) => entry.signatureHash));
@@ -140,9 +133,9 @@ export function createSessionExposureState(options?: SessionExposureStateOptions
   const getPendingBehavioralGuidanceErrorSignalsForPrompt = (
     sessionKey: string,
     maxEntries: number
-  ): ReflectionErrorSignal[] => {
+  ): BehavioralGuidanceErrorSignal[] => {
     pruneBehavioralGuidanceSessionState();
-    const state = reflectionErrorStateBySession.get(sessionKey.trim());
+    const state = behavioralGuidanceErrorStateBySession.get(sessionKey.trim());
     if (!state) return [];
     state.updatedAt = Date.now();
     state.lastInjectedCount = Math.min(state.lastInjectedCount, state.entries.length);
@@ -156,9 +149,9 @@ export function createSessionExposureState(options?: SessionExposureStateOptions
   const getRecentBehavioralGuidanceErrorSignals = (
     sessionKey: string,
     maxEntries: number
-  ): ReflectionErrorSignal[] => {
+  ): BehavioralGuidanceErrorSignal[] => {
     pruneBehavioralGuidanceSessionState();
-    const state = reflectionErrorStateBySession.get(sessionKey.trim());
+    const state = behavioralGuidanceErrorStateBySession.get(sessionKey.trim());
     if (!state) return [];
     state.updatedAt = Date.now();
     const limit = normalizePositiveInt(maxEntries, state.entries.length || 1);
@@ -168,24 +161,18 @@ export function createSessionExposureState(options?: SessionExposureStateOptions
   const clearBehavioralGuidanceErrorSignalsForSession = (sessionKey: string) => {
     const normalized = sessionKey.trim();
     if (!normalized) return;
-    reflectionErrorStateBySession.delete(normalized);
+    behavioralGuidanceErrorStateBySession.delete(normalized);
   };
 
   return {
     autoRecallState,
     behavioralRecallState,
-    reflectionRecallState,
     clearDynamicRecallForContext,
     addBehavioralGuidanceErrorSignal,
-    addReflectionErrorSignal: addBehavioralGuidanceErrorSignal,
     getPendingBehavioralGuidanceErrorSignalsForPrompt,
-    getPendingReflectionErrorSignalsForPrompt: getPendingBehavioralGuidanceErrorSignalsForPrompt,
     getRecentBehavioralGuidanceErrorSignals,
-    getRecentReflectionErrorSignals: getRecentBehavioralGuidanceErrorSignals,
     clearBehavioralGuidanceErrorSignalsForSession,
-    clearReflectionErrorSignalsForSession: clearBehavioralGuidanceErrorSignalsForSession,
     pruneBehavioralGuidanceSessionState,
-    pruneReflectionSessionState: pruneBehavioralGuidanceSessionState,
   };
 }
 

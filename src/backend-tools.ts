@@ -14,7 +14,7 @@ import type {
   DistillPersistMode,
   MemoryBackendClient,
   MemoryCategory,
-  ReflectionRecallMode,
+  BehavioralRecallMode,
   WritableMemoryCategory,
 } from "./backend-client/types.js";
 
@@ -32,8 +32,8 @@ const MESSAGE_ROLES = ["user", "assistant", "system"] as const;
 const DISTILL_MODES = ["session-lessons", "governance-candidates"] as const;
 const DISTILL_SOURCE_KINDS = ["inline-messages", "session-transcript"] as const;
 const DISTILL_PERSIST_MODES = ["artifacts-only", "persist-memory-rows"] as const;
-const DEBUG_RECALL_CHANNELS = ["generic", "reflection"] as const;
-const REFLECTION_DEBUG_MODES = ["invariant-only", "invariant+derived"] as const;
+const DEBUG_RECALL_CHANNELS = ["generic", "behavioral"] as const;
+const BEHAVIORAL_DEBUG_MODES = ["invariant-only", "invariant+derived"] as const;
 
 export interface BackendToolRegistrationOptions {
   enableManagementTools?: boolean;
@@ -170,7 +170,7 @@ function registerMemoryStoreTool(
           importance?: number;
           category?: WritableMemoryCategory | "reflection";
         };
-        const blocked = manualReflectionWriteSurfaceError(category);
+        const blocked = manualBehavioralGuidanceWriteSurfaceError(category);
         if (blocked) return blocked;
         try {
           const ctx = buildToolCallContext(toolCtx, context.runtimeDefaults);
@@ -294,7 +294,7 @@ function registerMemoryUpdateTool(
             details: { error: "no_updates" },
           };
         }
-        const blocked = manualReflectionWriteSurfaceError(category);
+        const blocked = manualBehavioralGuidanceWriteSurfaceError(category);
         if (blocked) return blocked;
         try {
           const ctx = buildToolCallContext(toolCtx, context.runtimeDefaults);
@@ -358,7 +358,7 @@ function registerMemoryStatsTool(
           const lines = [
             "Memory Statistics (remote backend):",
             `• Total memories: ${stats.memoryCount}`,
-            `• Reflection memories: ${stats.reflectionCount}`,
+            `• Behavioral-guidance memories: ${stats.behavioralCount}`,
             "",
             "Memories by category:",
             ...Object.entries(stats.categories || {}).map(([name, count]) => `  • ${name}: ${count}`),
@@ -602,49 +602,50 @@ function registerMemoryRecallDebugTool(
         channel: stringEnum(DEBUG_RECALL_CHANNELS),
         query: Type.String({ description: "Debug recall query." }),
         limit: Type.Optional(Type.Number({ description: "Max rows to inspect (default: 5, max: 20)." })),
-        reflectionMode: Type.Optional(
-          stringEnum(REFLECTION_DEBUG_MODES)
+        behavioralMode: Type.Optional(
+          stringEnum(BEHAVIORAL_DEBUG_MODES)
         ),
       }),
       async execute(_toolCallId, params) {
-        const { channel, query, limit = 5, reflectionMode } = params as {
-          channel: "generic" | "reflection";
+        const { channel, query, limit = 5, behavioralMode } = params as {
+          channel: "generic" | "behavioral";
           query: string;
           limit?: number;
-          reflectionMode?: ReflectionRecallMode;
+          behavioralMode?: BehavioralRecallMode;
         };
-        if (channel === "generic" && reflectionMode) {
+        if (channel === "generic" && behavioralMode) {
           return {
-            content: [{ type: "text", text: "reflectionMode is only valid when channel=reflection." }],
+            content: [{ type: "text", text: "behavioralMode is only valid when channel=behavioral." }],
             details: { error: "invalid_param" },
           };
         }
         try {
           const ctx = buildToolCallContext(toolCtx, context.runtimeDefaults);
           const normalizedLimit = clampInt(limit, 1, 20);
-          const response = channel === "reflection"
-            ? await context.backendClient.recallReflectionDebug(ctx, {
+          const response = channel === "behavioral"
+            ? await context.backendClient.recallBehavioralDebug(ctx, {
               query,
-              mode: reflectionMode || "invariant+derived",
+              mode: behavioralMode || "invariant+derived",
               limit: normalizedLimit,
             })
             : await context.backendClient.recallGenericDebug(ctx, {
               query,
               limit: normalizedLimit,
             });
+          const normalizedTrace = normalizeTraceForTool(channel, response.trace);
 
           return {
             content: [
               {
                 type: "text",
-                text: formatDebugRecallSummary(channel, response.rows, response.trace),
+                text: formatDebugRecallSummary(channel, response.rows, normalizedTrace),
               },
             ],
             details: {
               channel,
               count: response.rows.length,
               rows: response.rows,
-              trace: response.trace,
+              trace: normalizedTrace,
             },
           };
         } catch (error) {
@@ -705,18 +706,18 @@ function backendToolError(prefix: string, error: unknown) {
   };
 }
 
-function manualReflectionWriteSurfaceError(category: unknown) {
+function manualBehavioralGuidanceWriteSurfaceError(category: unknown) {
   if (category !== "reflection") return undefined;
   return {
     content: [
       {
         type: "text",
-        text: "category=reflection is reserved for backend-managed recall rows. Use distill for trajectory-derived knowledge.",
+        text: "category=reflection is reserved for backend-managed behavioral-guidance rows. Use distill for trajectory-derived knowledge.",
       },
     ],
     details: {
       error: "invalid_param",
-      code: "reflection_category_reserved",
+      code: "behavioral_category_reserved",
       category: "reflection",
     },
   };
@@ -814,7 +815,7 @@ function describeDistillSource(source:
 }
 
 function formatDebugRecallSummary(
-  channel: "generic" | "reflection",
+  channel: "generic" | "behavioral",
   rows: Array<{ id: string; text: string; score: number }>,
   trace: BackendRetrievalTrace
 ): string {
@@ -846,6 +847,17 @@ function formatDebugRecallSummary(
   }
 
   return lines.join("\n");
+}
+
+function normalizeTraceForTool(
+  channel: "generic" | "behavioral",
+  trace: BackendRetrievalTrace
+): BackendRetrievalTrace {
+  if (channel !== "behavioral" || trace.kind !== "reflection") return trace;
+  return {
+    ...trace,
+    kind: "behavioral",
+  };
 }
 
 function clipForToolOutput(text: string, maxLen: number): string {

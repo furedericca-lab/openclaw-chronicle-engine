@@ -30,7 +30,7 @@ import type {
   MemoryBackendClient,
   DistillMode as BackendDistillMode,
   DistillPersistMode as BackendDistillPersistMode,
-  ReflectionRecallMode as BackendReflectionRecallMode,
+  BehavioralRecallMode as BackendBehavioralRecallMode,
 } from "./src/backend-client/types.js";
 
 // ============================================================================
@@ -46,7 +46,6 @@ interface PluginConfig {
   autoRecallSelectionMode?: AutoRecallSelectionMode;
   autoRecallCategories?: MemoryCategory[];
   autoRecallExcludeBehavioral?: boolean;
-  autoRecallExcludeReflection?: boolean;
   autoRecallMaxAgeDays?: number;
   autoRecallMaxEntriesPerKey?: number;
   captureAssistant?: boolean;
@@ -186,9 +185,24 @@ function parseBehavioralRecallKinds(value: unknown, fallback: BehavioralRecallKi
   const parsed = value
     .filter((item): item is string => typeof item === "string")
     .map((item) => item.trim())
+    .map((item) => {
+      if (item === "invariant") {
+        rejectRemovedConfigField(
+          "autoRecallBehavioral.recall.includeKinds[]=invariant",
+          "autoRecallBehavioral.recall.includeKinds[]=durable"
+        );
+      }
+      if (item === "derived") {
+        rejectRemovedConfigField(
+          "autoRecallBehavioral.recall.includeKinds[]=derived",
+          "autoRecallBehavioral.recall.includeKinds[]=adaptive"
+        );
+      }
+      return item;
+    })
     .map((item): BehavioralRecallKind | undefined => {
-      if (item === "durable" || item === "invariant") return "durable";
-      if (item === "adaptive" || item === "derived") return "adaptive";
+      if (item === "durable") return "durable";
+      if (item === "adaptive") return "adaptive";
       return undefined;
     })
     .filter((item): item is BehavioralRecallKind => item === "durable" || item === "adaptive");
@@ -269,7 +283,7 @@ function buildBehavioralGuidanceResetNote(params?: { openLoopsBlock?: string; de
     base.push(openLoopsBlock);
   }
   if (derivedFocusBlock) {
-    base.push("- Historical reflection-derived focus:");
+    base.push("- Historical carried-forward focus:");
     base.push(derivedFocusBlock);
   }
   base.push("- Then proceed with the new session.");
@@ -727,7 +741,7 @@ const chronicleEnginePlugin = {
             query: params.query,
             limit: params.limit,
             categories: params.categories,
-            excludeReflection: params.excludeBehavioral,
+            excludeBehavioral: params.excludeBehavioral,
             maxAgeDays: params.maxAgeDays,
             maxEntriesPerKey: params.maxEntriesPerKey,
           });
@@ -1086,10 +1100,10 @@ const chronicleEnginePlugin = {
               );
               return [];
             }
-            const mode: BackendReflectionRecallMode = params.mode === "durable-only"
+            const mode: BackendBehavioralRecallMode = params.mode === "durable-only"
               ? "invariant-only"
               : "invariant+derived";
-            return await memoryBackendClient.recallReflection(resolved.context, {
+            return await memoryBackendClient.recallBehavioral(resolved.context, {
               query: String(params.prompt || "behavioral-guidance"),
               mode,
               limit: params.limit,
@@ -1213,6 +1227,9 @@ export function parsePluginConfig(value: unknown): PluginConfig {
   if (hasOwnKey(cfg as Record<string, unknown>, "selfImprovement")) {
     rejectRemovedConfigField("selfImprovement", "governance or autoRecallBehavioral");
   }
+  if (hasOwnKey(cfg as Record<string, unknown>, "autoRecallExcludeReflection")) {
+    rejectRemovedConfigField("autoRecallExcludeReflection", "autoRecallExcludeBehavioral");
+  }
   const sessionStrategyRaw = cfg.sessionStrategy;
   if (sessionStrategyRaw === "memoryReflection") {
     throw new Error(
@@ -1224,10 +1241,22 @@ export function parsePluginConfig(value: unknown): PluginConfig {
       ? sessionStrategyRaw
       : "systemSessionMemory";
   const injectModeRaw = autoRecallBehavioralRaw?.injectMode;
+  if (injectModeRaw === "inheritance-only") {
+    rejectRemovedConfigField(
+      "autoRecallBehavioral.injectMode=inheritance-only",
+      "autoRecallBehavioral.injectMode=durable-only"
+    );
+  }
+  if (injectModeRaw === "inheritance+derived") {
+    rejectRemovedConfigField(
+      "autoRecallBehavioral.injectMode=inheritance+derived",
+      "autoRecallBehavioral.injectMode=durable+adaptive"
+    );
+  }
   const behavioralInjectMode: BehavioralGuidanceInjectMode =
-    injectModeRaw === "durable-only" || injectModeRaw === "inheritance-only"
+    injectModeRaw === "durable-only"
       ? "durable-only"
-      : injectModeRaw === "durable+adaptive" || injectModeRaw === "inheritance+derived"
+      : injectModeRaw === "durable+adaptive"
         ? "durable+adaptive"
         : "durable+adaptive";
   const autoRecallBehavioralRecallRaw = typeof autoRecallBehavioralRaw?.recall === "object" && autoRecallBehavioralRaw.recall !== null
@@ -1269,9 +1298,7 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     : true;
   const autoRecallExcludeBehavioral = typeof cfg.autoRecallExcludeBehavioral === "boolean"
     ? cfg.autoRecallExcludeBehavioral
-    : typeof cfg.autoRecallExcludeReflection === "boolean"
-      ? cfg.autoRecallExcludeReflection
-      : DEFAULT_AUTO_RECALL_EXCLUDE_BEHAVIORAL;
+    : DEFAULT_AUTO_RECALL_EXCLUDE_BEHAVIORAL;
   const behavioralEnabled = sessionStrategy === "autoRecall" && autoRecallBehavioralRaw?.enabled !== false;
 
   return {
@@ -1284,7 +1311,6 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     autoRecallSelectionMode,
     autoRecallCategories: parseMemoryCategories(cfg.autoRecallCategories, DEFAULT_AUTO_RECALL_CATEGORIES),
     autoRecallExcludeBehavioral,
-    autoRecallExcludeReflection: autoRecallExcludeBehavioral,
     autoRecallMaxAgeDays: parsePositiveInt(cfg.autoRecallMaxAgeDays) ?? DEFAULT_AUTO_RECALL_MAX_AGE_DAYS,
     autoRecallMaxEntriesPerKey: parsePositiveInt(cfg.autoRecallMaxEntriesPerKey) ?? DEFAULT_AUTO_RECALL_MAX_ENTRIES_PER_KEY,
     captureAssistant: cfg.captureAssistant === true,

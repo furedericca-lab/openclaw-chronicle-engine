@@ -22,6 +22,10 @@ Interpretation:
 
 Archived scopes:
 
+- `governance-behavioral-closeout-2026-03-19/`: phased closeout record for removing governance/self-improvement legacy surfaces, restoring legacy `.learnings/` backlog continuity into `.governance/`, normalizing behavioral debug output, and documenting the remaining backend naming boundary. Collected: `2026-03-19` as an archive move after implementation and review-fix completion. Reference value: `8/10`.
+  Why: high audit value because it captures the final public-surface cleanup plus the post-review fixes that preserved backlog continuity and eliminated the last active behavioral-vs-reflection debug mismatch.
+- `autorecall-governance-unification-2026-03-18/`: phased unification record for introducing canonical `autoRecall` behavioral-guidance wording and governance backlog surfaces before the final alias/shim closeout. Collected: `2026-03-19` as an archive move from the former top-level scope. Reference value: `8/10`.
+  Why: high audit value because it records the first semantic unification pass, but it is now superseded by the 2026-03-19 closeout that removed the last public alias/tool/module remnants and archived this scope.
 - `distill-authority-closeout-2026-03-18/`: single-contract closeout record for removing the dead backend reflection-provider config surface, tightening manual reflection-row write paths, and demoting remaining top-level snapshot wording that could still be read as command-triggered reflection generation. Collected: `2026-03-18`. Reference value: `7/10`.
   Why: useful as a focused semantic-boundary audit trail because it records the final authority closeout after the larger distill/reflection ownership reset, while keeping misleading-risk lower through explicit superseded labeling rather than broad doc churn.
 - `turns-stage-distill-unification-2026-03-18/`: phased contract, implementation, follow-up blocker closeout, and reviewer-audited archive for removing command-triggered reflection generation, consolidating trajectory-derived writes under cadence-driven distill, and introducing evidence-gated `stable decision` / `durable practice` promotion plus distill-owned `follow-up-focus` / `next-turn-guidance` subtypes. Collected: `2026-03-18`. Reference value: `9/10`.
@@ -79,4 +83,5 @@ Notes:
 
 - `docs/context-engine-split-2026-03-17/` remains a top-level historical architecture/design snapshot.
 - `docs/remote-memory-backend-2026-03-18/` is the single current remote backend architecture/design snapshot after the turns-stage distill unification refresh.
+- `docs/archive/autorecall-governance-unification-2026-03-18/` is intentionally archived after the 2026-03-19 governance/behavioral closeout removed the remaining active compatibility surfaces.
 - Older archive folders remain unchanged as execution/history evidence.

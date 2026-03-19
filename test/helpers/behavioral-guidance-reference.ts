@@ -1,4 +1,4 @@
-export function parseReflectionMetadata(metadataRaw: string | undefined): Record<string, unknown> {
+export function parseBehavioralGuidanceMetadata(metadataRaw: string | undefined): Record<string, unknown> {
   if (!metadataRaw) return {};
   try {
     const parsed = JSON.parse(metadataRaw);
@@ -8,20 +8,20 @@ export function parseReflectionMetadata(metadataRaw: string | undefined): Record
   }
 }
 
-export function isReflectionEntry(entry: { category: string; metadata?: string }): boolean {
+export function isBehavioralGuidanceEntry(entry: { category: string; metadata?: string }): boolean {
   if (entry.category === "reflection") return true;
-  const metadata = parseReflectionMetadata(entry.metadata);
+  const metadata = parseBehavioralGuidanceMetadata(entry.metadata);
   return metadata.type === "memory-reflection-event" ||
     metadata.type === "memory-reflection-item";
 }
 
 export function getDisplayCategoryTag(entry: { category: string; scope: string; metadata?: string }): string {
-  if (!isReflectionEntry(entry)) return `${entry.category}:${entry.scope}`;
+  if (!isBehavioralGuidanceEntry(entry)) return `${entry.category}:${entry.scope}`;
   return `reflection:${entry.scope}`;
 }
 
 type RetryClassifierInput = {
-  inReflectionScope: boolean;
+  inBehavioralGuidanceScope: boolean;
   retryCount: number;
   usefulOutputChars: number;
   error: unknown;
@@ -30,7 +30,7 @@ type RetryClassifierInput = {
 type RetryClassifierResult = {
   retryable: boolean;
   reason:
-  | "not_reflection_scope"
+  | "not_behavioral_guidance_scope"
   | "retry_already_used"
   | "useful_output_present"
   | "non_retry_error"
@@ -42,7 +42,7 @@ type RetryClassifierResult = {
 type RetryState = { count: number };
 
 type RetryRunnerParams<T> = {
-  scope: "reflection" | "distiller";
+  scope: "behavioral-guidance" | "distiller";
   runner: "direct" | "cli";
   retryState: RetryState;
   execute: () => Promise<T>;
@@ -51,7 +51,7 @@ type RetryRunnerParams<T> = {
   sleep?: (ms: number) => Promise<void>;
 };
 
-const REFLECTION_TRANSIENT_PATTERNS: RegExp[] = [
+const BEHAVIORAL_GUIDANCE_TRANSIENT_PATTERNS: RegExp[] = [
   /unexpected eof/i,
   /\beconnreset\b/i,
   /\beconnaborted\b/i,
@@ -76,7 +76,7 @@ const REFLECTION_TRANSIENT_PATTERNS: RegExp[] = [
   /fetch failed/i,
 ];
 
-const REFLECTION_NON_RETRY_PATTERNS: RegExp[] = [
+const BEHAVIORAL_GUIDANCE_NON_RETRY_PATTERNS: RegExp[] = [
   /\b401\b/i,
   /\bunauthorized\b/i,
   /invalid api key/i,
@@ -126,21 +126,21 @@ function clipSingleLine(text: string, maxLen = 260): string {
   return `${oneLine.slice(0, maxLen - 3)}...`;
 }
 
-export function isTransientReflectionUpstreamError(error: unknown): boolean {
+export function isTransientBehavioralGuidanceUpstreamError(error: unknown): boolean {
   const msg = toErrorMessage(error);
-  return REFLECTION_TRANSIENT_PATTERNS.some((pattern) => pattern.test(msg));
+  return BEHAVIORAL_GUIDANCE_TRANSIENT_PATTERNS.some((pattern) => pattern.test(msg));
 }
 
-export function isReflectionNonRetryError(error: unknown): boolean {
+export function isBehavioralGuidanceNonRetryError(error: unknown): boolean {
   const msg = toErrorMessage(error);
-  return REFLECTION_NON_RETRY_PATTERNS.some((pattern) => pattern.test(msg));
+  return BEHAVIORAL_GUIDANCE_NON_RETRY_PATTERNS.some((pattern) => pattern.test(msg));
 }
 
-export function classifyReflectionRetry(input: RetryClassifierInput): RetryClassifierResult {
+export function classifyBehavioralGuidanceRetry(input: RetryClassifierInput): RetryClassifierResult {
   const normalizedError = clipSingleLine(toErrorMessage(input.error), 260);
 
-  if (!input.inReflectionScope) {
-    return { retryable: false, reason: "not_reflection_scope", normalizedError };
+  if (!input.inBehavioralGuidanceScope) {
+    return { retryable: false, reason: "not_behavioral_guidance_scope", normalizedError };
   }
   if (input.retryCount > 0) {
     return { retryable: false, reason: "retry_already_used", normalizedError };
@@ -148,36 +148,36 @@ export function classifyReflectionRetry(input: RetryClassifierInput): RetryClass
   if (input.usefulOutputChars > 0) {
     return { retryable: false, reason: "useful_output_present", normalizedError };
   }
-  if (isReflectionNonRetryError(input.error)) {
+  if (isBehavioralGuidanceNonRetryError(input.error)) {
     return { retryable: false, reason: "non_retry_error", normalizedError };
   }
-  if (isTransientReflectionUpstreamError(input.error)) {
+  if (isTransientBehavioralGuidanceUpstreamError(input.error)) {
     return { retryable: true, reason: "transient_upstream_failure", normalizedError };
   }
   return { retryable: false, reason: "non_transient_error", normalizedError };
 }
 
-export function computeReflectionRetryDelayMs(random: () => number = Math.random): number {
+export function computeBehavioralGuidanceRetryDelayMs(random: () => number = Math.random): number {
   const raw = random();
   const clamped = Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 0;
   return 1000 + Math.floor(clamped * 2000);
 }
 
-export async function runWithReflectionTransientRetryOnce<T>(
+export async function runWithBehavioralGuidanceTransientRetryOnce<T>(
   params: RetryRunnerParams<T>
 ): Promise<T> {
   try {
     return await params.execute();
   } catch (error) {
-    const decision = classifyReflectionRetry({
-      inReflectionScope: params.scope === "reflection" || params.scope === "distiller",
+    const decision = classifyBehavioralGuidanceRetry({
+      inBehavioralGuidanceScope: params.scope === "behavioral-guidance" || params.scope === "distiller",
       retryCount: params.retryState.count,
       usefulOutputChars: 0,
       error,
     });
     if (!decision.retryable) throw error;
 
-    const delayMs = computeReflectionRetryDelayMs(params.random);
+    const delayMs = computeBehavioralGuidanceRetryDelayMs(params.random);
     params.retryState.count += 1;
     params.onLog?.(
       "warn",
@@ -201,26 +201,26 @@ export async function runWithReflectionTransientRetryOnce<T>(
   }
 }
 
-export interface ReflectionSlices {
+export interface BehavioralGuidanceSlices {
   invariants: string[];
   derived: string[];
 }
 
-export interface ReflectionMappedMemory {
+export interface BehavioralGuidanceMappedMemory {
   text: string;
   category: "preference" | "fact" | "decision";
   heading: string;
 }
 
-export type ReflectionMappedKind = "user-model" | "agent-model" | "lesson" | "decision";
+export type BehavioralGuidanceMappedKind = "user-model" | "agent-model" | "lesson" | "decision";
 
-export interface ReflectionMappedMemoryItem extends ReflectionMappedMemory {
-  mappedKind: ReflectionMappedKind;
+export interface BehavioralGuidanceMappedMemoryItem extends BehavioralGuidanceMappedMemory {
+  mappedKind: BehavioralGuidanceMappedKind;
   ordinal: number;
   groupSize: number;
 }
 
-export interface ReflectionSliceItem {
+export interface BehavioralGuidanceSliceItem {
   text: string;
   itemKind: "invariant" | "derived";
   section: "Invariants" | "Derived";
@@ -228,7 +228,7 @@ export interface ReflectionSliceItem {
   groupSize: number;
 }
 
-export interface ReflectionGovernanceEntry {
+export interface BehavioralGuidanceGovernanceEntry {
   priority?: string;
   status?: string;
   area?: string;
@@ -277,7 +277,7 @@ function parseSectionBulletsAny(markdown: string, headings: string[]): string[] 
   return [];
 }
 
-export function isPlaceholderReflectionSliceLine(line: string): boolean {
+export function isPlaceholderBehavioralGuidanceSliceLine(line: string): boolean {
   const normalized = line.replace(/\*\*/g, "").trim();
   if (!normalized) return true;
   if (/^\(none( captured)?\)$/i.test(normalized)) return true;
@@ -288,17 +288,17 @@ export function isPlaceholderReflectionSliceLine(line: string): boolean {
   return false;
 }
 
-export function normalizeReflectionSliceLine(line: string): string {
+export function normalizeBehavioralGuidanceSliceLine(line: string): string {
   return line
     .replace(/\*\*/g, "")
     .replace(/^(invariants?|reflections?|derived)[:：]\s*/i, "")
     .trim();
 }
 
-export function sanitizeReflectionSliceLines(lines: string[]): string[] {
+export function sanitizeBehavioralGuidanceSliceLines(lines: string[]): string[] {
   return lines
-    .map(normalizeReflectionSliceLine)
-    .filter((line) => !isPlaceholderReflectionSliceLine(line));
+    .map(normalizeBehavioralGuidanceSliceLine)
+    .filter((line) => !isPlaceholderBehavioralGuidanceSliceLine(line));
 }
 
 function isInvariantRuleLike(line: string): boolean {
@@ -315,19 +315,18 @@ function isOpenLoopAction(line: string): boolean {
   return /^(investigate|verify|confirm|re-check|retest|update|add|remove|fix|avoid|keep|watch|document)\b/i.test(line);
 }
 
-export function extractReflectionOpenLoops(reflectionText: string): string[] {
-  return sanitizeReflectionSliceLines(parseSectionBullets(reflectionText, "Open loops / next actions"))
+export function extractBehavioralGuidanceOpenLoops(behavioralGuidanceText: string): string[] {
+  return sanitizeBehavioralGuidanceSliceLines(parseSectionBullets(behavioralGuidanceText, "Open loops / next actions"))
     .filter(isOpenLoopAction)
     .slice(0, 8);
 }
 
-export function extractReflectionLessons(reflectionText: string): string[] {
-  return sanitizeReflectionSliceLines(parseSectionBullets(reflectionText, "Lessons & pitfalls (symptom / cause / fix / prevention)"));
+export function extractBehavioralGuidanceLessons(behavioralGuidanceText: string): string[] {
+  return sanitizeBehavioralGuidanceSliceLines(parseSectionBullets(behavioralGuidanceText, "Lessons & pitfalls (symptom / cause / fix / prevention)"));
 }
 
-export function extractReflectionLearningGovernanceCandidates(reflectionText: string): ReflectionGovernanceEntry[] {
-  const section = extractSectionMarkdown(reflectionText, "Learning governance candidates (.governance / promotion / skill extraction)") ||
-    extractSectionMarkdown(reflectionText, "Learning governance candidates (.learnings / promotion / skill extraction)");
+export function extractBehavioralGuidanceGovernanceCandidates(behavioralGuidanceText: string): BehavioralGuidanceGovernanceEntry[] {
+  const section = extractSectionMarkdown(behavioralGuidanceText, "Learning governance candidates (.governance / promotion / skill extraction)");
   if (!section) return [];
 
   const entryBlocks = section
@@ -336,15 +335,14 @@ export function extractReflectionLearningGovernanceCandidates(reflectionText: st
     .filter(Boolean);
 
   const parsed = entryBlocks
-    .map(parseReflectionGovernanceEntry)
-    .filter((entry): entry is ReflectionGovernanceEntry => entry !== null);
+    .map(parseBehavioralGuidanceGovernanceEntry)
+    .filter((entry): entry is BehavioralGuidanceGovernanceEntry => entry !== null);
 
   if (parsed.length > 0) return parsed;
 
-  const fallbackBullets = sanitizeReflectionSliceLines(
-    parseSectionBulletsAny(reflectionText, [
+  const fallbackBullets = sanitizeBehavioralGuidanceSliceLines(
+    parseSectionBulletsAny(behavioralGuidanceText, [
       "Learning governance candidates (.governance / promotion / skill extraction)",
-      "Learning governance candidates (.learnings / promotion / skill extraction)",
     ])
   );
   if (fallbackBullets.length === 0) return [];
@@ -353,13 +351,13 @@ export function extractReflectionLearningGovernanceCandidates(reflectionText: st
     priority: "medium",
     status: "pending",
     area: "config",
-    summary: "Reflection learning governance candidates",
+    summary: "Behavioral guidance governance candidates",
     details: fallbackBullets.map((line) => `- ${line}`).join("\n"),
     suggestedAction: "Review the governance candidates, promote durable rules to AGENTS.md / SOUL.md / TOOLS.md when stable, and extract a skill if the pattern becomes reusable.",
   }];
 }
 
-function parseReflectionGovernanceEntry(block: string): ReflectionGovernanceEntry | null {
+function parseBehavioralGuidanceGovernanceEntry(block: string): BehavioralGuidanceGovernanceEntry | null {
   const body = block.replace(/^###\s+Entry\b[^\n]*\n?/i, "").trim();
   if (!body) return null;
 
@@ -389,15 +387,15 @@ function parseReflectionGovernanceEntry(block: string): ReflectionGovernanceEntr
   };
 }
 
-export function extractReflectionMappedMemories(reflectionText: string): ReflectionMappedMemory[] {
-  return extractReflectionMappedMemoryItems(reflectionText).map(({ text, category, heading }) => ({ text, category, heading }));
+export function extractBehavioralGuidanceMappedMemories(behavioralGuidanceText: string): BehavioralGuidanceMappedMemory[] {
+  return extractBehavioralGuidanceMappedMemoryItems(behavioralGuidanceText).map(({ text, category, heading }) => ({ text, category, heading }));
 }
 
-export function extractReflectionMappedMemoryItems(reflectionText: string): ReflectionMappedMemoryItem[] {
+export function extractBehavioralGuidanceMappedMemoryItems(behavioralGuidanceText: string): BehavioralGuidanceMappedMemoryItem[] {
   const mappedSections: Array<{
     heading: string;
     category: "preference" | "fact" | "decision";
-    mappedKind: ReflectionMappedKind;
+    mappedKind: BehavioralGuidanceMappedKind;
   }> = [
     {
       heading: "User model deltas (about the human)",
@@ -422,27 +420,27 @@ export function extractReflectionMappedMemoryItems(reflectionText: string): Refl
   ];
 
   return mappedSections.flatMap(({ heading, category, mappedKind }) => {
-    const lines = sanitizeReflectionSliceLines(parseSectionBullets(reflectionText, heading));
+    const lines = sanitizeBehavioralGuidanceSliceLines(parseSectionBullets(behavioralGuidanceText, heading));
     const groupSize = lines.length;
     return lines.map((text, ordinal) => ({ text, category, heading, mappedKind, ordinal, groupSize }));
   });
 }
 
-export function extractReflectionSlices(reflectionText: string): ReflectionSlices {
-  const invariantSection = parseSectionBulletsAny(reflectionText, ["Durable guidance", "Invariants"]);
-  const derivedSection = parseSectionBulletsAny(reflectionText, ["Adaptive guidance", "Derived"]);
-  const mergedSection = parseSectionBullets(reflectionText, "Invariants & Reflections");
+export function extractBehavioralGuidanceSlices(behavioralGuidanceText: string): BehavioralGuidanceSlices {
+  const invariantSection = parseSectionBulletsAny(behavioralGuidanceText, ["Durable guidance", "Invariants"]);
+  const derivedSection = parseSectionBulletsAny(behavioralGuidanceText, ["Adaptive guidance", "Derived"]);
+  const mergedSection = parseSectionBullets(behavioralGuidanceText, "Invariants & Reflections");
 
-  const invariantsPrimary = sanitizeReflectionSliceLines(invariantSection).filter(isInvariantRuleLike);
-  const derivedPrimary = sanitizeReflectionSliceLines(derivedSection).filter(isDerivedDeltaLike);
+  const invariantsPrimary = sanitizeBehavioralGuidanceSliceLines(invariantSection).filter(isInvariantRuleLike);
+  const derivedPrimary = sanitizeBehavioralGuidanceSliceLines(derivedSection).filter(isDerivedDeltaLike);
 
-  const invariantLinesLegacy = sanitizeReflectionSliceLines(
+  const invariantLinesLegacy = sanitizeBehavioralGuidanceSliceLines(
     mergedSection.filter((line) => /invariant|stable|policy|rule/i.test(line))
   ).filter(isInvariantRuleLike);
-  const reflectionLinesLegacy = sanitizeReflectionSliceLines(
+  const reflectionLinesLegacy = sanitizeBehavioralGuidanceSliceLines(
     mergedSection.filter((line) => /reflect|inherit|derive|change|apply/i.test(line))
   ).filter(isDerivedDeltaLike);
-  const durableDecisionLines = sanitizeReflectionSliceLines(parseSectionBullets(reflectionText, "Decisions (durable)"))
+  const durableDecisionLines = sanitizeBehavioralGuidanceSliceLines(parseSectionBullets(behavioralGuidanceText, "Decisions (durable)"))
     .filter(isInvariantRuleLike);
 
   const invariants = invariantsPrimary.length > 0
@@ -458,8 +456,8 @@ export function extractReflectionSlices(reflectionText: string): ReflectionSlice
   };
 }
 
-export function extractReflectionSliceItems(reflectionText: string): ReflectionSliceItem[] {
-  const slices = extractReflectionSlices(reflectionText);
+export function extractBehavioralGuidanceSliceItems(behavioralGuidanceText: string): BehavioralGuidanceSliceItem[] {
+  const slices = extractBehavioralGuidanceSlices(behavioralGuidanceText);
   const invariantGroupSize = slices.invariants.length;
   const derivedGroupSize = slices.derived.length;
 
