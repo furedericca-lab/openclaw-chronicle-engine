@@ -7,7 +7,7 @@ FROM rust:${RUST_VERSION}-bookworm AS build
 WORKDIR /work
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates pkg-config libssl-dev \
+ && apt-get install -y --no-install-recommends ca-certificates pkg-config libssl-dev protobuf-compiler \
  && rm -rf /var/lib/apt/lists/*
 
 # Expected source layout for the Rust backend:
