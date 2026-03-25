@@ -5,6 +5,7 @@ This directory keeps the current operator/runtime references and two intentional
 Current documents:
 
 - `runtime-architecture.md`: canonical runtime split and source-of-truth boundaries.
+- `backend-dependency-upgrades-2026-03-25/`: active phased scope for backend dependency upgrades. Phase 1 records the no-op audit for the safe semver-compatible set; phases 2-4 cover the riskier crate groups.
 
 Historical and superseded material:
 
