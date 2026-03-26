@@ -713,7 +713,7 @@ async fn embedding_provider_rotates_keys_and_fails_over_on_auth_error() {
 #[tokio::test]
 async fn legacy_table_without_vector_column_is_rejected_as_unsupported() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-legacy-schema-{}",
+        "chronicle-engine-rs-legacy-schema-{}",
         Uuid::new_v4()
     ));
     std::fs::create_dir_all(&tmp).expect("legacy temp path should be created");
@@ -760,7 +760,7 @@ async fn legacy_table_without_vector_column_is_rejected_as_unsupported() {
 #[tokio::test]
 async fn lancedb_search_indices_are_explicitly_ensured() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-index-lifecycle-{}",
+        "chronicle-engine-rs-index-lifecycle-{}",
         Uuid::new_v4()
     ));
     let app = setup_app_at(&tmp);
@@ -910,7 +910,7 @@ async fn query_expansion_and_noise_filtering_improve_generic_recall() {
 #[tokio::test]
 async fn access_reinforcement_extends_time_decay_for_old_memories() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-access-reinforcement-{}",
+        "chronicle-engine-rs-access-reinforcement-{}",
         Uuid::new_v4()
     ));
     let app = setup_app_with_at(&tmp, |cfg| {
@@ -1014,7 +1014,7 @@ async fn access_reinforcement_extends_time_decay_for_old_memories() {
 #[tokio::test]
 async fn access_reinforcement_respects_max_half_life_multiplier_bound() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-access-bound-{}",
+        "chronicle-engine-rs-access-bound-{}",
         Uuid::new_v4()
     ));
     let app = setup_app_with_at(&tmp, |cfg| {

@@ -10,7 +10,7 @@ use axum::{
     Json, Router,
 };
 use lancedb::{connect, index::IndexType};
-use memory_lancedb_pro_backend::{
+use chronicle_engine_rs::{
     build_app,
     config::{
         AppConfig, AuthConfig, LoggingConfig, ProvidersConfig, RetrievalConfig, ServerConfig,
@@ -202,7 +202,7 @@ async fn append_session_transcript(
 
 fn setup_app() -> Router {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-test-{}",
+        "chronicle-engine-rs-test-{}",
         Uuid::new_v4()
     ));
     std::fs::create_dir_all(&tmp).expect("temp test path should be created");
@@ -218,7 +218,7 @@ fn setup_app_at(tmp: &Path) -> Router {
 
 fn setup_app_with(mutator: impl FnOnce(&mut AppConfig)) -> Router {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-test-custom-{}",
+        "chronicle-engine-rs-test-custom-{}",
         Uuid::new_v4()
     ));
     std::fs::create_dir_all(&tmp).expect("temp test path should be created");
@@ -882,7 +882,7 @@ async fn spawn_auth_rerank_mock_server(
 #[test]
 fn invalid_embedding_dimensions_config_is_rejected() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-test-invalid-config-{}",
+        "chronicle-engine-rs-test-invalid-config-{}",
         Uuid::new_v4()
     ));
     std::fs::create_dir_all(&tmp).expect("temp test path should be created");

@@ -1,11 +1,11 @@
 use clap::Parser;
-use memory_lancedb_pro_backend::{build_app, config::AppConfig};
+use chronicle_engine_rs::{build_app, config::AppConfig};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
-#[command(name = "memory-lancedb-pro-backend")]
+#[command(name = "chronicle-engine-rs")]
 struct Args {
-    #[arg(long, default_value = "/etc/memory-lancedb-pro-backend/backend.toml")]
+    #[arg(long, default_value = "/etc/chronicle-engine-backend/backend.toml")]
     config: PathBuf,
 }
 
@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
     let app = build_app(config)?;
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
-    println!("memory-lancedb-pro-backend listening on {bind}");
+    println!("chronicle-engine-rs listening on {bind}");
     axum::serve(listener, app).await?;
     Ok(())
 }

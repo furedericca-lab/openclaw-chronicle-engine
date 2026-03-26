@@ -1,5 +1,5 @@
 [package]
-name = "memory-lancedb-pro-backend"
+name = "chronicle-engine-rs"
 version = "1.0.0-beta.0"
 edition = "2021"
 authors = ["furedericca"]
@@ -8,11 +8,11 @@ description = "Remote backend for the OpenClaw Chronicle Engine memory plugin."
 repository = "https://github.com/furedericca-lab/chronicle-engine"
 
 [lib]
-name = "memory_lancedb_pro_backend"
+name = "chronicle_engine_rs"
 path = "src/lib.rs"
 
 [[bin]]
-name = "memory-lancedb-pro-backend"
+name = "chronicle-engine-rs"
 path = "src/main.rs"
 
 [dependencies]

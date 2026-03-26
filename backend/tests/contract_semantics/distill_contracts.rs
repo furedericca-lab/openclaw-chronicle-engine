@@ -4,7 +4,7 @@ use super::*;
 #[tokio::test]
 async fn distill_job_enqueue_and_status_follow_frozen_contract() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-distill-session-source-{}",
+        "chronicle-engine-rs-distill-session-source-{}",
         Uuid::new_v4()
     ));
     std::fs::create_dir_all(&tmp).expect("temp test path should be created");
@@ -151,7 +151,7 @@ async fn distill_job_status_is_scoped_to_user_and_agent() {
 #[tokio::test]
 async fn distill_inline_messages_job_completes_and_persists_artifacts_and_memories() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-distill-complete-{}",
+        "chronicle-engine-rs-distill-complete-{}",
         Uuid::new_v4()
     ));
     std::fs::create_dir_all(&tmp).expect("temp test path should be created");
@@ -315,7 +315,7 @@ async fn distill_inline_messages_filters_slash_noise_to_zero_artifacts() {
 #[tokio::test]
 async fn distill_inline_messages_aggregates_multi_message_evidence_and_structured_summary() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-distill-aggregate-{}",
+        "chronicle-engine-rs-distill-aggregate-{}",
         Uuid::new_v4()
     ));
     std::fs::create_dir_all(&tmp).expect("temp test path should be created");
@@ -381,7 +381,7 @@ async fn distill_inline_messages_aggregates_multi_message_evidence_and_structure
 #[tokio::test]
 async fn distill_session_lessons_single_hit_stays_lesson_for_stable_and_durable_labels() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-distill-evidence-gate-fallback-{}",
+        "chronicle-engine-rs-distill-evidence-gate-fallback-{}",
         Uuid::new_v4()
     ));
     std::fs::create_dir_all(&tmp).expect("temp test path should be created");
@@ -466,7 +466,7 @@ async fn distill_session_lessons_single_hit_stays_lesson_for_stable_and_durable_
 #[tokio::test]
 async fn distill_session_lessons_promote_repeated_stable_decision_signals() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-distill-evidence-gate-stable-{}",
+        "chronicle-engine-rs-distill-evidence-gate-stable-{}",
         Uuid::new_v4()
     ));
     std::fs::create_dir_all(&tmp).expect("temp test path should be created");
@@ -534,7 +534,7 @@ async fn distill_session_lessons_promote_repeated_stable_decision_signals() {
 #[tokio::test]
 async fn distill_session_lessons_emit_durable_practice_and_follow_up_subtypes() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-distill-subtypes-{}",
+        "chronicle-engine-rs-distill-subtypes-{}",
         Uuid::new_v4()
     ));
     std::fs::create_dir_all(&tmp).expect("temp test path should be created");
@@ -617,7 +617,7 @@ async fn distill_session_lessons_emit_durable_practice_and_follow_up_subtypes() 
 #[tokio::test]
 async fn governance_candidates_emit_skill_and_promotion_labels() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-distill-governance-labels-{}",
+        "chronicle-engine-rs-distill-governance-labels-{}",
         Uuid::new_v4()
     ));
     std::fs::create_dir_all(&tmp).expect("temp test path should be created");

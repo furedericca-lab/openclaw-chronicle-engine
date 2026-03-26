@@ -4,6 +4,7 @@ This directory keeps the current operator/runtime references and two intentional
 
 Current documents:
 
+- `backend-binary-rename-chronicle-engine-rs-2026-03-26/`: active single-contract scope for renaming the Rust backend crate and binary surface to `chronicle-engine-rs` while keeping deploy image naming stable.
 - `runtime-architecture.md`: canonical runtime split and source-of-truth boundaries.
 
 Historical and superseded material:

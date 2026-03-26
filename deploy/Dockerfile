@@ -16,13 +16,13 @@ ENV PROTOC_INCLUDE=/usr/include
 #   backend/Cargo.toml
 #   backend/src/main.rs
 # producing the binary:
-#   memory-lancedb-pro-backend
+#   chronicle-engine-rs
 COPY backend /work/backend
 
 WORKDIR /work/backend
 
 RUN test -f Cargo.toml
-RUN cargo build --locked --release --bin memory-lancedb-pro-backend
+RUN cargo build --locked --release --bin chronicle-engine-rs
 
 FROM debian:bookworm-slim AS runtime
 
@@ -36,10 +36,10 @@ RUN apt-get update \
  && mkdir -p /var/lib/chronicle-engine-backend/sqlite \
  && chown -R chroniclebackend:chroniclebackend /etc/chronicle-engine-backend /var/lib/chronicle-engine-backend
 
-COPY --from=build /work/backend/target/release/memory-lancedb-pro-backend /usr/local/bin/memory-lancedb-pro-backend
+COPY --from=build /work/backend/target/release/chronicle-engine-rs /usr/local/bin/chronicle-engine-rs
 
 USER chroniclebackend:chroniclebackend
 
 EXPOSE 8080
 
-ENTRYPOINT ["/usr/local/bin/memory-lancedb-pro-backend", "--config", "/etc/chronicle-engine-backend/backend.toml"]
+ENTRYPOINT ["/usr/local/bin/chronicle-engine-rs", "--config", "/etc/chronicle-engine-backend/backend.toml"]

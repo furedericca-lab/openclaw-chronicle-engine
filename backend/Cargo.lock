@@ -692,6 +692,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
+name = "chronicle-engine-rs"
+version = "1.0.0-beta.0"
+dependencies = [
+ "anyhow",
+ "arrow-array",
+ "arrow-schema",
+ "axum",
+ "clap",
+ "futures",
+ "http",
+ "lancedb",
+ "parking_lot",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tower",
+ "uuid",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3386,31 +3411,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "714098028fe011992e1c3962653c96b2d578c4b4bce9036e15ff220319b1e0e3"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "memory-lancedb-pro-backend"
-version = "1.0.0-beta.0"
-dependencies = [
- "anyhow",
- "arrow-array",
- "arrow-schema",
- "axum",
- "clap",
- "futures",
- "http",
- "lancedb",
- "parking_lot",
- "regex",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "toml",
- "tower",
- "uuid",
 ]
 
 [[package]]

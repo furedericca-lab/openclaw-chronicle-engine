@@ -285,7 +285,7 @@ async fn debug_recall_trace_records_rerank_fallback_reason_without_exposing_runt
 #[tokio::test]
 async fn debug_behavioral_recall_routes_report_behavioral_trace_without_leaking_extra_row_fields() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-test-debug-behavioral-{}",
+        "chronicle-engine-rs-test-debug-behavioral-{}",
         Uuid::new_v4()
     ));
     let app = setup_app_with_at(&tmp, |cfg| {
@@ -504,7 +504,7 @@ async fn missing_authenticated_identity_headers_are_rejected() {
 #[tokio::test]
 async fn manual_behavioral_write_routes_are_rejected() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-test-manual-behavioral-write-{}",
+        "chronicle-engine-rs-test-manual-behavioral-write-{}",
         Uuid::new_v4()
     ));
     let app = setup_app_at(&tmp);
@@ -617,7 +617,7 @@ async fn manual_behavioral_write_routes_are_rejected() {
 #[tokio::test]
 async fn behavioral_recall_mode_honors_invariant_only_semantics_without_legacy_route_alias() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-test-behavioral-mode-{}",
+        "chronicle-engine-rs-test-behavioral-mode-{}",
         Uuid::new_v4()
     ));
     let app = setup_app_at(&tmp);
@@ -737,7 +737,7 @@ async fn public_reflection_request_aliases_are_removed() {
 #[tokio::test]
 async fn generic_recall_applies_backend_owned_filter_fields() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-test-generic-filter-{}",
+        "chronicle-engine-rs-test-generic-filter-{}",
         Uuid::new_v4()
     ));
     let app = setup_app_at(&tmp);
@@ -823,7 +823,7 @@ async fn generic_recall_applies_backend_owned_filter_fields() {
 #[tokio::test]
 async fn behavioral_recall_applies_include_kinds_filter() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-test-behavioral-filter-{}",
+        "chronicle-engine-rs-test-behavioral-filter-{}",
         Uuid::new_v4()
     ));
     let app = setup_app_at(&tmp);
@@ -961,7 +961,7 @@ async fn idempotency_key_can_retry_after_failed_operation() {
 #[tokio::test]
 async fn lancedb_memory_persists_across_app_restart() {
     let tmp = std::env::temp_dir().join(format!(
-        "memory-lancedb-pro-backend-persist-{}",
+        "chronicle-engine-rs-persist-{}",
         Uuid::new_v4()
     ));
 

@@ -30,7 +30,7 @@ backend/
 The crate currently builds the binary:
 
 ```text
-memory-lancedb-pro-backend
+chronicle-engine-rs
 ```
 
 ## Local image build
@@ -83,7 +83,7 @@ Use the runtime token from `backend.toml` for data-plane requests only.
 The workflow at `.github/workflows/docker-backend.yml` assumes:
 
 - the backend crate exists at `backend/Cargo.toml`;
-- the crate builds a release binary named `memory-lancedb-pro-backend`;
+- the crate builds a release binary named `chronicle-engine-rs`;
 - GitHub Container Registry is available for the repository;
 - the repository `GITHUB_TOKEN` has `packages: write` permission;
 - the image name is `ghcr.io/<owner>/chronicle-engine-backend`.
