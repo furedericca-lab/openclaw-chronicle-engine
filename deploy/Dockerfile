@@ -7,8 +7,10 @@ FROM rust:${RUST_VERSION}-bookworm AS build
 WORKDIR /work
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates pkg-config libssl-dev protobuf-compiler \
+ && apt-get install -y --no-install-recommends ca-certificates pkg-config libssl-dev protobuf-compiler libprotobuf-dev \
  && rm -rf /var/lib/apt/lists/*
+
+ENV PROTOC_INCLUDE=/usr/include
 
 # Expected source layout for the Rust backend:
 #   backend/Cargo.toml
