@@ -4,6 +4,7 @@ This directory keeps the current operator/runtime references and two intentional
 
 Current documents:
 
+- `backend-admin-plane-2026-03-27/`: active phased scope for adding a bundled admin plane under `/admin` and `/admin/api/*`, wiring live admin auth/logging, and tightening duplicated recall flow while preserving the Rust backend as sole authority.
 - `backend-binary-rename-chronicle-engine-rs-2026-03-26/`: active single-contract scope for renaming the Rust backend crate and binary surface to `chronicle-engine-rs` while keeping deploy image naming stable.
 - `runtime-architecture.md`: canonical runtime split and source-of-truth boundaries.
 
