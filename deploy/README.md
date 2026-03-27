@@ -95,5 +95,6 @@ The workflow assumes the checked-in backend crate remains present and buildable.
 - Pull requests build the Docker image for validation, but do not push.
 - Pushes to `main` build and push branch/sha tags.
 - Git tags matching `v*` also publish semver-style tags.
+- After a successful non-PR publish, the workflow keeps only the newest `10` GHCR package versions for `chronicle-engine-backend` and deletes older versions.
 
 If the repository uses a branch name other than `main`, adjust `.github/workflows/docker-backend.yml`.

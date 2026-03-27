@@ -11,6 +11,7 @@ Historical and superseded material:
 
 - `archive/`: completed plans, architecture transition docs, closeout contracts, and stale operator notes preserved for reference.
 - `archive-index.md`: top-level archive map for the preserved historical scopes.
+- `archive/ghcr-version-retention-2026-03-27/`: archived phased scope for adding workflow-enforced GHCR cleanup so `chronicle-engine-backend` keeps only the newest 10 package versions after successful non-PR publishes.
 - `archive/backend-dependency-upgrades-2026-03-25/`: archived phased dependency-upgrade scope for moving the backend onto newer `lancedb`, `axum`, `rusqlite`, and `toml` lines while explicitly closing on single-compatible `reqwest` and `arrow-*` versions instead of keeping a split dependency graph.
 - `archive/backend-release-line-closeout-2026-03-25/`: archived phased release-line scope for fixing backend Clippy/reliability blockers, splitting the backend contract suite into the `contract_semantics` multi-file test target, and recording the verification gate for release-quality hygiene.
 - `archive/storage-reflection-field-cleanup-2026-03-25/`: archived single-contract scope for cutting over LanceDB storage internals from legacy reflection-era names to behavioral-facing names and rejecting unsupported legacy schemas instead of auto-migrating them.
