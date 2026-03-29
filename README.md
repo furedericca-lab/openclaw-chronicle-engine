@@ -98,9 +98,99 @@ Chronicle Engine includes a bundled **Admin Plane** for operators to manage memo
   - **Transcripts**: View session transcripts for context analysis.
   - **Governance**: Review and promote candidate memories derived from distillation.
   - **Audit Log**: Track admin-plane mutations and configuration changes.
-  - **Settings**: Read-only (MVP) view of the active runtime configuration.
+  - **Settings**: Edit and persist backend TOML configuration, with explicit restart-required feedback.
 
 The Admin UI is a React SPA bundled into the backend binary and served directly by the Rust service.
+
+### Runtime vs admin tokens
+
+The backend requires two separate bearer tokens in `backend.toml`:
+
+```toml
+[auth.runtime]
+token = "replace-with-runtime-bearer-token"
+
+[auth.admin]
+token = "replace-with-admin-bearer-token"
+```
+
+- `auth.runtime.token` is only for `/v1/*` data-plane requests.
+- `auth.admin.token` is only for `/admin/api/*` admin-plane requests.
+- Both use `Authorization: Bearer <token>`.
+- They are intentionally not interchangeable.
+
+### Post-deploy smoke checks
+
+```bash
+cd /root/.openclaw/workspace/plugins/openclaw-chronicle-engine
+
+git rev-parse --short HEAD
+docker compose -f deploy/docker-compose.yml config >/dev/null
+
+curl -fsS http://127.0.0.1:8080/admin >/dev/null
+
+curl -fsS \
+  -H "Authorization: Bearer $CHRONICLE_ADMIN_TOKEN" \
+  http://127.0.0.1:8080/admin/api/settings/runtime-config
+
+curl -fsS \
+  -H "Authorization: Bearer $CHRONICLE_RUNTIME_TOKEN" \
+  -H "X-OpenClaw-User-Id: smoke-user" \
+  -H "X-OpenClaw-Agent-Id: smoke-agent" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"smoke check","topK":3}' \
+  http://127.0.0.1:8080/v1/recall/generic
+
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "Authorization: Bearer $CHRONICLE_ADMIN_TOKEN" \
+  -H "X-OpenClaw-User-Id: smoke-user" \
+  -H "X-OpenClaw-Agent-Id: smoke-agent" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"should fail","topK":1}' \
+  http://127.0.0.1:8080/v1/recall/generic
+
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "Authorization: Bearer $CHRONICLE_RUNTIME_TOKEN" \
+  http://127.0.0.1:8080/admin/api/settings/runtime-config
+```
+
+Expected:
+
+- `git rev-parse` prints the deployed commit.
+- `/admin` returns the bundled SPA shell.
+- admin token can read `/admin/api/settings/runtime-config`.
+- runtime token can call `/v1/recall/generic`.
+- admin token must not succeed on `/v1/*`.
+- runtime token must not succeed on `/admin/api/*`.
+
+### Extended distill and settings checks
+
+Settings save is persisted atomically but still requires restart to take full effect.
+
+```bash
+curl -fsS \
+  -X PUT \
+  -H "Authorization: Bearer $CHRONICLE_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @- \
+  http://127.0.0.1:8080/admin/api/settings/runtime-config <<'JSON'
+{"configToml":"[server]\nbind = \"0.0.0.0:8080\"\nadmin_assets_path = \"/usr/local/bin/web/dist\"\n\n[storage]\nlancedb_path = \"/var/lib/chronicle-engine-backend/lancedb\"\nsqlite_path = \"/var/lib/chronicle-engine-backend/sqlite/jobs.db\"\n\n[auth.runtime]\ntoken = \"replace-with-runtime-bearer-token\"\n\n[auth.admin]\ntoken = \"replace-with-admin-bearer-token\"\n\n[logging]\nlevel = \"info\"\n\n[providers.embedding]\nbase_url = \"https://api.openai.com/v1\"\nmodel = \"text-embedding-3-small\"\napi = \"openai\"\napi_key = \"replace-with-embedding-api-key\"\n\n[providers.rerank]\nenabled = false\n"}
+JSON
+
+curl -fsS \
+  -H "Authorization: Bearer $CHRONICLE_RUNTIME_TOKEN" \
+  -H "X-OpenClaw-User-Id: smoke-user" \
+  -H "X-OpenClaw-Agent-Id: smoke-agent" \
+  -H "Content-Type: application/json" \
+  -d '{"source":{"type":"inline_messages","messages":[{"role":"user","content":"I prefer concise release checklists."},{"role":"assistant","content":"Keep release verification short and explicit."}]},"mode":"session_lessons","persistMemoryRows":true}' \
+  http://127.0.0.1:8080/v1/distill/jobs
+```
+
+Expected:
+
+- settings save returns success plus `restartRequired: true` or `restart_required: true`.
+- distill enqueue returns a job id.
+- the job id can then be inspected with `GET /v1/distill/jobs/{jobId}`.
 
 ## 5. Request Flow
 

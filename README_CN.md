@@ -125,6 +125,98 @@ distill 请求
                 -> GET /v1/distill/jobs/{jobId} 查看状态和结果
 ```
 
+## 4.1 Admin Plane 与 token 设置
+
+Chronicle Engine 带有内置的管理后台，入口是 `/admin`。
+
+- `auth.runtime.token` 只用于 `/v1/*` 数据面请求
+- `auth.admin.token` 只用于 `/admin/api/*` 管理面请求
+- 两者都使用 `Authorization: Bearer <token>`
+- 两套 token 不能混用
+
+它们在 `backend.toml` 中这样配置：
+
+```toml
+[auth.runtime]
+token = "replace-with-runtime-bearer-token"
+
+[auth.admin]
+token = "replace-with-admin-bearer-token"
+```
+
+## 4.2 部署后最短验证命令
+
+```bash
+cd /root/.openclaw/workspace/plugins/openclaw-chronicle-engine
+
+git rev-parse --short HEAD
+docker compose -f deploy/docker-compose.yml config >/dev/null
+
+curl -fsS http://127.0.0.1:8080/admin >/dev/null
+
+curl -fsS \
+  -H "Authorization: Bearer $CHRONICLE_ADMIN_TOKEN" \
+  http://127.0.0.1:8080/admin/api/settings/runtime-config
+
+curl -fsS \
+  -H "Authorization: Bearer $CHRONICLE_RUNTIME_TOKEN" \
+  -H "X-OpenClaw-User-Id: smoke-user" \
+  -H "X-OpenClaw-Agent-Id: smoke-agent" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"smoke check","topK":3}' \
+  http://127.0.0.1:8080/v1/recall/generic
+
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "Authorization: Bearer $CHRONICLE_ADMIN_TOKEN" \
+  -H "X-OpenClaw-User-Id: smoke-user" \
+  -H "X-OpenClaw-Agent-Id: smoke-agent" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"should fail","topK":1}' \
+  http://127.0.0.1:8080/v1/recall/generic
+
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "Authorization: Bearer $CHRONICLE_RUNTIME_TOKEN" \
+  http://127.0.0.1:8080/admin/api/settings/runtime-config
+```
+
+预期：
+
+- `git rev-parse` 输出当前部署提交
+- `/admin` 能返回前端页面
+- admin token 能访问 `/admin/api/settings/runtime-config`
+- runtime token 能访问 `/v1/recall/generic`
+- admin token 不能成功访问 `/v1/*`
+- runtime token 不能成功访问 `/admin/api/*`
+
+## 4.3 Distill 和 Settings 扩展验证
+
+Settings 当前语义是“在线保存并原子写盘，但仍需重启生效”。
+
+```bash
+curl -fsS \
+  -X PUT \
+  -H "Authorization: Bearer $CHRONICLE_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @- \
+  http://127.0.0.1:8080/admin/api/settings/runtime-config <<'JSON'
+{"configToml":"[server]\nbind = \"0.0.0.0:8080\"\nadmin_assets_path = \"/usr/local/bin/web/dist\"\n\n[storage]\nlancedb_path = \"/var/lib/chronicle-engine-backend/lancedb\"\nsqlite_path = \"/var/lib/chronicle-engine-backend/sqlite/jobs.db\"\n\n[auth.runtime]\ntoken = \"replace-with-runtime-bearer-token\"\n\n[auth.admin]\ntoken = \"replace-with-admin-bearer-token\"\n\n[logging]\nlevel = \"info\"\n\n[providers.embedding]\nbase_url = \"https://api.openai.com/v1\"\nmodel = \"text-embedding-3-small\"\napi = \"openai\"\napi_key = \"replace-with-embedding-api-key\"\n\n[providers.rerank]\nenabled = false\n"}
+JSON
+
+curl -fsS \
+  -H "Authorization: Bearer $CHRONICLE_RUNTIME_TOKEN" \
+  -H "X-OpenClaw-User-Id: smoke-user" \
+  -H "X-OpenClaw-Agent-Id: smoke-agent" \
+  -H "Content-Type: application/json" \
+  -d '{"source":{"type":"inline_messages","messages":[{"role":"user","content":"I prefer concise release checklists."},{"role":"assistant","content":"Keep release verification short and explicit."}]},"mode":"session_lessons","persistMemoryRows":true}' \
+  http://127.0.0.1:8080/v1/distill/jobs
+```
+
+预期：
+
+- Settings 保存成功，并返回 `restartRequired: true` 或 `restart_required: true`
+- distill enqueue 返回 job id
+- 后续可继续调用 `GET /v1/distill/jobs/{jobId}` 查看状态
+
 ## 5. 旧 TS RAG vs 当前 Rust Remote RAG
 
 ### 能力对照表
