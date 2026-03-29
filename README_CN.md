@@ -144,6 +144,15 @@ token = "replace-with-runtime-bearer-token"
 token = "replace-with-admin-bearer-token"
 ```
 
+对于 Docker 部署，现在镜像内部会自带默认 `backend.toml`。推荐做法是不再默认挂载配置文件，而是在 Docker Compose 的 `environment:` 中用 `CHRONICLE_` 前缀覆盖对应配置项，嵌套 TOML 路径用双下划线表示，例如：
+
+```yaml
+environment:
+  CHRONICLE_AUTH__RUNTIME__TOKEN: "${CHRONICLE_AUTH_RUNTIME_TOKEN}"
+  CHRONICLE_AUTH__ADMIN__TOKEN: "${CHRONICLE_AUTH_ADMIN_TOKEN}"
+  CHRONICLE_PROVIDERS__EMBEDDING__API_KEY: "${CHRONICLE_EMBEDDING_API_KEY}"
+```
+
 ## 4.2 部署后最短验证命令
 
 ```bash

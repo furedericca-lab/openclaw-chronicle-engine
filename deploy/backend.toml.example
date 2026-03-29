@@ -1,6 +1,8 @@
 # Example deployment config for Chronicle Engine backend containers.
 # This file documents the current deployment shape for the Rust backend service.
 # Keep keys aligned with backend/src/config.rs.
+# Docker deployments bake this file into the image by default.
+# Override keys with CHRONICLE_<TABLE>__<SUBTABLE>__<KEY> environment variables.
 
 [server]
 bind = "0.0.0.0:8080"

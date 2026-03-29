@@ -119,6 +119,15 @@ token = "replace-with-admin-bearer-token"
 - Both use `Authorization: Bearer <token>`.
 - They are intentionally not interchangeable.
 
+For Docker deployments, the image already contains a default `backend.toml`. The recommended override path is Docker Compose `environment:` keys using the `CHRONICLE_` prefix and double underscores for nested TOML tables, for example:
+
+```yaml
+environment:
+  CHRONICLE_AUTH__RUNTIME__TOKEN: "${CHRONICLE_AUTH_RUNTIME_TOKEN}"
+  CHRONICLE_AUTH__ADMIN__TOKEN: "${CHRONICLE_AUTH_ADMIN_TOKEN}"
+  CHRONICLE_PROVIDERS__EMBEDDING__API_KEY: "${CHRONICLE_EMBEDDING_API_KEY}"
+```
+
 ### Post-deploy smoke checks
 
 ```bash

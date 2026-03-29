@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
+    env,
     fs,
     path::{Path, PathBuf},
 };
+use toml::Value;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AppConfig {
@@ -328,8 +330,13 @@ impl AppConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
             .with_context(|| format!("failed to read config file: {}", path.display()))?;
-        let cfg: Self = toml::from_str(&raw)
+        let mut value: Value = toml::from_str(&raw)
             .with_context(|| format!("failed to parse TOML config: {}", path.display()))?;
+        apply_env_overrides(&mut value)
+            .with_context(|| format!("failed to apply environment overrides for {}", path.display()))?;
+        let cfg: Self = value
+            .try_into()
+            .with_context(|| format!("failed to decode config after overrides: {}", path.display()))?;
         cfg.validate()
             .with_context(|| format!("invalid backend config loaded from {}", path.display()))?;
         Ok(cfg)
@@ -489,5 +496,218 @@ impl AppConfig {
             anyhow::bail!("retrieval.mmr_similarity_threshold must be within [0, 1]");
         }
         Ok(())
+    }
+}
+
+fn apply_env_overrides(root: &mut Value) -> Result<()> {
+    let Some(table) = root.as_table_mut() else {
+        anyhow::bail!("backend config root must be a TOML table");
+    };
+
+    let mut override_keys: Vec<(String, String)> = env::vars()
+        .filter(|(key, _)| key.starts_with("CHRONICLE_"))
+        .collect();
+    override_keys.sort_by(|left, right| left.0.cmp(&right.0));
+
+    for (key, raw_value) in override_keys {
+        let path = parse_env_override_key(&key)?;
+        if path.is_empty() {
+            continue;
+        }
+        apply_env_override_path(table, &path, &raw_value)
+            .with_context(|| format!("invalid override {key}"))?;
+    }
+    Ok(())
+}
+
+fn parse_env_override_key(key: &str) -> Result<Vec<String>> {
+    let suffix = key
+        .strip_prefix("CHRONICLE_")
+        .ok_or_else(|| anyhow::anyhow!("override key must start with CHRONICLE_"))?;
+    if suffix.is_empty() || !suffix.contains("__") {
+        return Ok(Vec::new());
+    }
+    let path: Vec<String> = suffix
+        .split("__")
+        .map(|part| part.trim().to_ascii_lowercase())
+        .collect();
+    if path.iter().any(|part| part.is_empty()) {
+        anyhow::bail!("override key contains an empty path segment");
+    }
+    Ok(path)
+}
+
+fn apply_env_override_path(
+    table: &mut toml::map::Map<String, Value>,
+    path: &[String],
+    raw_value: &str,
+) -> Result<()> {
+    let (head, tail) = path
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("override path cannot be empty"))?;
+
+    let entry = table
+        .get_mut(head)
+        .ok_or_else(|| anyhow::anyhow!("unknown config key {}", path.join(".")))?;
+
+    if tail.is_empty() {
+        *entry = parse_override_value(entry, raw_value)
+            .with_context(|| format!("failed to parse leaf value for {}", path.join(".")))?;
+        return Ok(());
+    }
+
+    let child = entry
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("config key {} is not a table", head))?;
+    apply_env_override_path(child, tail, raw_value)
+}
+
+fn parse_override_value(current: &Value, raw_value: &str) -> Result<Value> {
+    match current {
+        Value::String(_) => Ok(Value::String(raw_value.to_string())),
+        Value::Integer(_) => raw_value
+            .parse::<i64>()
+            .map(Value::Integer)
+            .with_context(|| format!("expected integer, got {raw_value}")),
+        Value::Float(_) => raw_value
+            .parse::<f64>()
+            .map(Value::Float)
+            .with_context(|| format!("expected float, got {raw_value}")),
+        Value::Boolean(_) => raw_value
+            .parse::<bool>()
+            .map(Value::Boolean)
+            .with_context(|| format!("expected bool, got {raw_value}")),
+        Value::Datetime(_) => raw_value
+            .parse::<toml::value::Datetime>()
+            .map(Value::Datetime)
+            .with_context(|| format!("expected TOML datetime, got {raw_value}")),
+        Value::Array(_) => {
+            let wrapped = format!("value = {raw_value}");
+            let parsed: Value = toml::from_str(&wrapped)
+                .with_context(|| format!("expected TOML array literal, got {raw_value}"))?;
+            parsed
+                .get("value")
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("failed to parse array override"))
+        }
+        Value::Table(_) => anyhow::bail!("cannot override a table directly"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppConfig;
+    use std::{
+        fs,
+        path::Path,
+        sync::{Mutex, OnceLock},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn write_test_config(path: &Path) {
+        let raw = r#"
+[server]
+bind = "127.0.0.1:8080"
+admin_assets_path = "web/dist"
+
+[storage]
+lancedb_path = "/tmp/lancedb"
+sqlite_path = "/tmp/jobs.db"
+
+[auth.runtime]
+token = "runtime-default"
+
+[auth.admin]
+token = "admin-default"
+
+[logging]
+level = "info"
+
+[providers.embedding]
+provider = "hashing"
+dimensions = 384
+model = "hashing-384-v1"
+api = "builtin"
+timeout_ms = 10000
+cache_max_entries = 256
+cache_ttl_ms = 1800000
+
+[providers.rerank]
+enabled = false
+mode = "lightweight"
+provider = "jina"
+blend = 0.35
+timeout_ms = 5000
+
+[retrieval]
+candidate_pool_size = 64
+vector_weight = 0.7
+bm25_weight = 0.3
+min_score = 0.2
+hard_min_score = 0.25
+recency_half_life_days = 14.0
+recency_weight = 0.1
+length_norm_anchor = 500
+time_decay_half_life_days = 60.0
+reinforcement_factor = 0.5
+max_half_life_multiplier = 3.0
+mmr_diversity = true
+mmr_similarity_threshold = 0.85
+query_expansion = true
+filter_noise = true
+diagnostics = false
+"#;
+        fs::write(path, raw).expect("write test config");
+    }
+
+    #[test]
+    fn load_applies_environment_overrides_with_nested_paths() {
+        let _guard = env_lock().lock().expect("env lock");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("chronicle-config-{unique}.toml"));
+        write_test_config(&path);
+
+        std::env::set_var("CHRONICLE_AUTH__RUNTIME__TOKEN", "runtime-override");
+        std::env::set_var("CHRONICLE_LOGGING__LEVEL", "debug");
+        std::env::set_var("CHRONICLE_RETRIEVAL__MMR_DIVERSITY", "false");
+        std::env::set_var("CHRONICLE_RETRIEVAL__VECTOR_WEIGHT", "0.55");
+
+        let cfg = AppConfig::load(&path).expect("load with env overrides");
+        assert_eq!(cfg.auth.runtime.token, "runtime-override");
+        assert_eq!(cfg.logging.level, "debug");
+        assert!(!cfg.retrieval.mmr_diversity);
+        assert!((cfg.retrieval.vector_weight - 0.55).abs() < f64::EPSILON);
+
+        std::env::remove_var("CHRONICLE_AUTH__RUNTIME__TOKEN");
+        std::env::remove_var("CHRONICLE_LOGGING__LEVEL");
+        std::env::remove_var("CHRONICLE_RETRIEVAL__MMR_DIVERSITY");
+        std::env::remove_var("CHRONICLE_RETRIEVAL__VECTOR_WEIGHT");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_rejects_unknown_environment_override_paths() {
+        let _guard = env_lock().lock().expect("env lock");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("chronicle-config-{unique}.toml"));
+        write_test_config(&path);
+
+        std::env::set_var("CHRONICLE_UNKNOWN__KEY", "value");
+        let err = AppConfig::load(&path).expect_err("unknown override should fail");
+        let message = format!("{err:#}");
+        assert!(message.contains("CHRONICLE_UNKNOWN__KEY"));
+        std::env::remove_var("CHRONICLE_UNKNOWN__KEY");
+        let _ = fs::remove_file(path);
     }
 }

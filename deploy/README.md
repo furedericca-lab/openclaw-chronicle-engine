@@ -6,7 +6,7 @@ This folder contains the Docker deployment scaffold for the current Rust backend
 
 - One backend container per deployment unit.
 - LanceDB and SQLite job state mounted on persistent host volumes.
-- Static TOML config mounted read-only.
+- Static TOML config baked into the image, with optional `CHRONICLE_*` environment overrides.
 - OpenClaw connects to the backend over HTTP using a runtime bearer token.
 - Admin endpoints stay off the ordinary OpenClaw runtime path.
 
@@ -14,7 +14,7 @@ This folder contains the Docker deployment scaffold for the current Rust backend
 
 - `Dockerfile`: multi-stage Rust build for the backend binary.
 - `docker-compose.yml`: single-instance deployment using the published `chronicle-engine-backend` GHCR image.
-- `backend.toml.example`: example static config file for container deployments.
+- `backend.toml.example`: baked default config and schema reference for container deployments.
 
 ## Rust source layout
 
@@ -46,14 +46,19 @@ From the repository root:
 
 ## Local compose deployment
 
-Prepare the runtime config:
+Prepare persistent data directories:
 
 ```bash
-cp deploy/backend.toml.example \
-  deploy/backend.toml
 mkdir -p data/chronicle-engine-backend/lancedb
 mkdir -p data/chronicle-engine-backend/sqlite
-chmod 600 deploy/backend.toml
+```
+
+Set the required runtime secrets in your shell or `.env` file:
+
+```bash
+export CHRONICLE_AUTH_RUNTIME_TOKEN='replace-me-runtime'
+export CHRONICLE_AUTH_ADMIN_TOKEN='replace-me-admin'
+export CHRONICLE_EMBEDDING_API_KEY='replace-me-embedding-key'
 ```
 
 Run:
@@ -76,7 +81,7 @@ Point the local OpenClaw adapter at:
 http://127.0.0.1:8080
 ```
 
-Use the runtime token from `backend.toml` for data-plane requests only.
+Use the runtime token from `CHRONICLE_AUTH_RUNTIME_TOKEN` for data-plane requests only.
 
 ## Admin UI Access
 
@@ -87,9 +92,30 @@ http://127.0.0.1:8080/admin
 ```
 
 To login:
-- Use the `auth.admin.token` configured in your `backend.toml`.
+- Use the admin token from `CHRONICLE_AUTH_ADMIN_TOKEN`.
 - The token is sent in the `Authorization: Bearer <token>` header by the SPA.
 - Access is subject to rate limiting and audit logging.
+
+## Environment override naming
+
+The backend loads `/etc/chronicle-engine-backend/backend.toml` first, then applies any environment overrides whose names start with `CHRONICLE_`.
+
+Use double underscores to represent nested TOML tables:
+
+```text
+CHRONICLE_AUTH__RUNTIME__TOKEN
+CHRONICLE_AUTH__ADMIN__TOKEN
+CHRONICLE_SERVER__BIND
+CHRONICLE_STORAGE__SQLITE_PATH
+CHRONICLE_PROVIDERS__EMBEDDING__API_KEY
+```
+
+Override values must match the type of the target TOML key:
+
+- strings stay strings
+- booleans use `true` / `false`
+- numbers use normal integer / float literals
+- arrays use TOML array literals such as `["a","b"]`
 
 ## GitHub Actions image build requirements
 

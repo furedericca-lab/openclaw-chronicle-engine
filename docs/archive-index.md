@@ -22,6 +22,8 @@ Interpretation:
 
 Archived scopes:
 
+- `backend-env-config-2026-03-29/`: single-contract deployment-config record for baking `backend.toml.example` into the runtime image, removing the default compose bind mount, and applying typed `CHRONICLE_*` environment overrides over the TOML base. Collected: `2026-03-29` after backend contract tests, admin-plane tests, config override unit tests, strict Clippy, compose rendering, doc scans, and diff checks passed. Reference value: `7/10`.
+  Why: useful as an operational deployment audit trail because it records the shift from host-mounted config files to baked defaults plus documented environment overrides without introducing a second config system.
 - `backend-admin-plane-merge-fix-2026-03-29/`: phased repair record for fixing the merged admin-plane regressions, restoring `contract_semantics`, converging admin route/DTO names back to the parent contract, making Settings writes truthful and atomic, and aligning bundled web assets with the backend/deploy path. Collected: `2026-03-29` after backend contract tests, admin-plane tests, strict Clippy, SPA build, doc scans, and diff checks passed. Reference value: `8/10`.
   Why: high audit value because it records the post-merge recovery of a broken admin-plane rollout, including the decision to repair back to the parent contract instead of normalizing the drift into new source-of-truth behavior.
 - `ghcr-version-retention-2026-03-27/`: phased retention-enforcement record for adding a post-publish GHCR cleanup job that keeps only the newest 10 `chronicle-engine-backend` package versions and deletes older ones after successful non-PR publishes. Collected: `2026-03-27` after workflow YAML validation, scope doc scans, and diff checks passed. Reference value: `6/10`.

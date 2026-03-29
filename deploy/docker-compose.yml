@@ -7,8 +7,20 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
+    environment:
+      CHRONICLE_SERVER__BIND: "0.0.0.0:8080"
+      CHRONICLE_SERVER__ADMIN_ASSETS_PATH: "/usr/local/bin/web/dist"
+      CHRONICLE_STORAGE__LANCEDB_PATH: "/var/lib/chronicle-engine-backend/lancedb"
+      CHRONICLE_STORAGE__SQLITE_PATH: "/var/lib/chronicle-engine-backend/sqlite/jobs.db"
+      CHRONICLE_AUTH__RUNTIME__TOKEN: "${CHRONICLE_AUTH_RUNTIME_TOKEN:-replace-with-runtime-bearer-token}"
+      CHRONICLE_AUTH__ADMIN__TOKEN: "${CHRONICLE_AUTH_ADMIN_TOKEN:-replace-with-admin-bearer-token}"
+      CHRONICLE_LOGGING__LEVEL: "${CHRONICLE_LOG_LEVEL:-info}"
+      CHRONICLE_PROVIDERS__EMBEDDING__BASE_URL: "${CHRONICLE_EMBEDDING_BASE_URL:-https://api.openai.com/v1}"
+      CHRONICLE_PROVIDERS__EMBEDDING__MODEL: "${CHRONICLE_EMBEDDING_MODEL:-text-embedding-3-small}"
+      CHRONICLE_PROVIDERS__EMBEDDING__API: "${CHRONICLE_EMBEDDING_API:-openai}"
+      CHRONICLE_PROVIDERS__EMBEDDING__API_KEY: "${CHRONICLE_EMBEDDING_API_KEY:-replace-with-embedding-api-key}"
+      CHRONICLE_PROVIDERS__RERANK__ENABLED: "${CHRONICLE_RERANK_ENABLED:-false}"
     volumes:
-      - ./backend.toml:/etc/chronicle-engine-backend/backend.toml:ro
       - ../data/chronicle-engine-backend/lancedb:/var/lib/chronicle-engine-backend/lancedb
       - ../data/chronicle-engine-backend/sqlite:/var/lib/chronicle-engine-backend/sqlite
     healthcheck:

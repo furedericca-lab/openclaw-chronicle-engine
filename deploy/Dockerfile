@@ -33,6 +33,7 @@ RUN apt-get update \
 
 COPY --from=build /work/backend/target/release/chronicle-engine-rs /usr/local/bin/chronicle-engine-rs
 COPY --from=frontend-build /app/dist /usr/local/bin/web/dist
+COPY deploy/backend.toml.example /etc/chronicle-engine-backend/backend.toml
 
 USER chroniclebackend:chroniclebackend
 EXPOSE 8080
